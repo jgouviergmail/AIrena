@@ -1,0 +1,11 @@
+pub mod discussion;
+pub mod emotion;
+pub mod engine_command;
+pub mod events;
+pub mod gladiateur;
+pub mod iarbitre;
+pub mod memory;
+pub mod message;
+pub mod moderation;
+pub mod profile;
+pub mod settings;

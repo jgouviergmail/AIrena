@@ -1,0 +1,27 @@
+cd d:\Developpement\AIrena
+
+Mode développement
+
+npm run tauri dev
+
+Cela lance simultanément :
+
+Le serveur Vite (frontend) sur http://localhost:1420
+La compilation Rust + ouverture de la fenêtre Tauri avec hot-reload
+
+-------------------------------------------------------------------------------------
+
+Build du .exe (production)
+
+npm run tauri build
+
+Le résultat sera dans :
+
+Installeur .msi : src-tauri/target/release/bundle/msi/AIrena_0.1.0_x64_en-US.msi
+Setup .exe (NSIS) : src-tauri/target/release/bundle/nsis/AIrena_0.1.0_x64-setup.exe
+Binaire standalone : src-tauri/target/release/AIrena.exe
+
+Prérequis
+Node.js installé (pour npm)
+Rust installé (rustup + toolchain stable)
+Ollama lancé localement pour tester l'app (pas nécessaire pour le build)cd 
