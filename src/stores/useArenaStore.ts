@@ -31,6 +31,7 @@ interface ArenaState {
   synthesisStreaming: string;
   userTurnActive: boolean;
   interventionRequested: boolean;
+  determiningOrder: boolean;
   error: string | null;
 
   handleEvent: (event: ArenaEvent) => void;
@@ -51,6 +52,7 @@ const initialState = {
   synthesisStreaming: "",
   userTurnActive: false,
   interventionRequested: false,
+  determiningOrder: false,
   error: null as string | null,
 };
 
@@ -164,10 +166,16 @@ export const useArenaStore = create<ArenaState>((set) => ({
           currentTurn: event.data.turnNumber,
           speakerOrder: event.data.speakerOrder,
           interventionRequested: false,
+          determiningOrder: false,
         });
         break;
 
       case "turnSkipped":
+        set({ determiningOrder: false });
+        break;
+
+      case "determiningOrder":
+        set({ determiningOrder: true });
         break;
 
       case "speakerActive":
@@ -269,13 +277,13 @@ export const useArenaStore = create<ArenaState>((set) => ({
           );
         }
 
-        set({ status: "ended" });
+        set({ status: "ended", determiningOrder: false });
         break;
       }
 
       case "error":
         logger.error("arena", `Engine error: ${event.data.message}`);
-        set({ error: event.data.message });
+        set({ error: event.data.message, determiningOrder: false });
         break;
     }
     } catch (err) {

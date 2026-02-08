@@ -25,13 +25,14 @@ export interface GladIAteurConfig {
   systemPrompt: string;
   llmParams: LlmParams;
   emoji?: string;
+  sourceProfileId?: string;
 }
 
 export interface IArbitreConfig {
   id: string;
   name: string;
   systemPrompt: string;
-  turnDistribution: "sequential" | "random";
+  turnDistribution: "sequential" | "random" | "democratic" | "authoritarian";
   llmParams: LlmParams;
 }
 
@@ -166,6 +167,7 @@ export type ArenaEvent =
       type: "turnSkipped";
       data: { reason: string; nextAvailableTurn: number };
     }
+  | { type: "determiningOrder"; data: { turnNumber: number } }
   | { type: "speakerActive"; data: { speakerId: string } }
   | {
       type: "emotionUpdated";

@@ -3,9 +3,11 @@ import { useTranslation } from "react-i18next";
 export function TurnIndicator({
   turn,
   status,
+  determiningOrder,
 }: {
   turn: number;
   status: string;
+  determiningOrder: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -24,6 +26,12 @@ export function TurnIndicator({
       {status === "synthesizing" && (
         <span className="rounded-full bg-blue-500/10 px-2.5 py-0.5 text-xs font-medium text-blue-500">
           {t("arena.synthesizing")}
+        </span>
+      )}
+      {determiningOrder && (
+        <span className="flex items-center gap-1.5 rounded-full bg-violet-500/10 px-2.5 py-0.5 text-xs font-medium text-violet-500">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-violet-500 animate-pulse" />
+          {t("arena.determiningOrder")}
         </span>
       )}
     </div>

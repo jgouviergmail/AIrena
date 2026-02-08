@@ -17,6 +17,7 @@ export default function ArenaPage() {
   const currentTurn = useArenaStore((s) => s.currentTurn);
   const userTurnActive = useArenaStore((s) => s.userTurnActive);
   const emotions = useArenaStore((s) => s.emotions);
+  const determiningOrder = useArenaStore((s) => s.determiningOrder);
   const error = useArenaStore((s) => s.error);
   const synthesisStreaming = useArenaStore((s) => s.synthesisStreaming);
   const userTimeout = useSetupStore((s) => s.userInterventionTimeoutSecs);
@@ -44,11 +45,11 @@ export default function ArenaPage() {
     <>
       <TopBar title={t("arena.title")} />
 
-      <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Status bar */}
-        <div className="flex items-center justify-between border-b border-border px-4 py-2">
+      <div className="flex min-h-0 flex-1 flex-col">
+        {/* Status bar — outside overflow-hidden so tooltips are visible */}
+        <div className="relative z-10 flex items-center justify-between border-b border-border px-4 py-2">
           <div className="flex items-center gap-3">
-            <TurnIndicator turn={currentTurn} status={status} />
+            <TurnIndicator turn={currentTurn} status={status} determiningOrder={determiningOrder} />
             {/* Emotion dots for gladiateurs */}
             <div className="flex items-center gap-1.5">
               {gladiateurs.map((g) => {
@@ -60,7 +61,6 @@ export default function ArenaPage() {
                     <span className="text-[10px] text-muted-foreground">
                       {g.name.slice(0, 8)}
                     </span>
-                    {/* Tooltip below — native title clips at viewport top */}
                     <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-1 -translate-x-1/2 whitespace-nowrap rounded bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-md opacity-0 transition-opacity group-hover:opacity-100">
                       {g.name}
                     </div>
@@ -72,35 +72,38 @@ export default function ArenaPage() {
           <DiscussionControls status={status} userTurnActive={userTurnActive} />
         </div>
 
-        {/* Error banner */}
-        {error && (
-          <div className="border-b border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
+        {/* Scrollable content area — overflow-hidden here, not on parent */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {/* Error banner */}
+          {error && (
+            <div className="border-b border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
+              {error}
+            </div>
+          )}
 
-        {/* Message feed */}
-        <DiscussionFeed />
+          {/* Message feed */}
+          <DiscussionFeed />
 
-        {/* Synthesis streaming */}
-        {(status === "synthesizing" || synthesisStreaming) && (
-          <div className="border-t border-border bg-card p-4">
-            <p className="mb-1 text-xs font-medium text-primary">
-              {t("arena.synthesizing")}
-            </p>
-            <p className="whitespace-pre-wrap text-sm text-foreground">
-              {synthesisStreaming}
-              <span className="inline-block h-4 w-1 animate-pulse bg-primary" />
-            </p>
-          </div>
-        )}
+          {/* Synthesis streaming */}
+          {(status === "synthesizing" || synthesisStreaming) && (
+            <div className="border-t border-border bg-card p-4">
+              <p className="mb-1 text-xs font-medium text-primary">
+                {t("arena.synthesizing")}
+              </p>
+              <p className="whitespace-pre-wrap text-sm text-foreground">
+                {synthesisStreaming}
+                <span className="inline-block h-4 w-1 animate-pulse bg-primary" />
+              </p>
+            </div>
+          )}
 
-        {/* User input area (when it's user's turn) */}
-        {userTurnActive && (
-          <div className="border-t border-border p-4">
-            <UserInputArea timeoutSecs={userTimeout} />
-          </div>
-        )}
+          {/* User input area (when it's user's turn) */}
+          {userTurnActive && (
+            <div className="border-t border-border p-4">
+              <UserInputArea timeoutSecs={userTimeout} />
+            </div>
+          )}
+        </div>
       </div>
     </>
   );

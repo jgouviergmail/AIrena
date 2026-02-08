@@ -4,11 +4,14 @@ import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
+  Check,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Globe,
   Play,
   Plus,
+  RotateCcw,
   Save,
   Trash2,
 } from "lucide-react";
@@ -21,7 +24,7 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { cn } from "@/lib/utils";
 import { DEFAULT_LLM_PARAMS } from "@/lib/types";
-import type { PredefinedProfile } from "@/lib/types";
+import type { GladIAteurConfig, PredefinedProfile } from "@/lib/types";
 import * as api from "@/lib/tauri-api";
 
 const TOTAL_STEPS = 4;
@@ -90,6 +93,7 @@ export default function SetupPage() {
       interventionNumber: gladiateurs.length + 1,
       systemPrompt: t(`profiles.${profile.id}.systemPrompt`, { defaultValue: profile.systemPrompt }),
       llmParams: { ...DEFAULT_LLM_PARAMS },
+      sourceProfileId: profile.id,
     });
   };
 
@@ -401,19 +405,24 @@ function StepArbitre() {
         <label className="text-sm font-medium text-foreground">
           {t("setup.turnDistribution")}
         </label>
-        <div className="flex gap-2">
-          {(["sequential", "random"] as const).map((dist) => (
+        <div className="grid grid-cols-2 gap-2">
+          {(
+            ["sequential", "random", "democratic", "authoritarian"] as const
+          ).map((dist) => (
             <button
               key={dist}
               onClick={() => updateArbitre({ turnDistribution: dist })}
               className={cn(
-                "rounded-md border px-3 py-1.5 text-sm transition-colors",
+                "rounded-md border px-3 py-2 text-left transition-colors",
                 arbitre.turnDistribution === dist
                   ? "border-primary bg-primary/10 text-primary"
                   : "border-border text-muted-foreground hover:bg-accent",
               )}
             >
-              {t(`setup.${dist}`)}
+              <div className="text-sm font-medium">{t(`setup.${dist}`)}</div>
+              <div className="mt-0.5 text-xs opacity-70">
+                {t(`setup.${dist}Desc`)}
+              </div>
             </button>
           ))}
         </div>
@@ -440,7 +449,7 @@ function StepArbitre() {
   );
 }
 
-const CATEGORY_ORDER = ["experts", "imaginaires", "personnalites", "metiers", "autres"] as const;
+const CATEGORY_ORDER = ["personnel", "experts", "imaginaires", "personnalites", "metiers", "autres"] as const;
 
 function StepGladiateurs({
   profiles,
@@ -456,7 +465,16 @@ function StepGladiateurs({
   const removeGladiateur = useSetupStore((s) => s.removeGladiateur);
   const updateGladiateur = useSetupStore((s) => s.updateGladiateur);
   const updateGladiateurLlm = useSetupStore((s) => s.updateGladiateurLlm);
+  const settings = useSettingsStore((s) => s.settings);
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
+  const saveSettings = useSettingsStore((s) => s.saveSettings);
+  const saveProfile = useSettingsStore((s) => s.saveProfile);
+  const deleteProfile = useSettingsStore((s) => s.deleteProfile);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(
+    () => new Set(CATEGORY_ORDER),
+  );
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
 
   // Group profiles by category
   const grouped = CATEGORY_ORDER.map((cat) => ({
@@ -464,32 +482,135 @@ function StepGladiateurs({
     profiles: profiles.filter((p) => p.category === cat),
   })).filter((g) => g.profiles.length > 0);
 
+  const handleToggleEmotionDriven = () => {
+    updateSettings({ emotionDriven: !settings.emotionDriven });
+    saveSettings();
+  };
+
+  const getSourceProfile = (g: GladIAteurConfig): PredefinedProfile | undefined =>
+    g.sourceProfileId ? profiles.find((p) => p.id === g.sourceProfileId) : undefined;
+
+  const handleSaveGladiateur = async (g: GladIAteurConfig) => {
+    // If sourced from a non-builtin (personal) profile, update in place
+    const source = getSourceProfile(g);
+    const id = source && !source.isBuiltin ? source.id : `glad-custom-${Date.now()}`;
+    await saveProfile({
+      id,
+      name: g.name,
+      personality: g.name,
+      systemPrompt: g.systemPrompt,
+      isBuiltin: false,
+      profileType: "gladiateur",
+      category: "personnel",
+    });
+    setSavedIds((prev) => new Set(prev).add(g.id));
+    setTimeout(() => setSavedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(g.id);
+      return next;
+    }), 2000);
+  };
+
+  const isModified = (g: GladIAteurConfig): boolean => {
+    const source = getSourceProfile(g);
+    if (!source) return false;
+    const origName = t(`profiles.${source.id}.name`, { defaultValue: source.name });
+    const origPrompt = t(`profiles.${source.id}.systemPrompt`, { defaultValue: source.systemPrompt });
+    return g.name !== origName || g.systemPrompt !== origPrompt;
+  };
+
+  const handleResetGladiateur = (g: GladIAteurConfig) => {
+    const source = getSourceProfile(g);
+    if (!source) return;
+    updateGladiateur(g.id, {
+      name: t(`profiles.${source.id}.name`, { defaultValue: source.name }),
+      systemPrompt: t(`profiles.${source.id}.systemPrompt`, { defaultValue: source.systemPrompt }),
+    });
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Emotion-driven behavior toggle */}
+      <div className="space-y-3">
+        <label className="text-sm font-medium text-foreground">
+          {t("settings.emotionDriven")}
+        </label>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleToggleEmotionDriven}
+            className={cn(
+              "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+              settings.emotionDriven ? "bg-primary" : "bg-muted",
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform",
+                settings.emotionDriven ? "translate-x-5" : "translate-x-0",
+              )}
+            />
+          </button>
+          <span className="text-sm text-muted-foreground">
+            {t("settings.emotionDrivenDesc")}
+          </span>
+        </div>
+      </div>
+
       {/* Profile picker grouped by category */}
       <div className="space-y-3">
         <label className="text-sm font-medium text-foreground">
           {t("setup.selectProfile")}
         </label>
-        {grouped.map((group) => (
-          <div key={group.category}>
-            <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {t(`setup.category_${group.category}`)}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {group.profiles.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => onAddFromProfile(p)}
-                  className="rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
-                >
-                  <span className="mr-1.5 inline-block">{getProfileEmoji(p.name, p.systemPrompt)}</span>
-                  {t(`profiles.${p.id}.name`, { defaultValue: p.name })}
-                </button>
-              ))}
+        {grouped.map((group) => {
+          const collapsed = collapsedCats.has(group.category);
+          return (
+            <div key={group.category}>
+              <button
+                onClick={() =>
+                  setCollapsedCats((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(group.category)) next.delete(group.category);
+                    else next.add(group.category);
+                    return next;
+                  })
+                }
+                className="mb-1.5 flex w-full items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground"
+              >
+                {collapsed ? (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                )}
+                {t(`setup.category_${group.category}`)}
+                <span className="font-normal normal-case">({group.profiles.length})</span>
+              </button>
+              {!collapsed && (
+                <div className="flex flex-wrap gap-2">
+                  {group.profiles.map((p) => (
+                    <div key={p.id} className="group/profile relative">
+                      <button
+                        onClick={() => onAddFromProfile(p)}
+                        className="rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
+                      >
+                        <span className="mr-1.5 inline-block">{getProfileEmoji(p.name, p.systemPrompt)}</span>
+                        {t(`profiles.${p.id}.name`, { defaultValue: p.name })}
+                      </button>
+                      {!p.isBuiltin && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteProfile(p.id); }}
+                          title={t("setup.deleteProfile")}
+                          className="absolute -right-1.5 -top-1.5 hidden rounded-full bg-destructive p-0.5 text-destructive-foreground shadow-sm group-hover/profile:block"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
         <div>
           <button
             onClick={onAddEmpty}
@@ -535,6 +656,33 @@ function StepGladiateurs({
                 />
               </div>
               <div className="flex items-center gap-1">
+                {isModified(g) && (
+                  <button
+                    onClick={() => handleResetGladiateur(g)}
+                    title={t("setup.resetGladiateur")}
+                    className="rounded p-1 text-amber-500 hover:bg-amber-500/10"
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                  </button>
+                )}
+                {g.name.trim() && g.systemPrompt.trim() && (
+                  <button
+                    onClick={() => handleSaveGladiateur(g)}
+                    title={t("setup.saveGladiateur")}
+                    className={cn(
+                      "rounded p-1 transition-colors",
+                      savedIds.has(g.id)
+                        ? "text-green-500"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                    )}
+                  >
+                    {savedIds.has(g.id) ? (
+                      <Check className="h-4 w-4" />
+                    ) : (
+                      <Save className="h-4 w-4" />
+                    )}
+                  </button>
+                )}
                 <button
                   onClick={() =>
                     setExpandedId(expandedId === g.id ? null : g.id)

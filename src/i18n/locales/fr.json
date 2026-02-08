@@ -68,7 +68,13 @@
     "arbitrePrompt": "Prompt système de l'IArbitre",
     "turnDistribution": "Distribution des tours",
     "sequential": "Séquentiel",
+    "sequentialDesc": "Ordre fixe basé sur le numéro d'intervention",
     "random": "Aléatoire",
+    "randomDesc": "Ordre aléatoire à chaque tour",
+    "democratic": "Démocratique",
+    "democraticDesc": "Les participants votent pour décider de l'ordre de parole. En cas d'égalité, l'IArbitre tranche.",
+    "authoritarian": "Autoritaire",
+    "authoritarianDesc": "L'IArbitre décide seul de l'ordre de parole selon ses propres critères.",
     "gladiateurs": "Configuration des GladIAteurs",
     "addGladiateur": "Ajouter un GladIAteur",
     "removeGladiateur": "Retirer",
@@ -96,15 +102,21 @@
     "arbitreProfilePersonality": "Personnalité (courte description)",
     "personalityPlaceholder": "Ex : Neutre, rigoureux",
     "arbitreProfileSaved": "Profil enregistré",
+    "category_personnel": "Personnel",
     "category_experts": "Experts",
     "category_imaginaires": "Imaginaires",
     "category_metiers": "Métiers",
     "category_personnalites": "Personnalités",
-    "category_autres": "Autres"
+    "category_autres": "Autres",
+    "saveGladiateur": "Sauvegarder ce profil",
+    "gladiateurSaved": "Profil sauvegardé",
+    "resetGladiateur": "Réinitialiser au profil d'origine",
+    "deleteProfile": "Supprimer ce profil"
   },
   "arena": {
     "title": "Discussion en cours",
     "turn": "Tour {{number}}",
+    "determiningOrder": "Détermination de l'ordre de parole...",
     "thinking": "Pensée interne",
     "showThoughts": "Afficher les pensées",
     "hideThoughts": "Masquer les pensées",
@@ -312,6 +324,11 @@
       "name": "Le Politicien",
       "personality": "Esquive, langue de bois, charismatique",
       "systemPrompt": "Tu es un politicien professionnel. Tu ne réponds JAMAIS directement aux questions. Tu reformules, tu détournes, tu noies le poisson avec des généralités creuses. Tu utilises la langue de bois à la perfection : \"il faut remettre l'humain au centre\", \"c'est un sujet qui mérite un débat apaisé\", \"les Français nous le disent\". Tu fais des promesses vagues, tu accuses les autres camps sans les nommer, et tu te poses toujours en défenseur du peuple. Tu es charismatique et tu sais placer une punchline politique au bon moment."
+    },
+    "doctor": {
+      "name": "Le Médecin",
+      "personality": "Clinique, empathique, scientifique",
+      "systemPrompt": "Tu es un médecin généraliste avec 25 ans d'expérience. Tu analyses chaque situation à travers le prisme de la santé, du corps et de la prévention. Tu fais des analogies médicales : diagnostics, symptômes, traitements, effets secondaires, pronostics. Tu rappelles que \"prévenir vaut mieux que guérir\" et que chaque décision a des conséquences sur la santé physique et mentale. Tu cites des études médicales, tu parles d'épidémiologie, de santé publique et d'éthique médicale. Tu as un sens aigu de l'écoute et de l'empathie mais tu restes ancré dans la science. Tu t'opposes fermement aux pseudo-médecines et aux charlatans. Tu rappelles souvent le serment d'Hippocrate : \"Primum non nocere\" — d'abord, ne pas nuire."
     },
     "devils-advocate": {
       "name": "L'Avocat du Diable",

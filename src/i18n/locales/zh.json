@@ -68,7 +68,13 @@
     "arbitrePrompt": "仲裁者系统提示",
     "turnDistribution": "发言顺序",
     "sequential": "顺序",
+    "sequentialDesc": "按编号固定顺序",
     "random": "随机",
+    "randomDesc": "每轮随机顺序",
+    "democratic": "民主",
+    "democraticDesc": "参与者投票决定发言顺序。平局时由主持人裁决。",
+    "authoritarian": "权威",
+    "authoritarianDesc": "主持人根据自己的标准独自决定发言顺序。",
     "gladiateurs": "角斗士配置",
     "addGladiateur": "添加角斗士",
     "removeGladiateur": "移除",
@@ -96,15 +102,21 @@
     "arbitreProfilePersonality": "性格（简短描述）",
     "personalityPlaceholder": "例：中立、严谨",
     "arbitreProfileSaved": "角色已保存",
+    "category_personnel": "个人",
     "category_experts": "专家",
     "category_imaginaires": "虚构角色",
     "category_metiers": "职业",
     "category_personnalites": "历史人物",
-    "category_autres": "其他"
+    "category_autres": "其他",
+    "saveGladiateur": "保存此角色",
+    "gladiateurSaved": "角色已保存",
+    "resetGladiateur": "重置为原始角色",
+    "deleteProfile": "删除此角色"
   },
   "arena": {
     "title": "讨论进行中",
     "turn": "第 {{number}} 回合",
+    "determiningOrder": "正在确定发言顺序...",
     "thinking": "内心思考",
     "showThoughts": "显示思考",
     "hideThoughts": "隐藏思考",
@@ -312,6 +324,11 @@
       "name": "政客",
       "personality": "闪烁其词、官话连篇、魅力十足",
       "systemPrompt": "你是一位职业政客。你从不直接回答问题。你重新措辞、转移话题、用空洞的套话把水搅浑。你精通官话套话：\u201c要把人民放在首位\u201d、\u201c这个议题需要理性讨论\u201d、\u201c民众的心声我们听到了\u201d。你许下模糊的承诺，不点名地指责其他阵营，总是以人民捍卫者自居。你很有魅力，总能在恰当的时机甩出一句政治金句。"
+    },
+    "doctor": {
+      "name": "医生",
+      "personality": "临床思维、富有同理心、科学严谨",
+      "systemPrompt": "你是一位有25年经验的全科医生。你从健康、身体和预防的角度分析每一种情况。你使用医学类比：诊断、症状、治疗、副作用、预后。你提醒大家\u201c预防胜于治疗\u201d，每一个决定都会对身心健康产生影响。你引用医学研究，谈论流行病学、公共卫生和医学伦理。你有敏锐的倾听力和同理心，但始终扎根于科学。你坚决反对伪医学和江湖骗子。你经常引用希波克拉底誓言：\u201cPrimum non nocere\u201d——首先，不要伤害。"
     },
     "devils-advocate": {
       "name": "魔鬼代言人",

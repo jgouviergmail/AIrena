@@ -10,7 +10,7 @@ use crate::engine::json_parser;
 use crate::engine::memory_manager;
 use crate::engine::prompt_builder;
 use crate::engine::turn_manager;
-use crate::models::discussion::{DiscussionConfig, DiscussionStatus};
+use crate::models::discussion::{DiscussionConfig, DiscussionStatus, TurnDistribution};
 use crate::models::engine_command::EngineCommand;
 use crate::models::events::ArenaEvent;
 use crate::models::gladiateur::GladIAteurState;
@@ -256,11 +256,58 @@ impl DiscussionEngine {
             self.turn_messages.clear();
             self.turn_reaction_counts.clear();
 
-            // Determine speaker order
-            let order = turn_manager::determine_speaker_order(
-                &self.gladiateurs,
-                &self.config.arbitre.turn_distribution,
-            );
+            // Determine speaker order — sync for Sequential/Random, async for Democratic/Authoritarian
+            let order = match &self.config.arbitre.turn_distribution {
+                TurnDistribution::Sequential | TurnDistribution::Random => {
+                    turn_manager::determine_speaker_order(
+                        &self.gladiateurs,
+                        &self.config.arbitre.turn_distribution,
+                    )
+                }
+                TurnDistribution::Democratic | TurnDistribution::Authoritarian => {
+                    let _ = channel.send(ArenaEvent::DeterminingOrder {
+                        turn_number: self.current_turn,
+                    });
+
+                    // Clone fields into owned context to avoid borrow issues across .await
+                    let ctx = turn_manager::AsyncTurnContext {
+                        ollama_client: self.ollama_client.clone(),
+                        cancel_token: self.cancel_token.clone(),
+                        arbitre_system_prompt: self.arbitre.config.system_prompt.clone(),
+                        arbitre_llm_params: self.arbitre.config.llm_params.clone(),
+                        discussion_summary: self.arbitre.memory.contextual_summary.clone(),
+                        topic: self.config.topic.clone(),
+                        current_turn: self.current_turn,
+                        discussion_language: self.config.discussion_language.clone(),
+                    };
+
+                    match &self.config.arbitre.turn_distribution {
+                        TurnDistribution::Democratic => {
+                            turn_manager::determine_order_democratic(
+                                &self.gladiateurs,
+                                &ctx,
+                            )
+                            .await
+                        }
+                        TurnDistribution::Authoritarian => {
+                            turn_manager::determine_order_authoritarian(
+                                &self.gladiateurs,
+                                &ctx,
+                            )
+                            .await
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            };
+
+            // Check for cancellation after async turn determination (prevents phantom TurnStarted)
+            if self.cancel_token.is_cancelled() {
+                break;
+            }
+            if self.process_commands(&mut cmd_rx, &channel).await {
+                break;
+            }
 
             if order.is_empty() {
                 let _ = channel.send(ArenaEvent::TurnSkipped {

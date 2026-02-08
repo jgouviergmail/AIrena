@@ -61,6 +61,42 @@ pub fn parse_moderation(raw: &str) -> ModerationResult {
     parse_json_response(raw).unwrap_or_default()
 }
 
+/// Response from a democratic vote: gladiator ranks who should speak
+#[derive(Debug, serde::Deserialize)]
+struct VoteResponse {
+    #[serde(default)]
+    ranking: Vec<String>,
+}
+
+/// Response from IArbitre ordering speakers
+#[derive(Debug, serde::Deserialize)]
+struct AuthoritarianOrderResponse {
+    #[serde(default)]
+    order: Vec<String>,
+}
+
+/// Parse a democratic vote response, returning a ranked list of names.
+/// Falls back to empty Vec on parse failure.
+pub fn parse_vote(raw: &str) -> Vec<String> {
+    parse_json_response::<VoteResponse>(raw)
+        .map(|r| r.ranking)
+        .ok()
+        .filter(|r| !r.is_empty())
+        .or_else(|| parse_json_response::<Vec<String>>(raw).ok())
+        .unwrap_or_default()
+}
+
+/// Parse an authoritarian order response, returning ordered speaker names.
+/// Falls back to empty Vec on parse failure.
+pub fn parse_authoritarian_order(raw: &str) -> Vec<String> {
+    parse_json_response::<AuthoritarianOrderResponse>(raw)
+        .map(|r| r.order)
+        .ok()
+        .filter(|r| !r.is_empty())
+        .or_else(|| parse_json_response::<Vec<String>>(raw).ok())
+        .unwrap_or_default()
+}
+
 /// Wrapper struct for when the LLM wraps the array in an object
 /// e.g. {"reactions": [...]} or {"responses": [...]} or {"interventions": [...]}
 #[derive(Debug, serde::Deserialize)]
@@ -178,49 +214,54 @@ fn strip_french_article(name: &str) -> &str {
     trimmed
 }
 
+/// Match a LLM-returned name against a list of known names.
+/// 4 layers: exact case-insensitive → article-stripped → prefix (min 3 chars) → contains (min 4 chars)
+pub fn match_speaker_name<'a>(llm_name: &str, known_names: &'a [String]) -> Option<&'a String> {
+    let llm_lower = llm_name.to_lowercase().trim().to_string();
+    let llm_stripped = strip_french_article(&llm_lower);
+
+    // 1. Exact match (case-insensitive, trimmed)
+    known_names
+        .iter()
+        .find(|s| s.to_lowercase().trim() == llm_lower)
+        // 2. Article-stripped match: "Scientifique" matches "Le Scientifique"
+        .or_else(|| {
+            if llm_stripped.len() >= 3 {
+                known_names
+                    .iter()
+                    .find(|s| strip_french_article(&s.to_lowercase()) == llm_stripped)
+            } else {
+                None
+            }
+        })
+        // 3. Prefix match: known name starts with the LLM-provided string (min 3 chars)
+        .or_else(|| {
+            if llm_lower.len() >= 3 {
+                known_names
+                    .iter()
+                    .find(|s| s.to_lowercase().starts_with(&llm_lower))
+            } else {
+                None
+            }
+        })
+        // 4. Contains match: LLM output contains the stripped known name or vice versa
+        .or_else(|| {
+            if llm_stripped.len() >= 4 {
+                known_names.iter().find(|s| {
+                    let s_lower = s.to_lowercase();
+                    let s_stripped = strip_french_article(&s_lower);
+                    s_stripped.contains(llm_stripped) || llm_stripped.contains(s_stripped)
+                })
+            } else {
+                None
+            }
+        })
+}
+
 fn validate_reactions(raw: Vec<RawReaction>, known_speakers: &[String]) -> Vec<ParsedReaction> {
     raw.into_iter()
         .filter_map(|r| {
-            let r_lower = r.speaker.to_lowercase().trim().to_string();
-            let r_stripped = strip_french_article(&r_lower).to_lowercase();
-
-            // 1. Exact match (case-insensitive, trimmed)
-            let speaker = known_speakers
-                .iter()
-                .find(|s| s.to_lowercase().trim() == r_lower)
-                // 2. Article-stripped match: "Scientifique" matches "Le Scientifique"
-                .or_else(|| {
-                    if r_stripped.len() >= 3 {
-                        known_speakers
-                            .iter()
-                            .find(|s| strip_french_article(&s.to_lowercase()) == r_stripped)
-                    } else {
-                        None
-                    }
-                })
-                // 3. Prefix match: known name starts with the LLM-provided string (min 3 chars)
-                .or_else(|| {
-                    if r_lower.len() >= 3 {
-                        known_speakers
-                            .iter()
-                            .find(|s| s.to_lowercase().starts_with(&r_lower))
-                    } else {
-                        None
-                    }
-                })
-                // 4. Contains match: LLM output contains the stripped known name or vice versa
-                .or_else(|| {
-                    if r_stripped.len() >= 4 {
-                        known_speakers
-                            .iter()
-                            .find(|s| {
-                                let s_stripped = strip_french_article(&s.to_lowercase()).to_lowercase();
-                                s_stripped.contains(&r_stripped) || r_stripped.contains(&s_stripped)
-                            })
-                    } else {
-                        None
-                    }
-                })?;
+            let speaker = match_speaker_name(&r.speaker, known_speakers)?;
 
             // Normalize the reaction value
             let reaction_type = match r.reaction.to_lowercase().as_str() {
@@ -697,5 +738,86 @@ mod tests {
         assert_eq!(strip_french_article("Les Experts"), "Experts");
         assert_eq!(strip_french_article("Dieu"), "Dieu"); // no article
         assert_eq!(strip_french_article("Satan"), "Satan"); // no article
+    }
+
+    #[test]
+    fn test_match_speaker_name_exact() {
+        let known = vec!["Alice".to_string(), "Bob".to_string()];
+        assert_eq!(match_speaker_name("Alice", &known), Some(&known[0]));
+        assert_eq!(match_speaker_name("alice", &known), Some(&known[0]));
+        assert_eq!(match_speaker_name("  Bob  ", &known), Some(&known[1]));
+    }
+
+    #[test]
+    fn test_match_speaker_name_article_stripped() {
+        let known = vec!["Le Scientifique".to_string(), "L'Avocat du Diable".to_string()];
+        assert_eq!(match_speaker_name("Scientifique", &known), Some(&known[0]));
+        assert_eq!(match_speaker_name("Avocat du Diable", &known), Some(&known[1]));
+    }
+
+    #[test]
+    fn test_match_speaker_name_prefix() {
+        let known = vec!["Le Scientifique".to_string()];
+        assert_eq!(match_speaker_name("Le Sci", &known), Some(&known[0]));
+    }
+
+    #[test]
+    fn test_match_speaker_name_contains() {
+        let known = vec!["L'Avocat du Diable".to_string()];
+        assert_eq!(match_speaker_name("Avocat du Diable", &known), Some(&known[0]));
+    }
+
+    #[test]
+    fn test_match_speaker_name_no_match() {
+        let known = vec!["Alice".to_string()];
+        assert_eq!(match_speaker_name("Charlie", &known), None);
+        assert_eq!(match_speaker_name("a", &known), None); // too short
+    }
+
+    #[test]
+    fn test_parse_vote_response() {
+        let raw = r#"{"ranking":["Alice","Bob","Charlie"]}"#;
+        let result = parse_vote(raw);
+        assert_eq!(result, vec!["Alice", "Bob", "Charlie"]);
+    }
+
+    #[test]
+    fn test_parse_vote_bare_array() {
+        let raw = r#"["Alice","Bob"]"#;
+        let result = parse_vote(raw);
+        assert_eq!(result, vec!["Alice", "Bob"]);
+    }
+
+    #[test]
+    fn test_parse_vote_invalid() {
+        let result = parse_vote("not json at all");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_vote_markdown_wrapped() {
+        let raw = "Here is my ranking:\n```json\n{\"ranking\":[\"Bob\",\"Alice\"]}\n```\n";
+        let result = parse_vote(raw);
+        assert_eq!(result, vec!["Bob", "Alice"]);
+    }
+
+    #[test]
+    fn test_parse_authoritarian_order() {
+        let raw = r#"{"order":["Charlie","Alice","Bob"]}"#;
+        let result = parse_authoritarian_order(raw);
+        assert_eq!(result, vec!["Charlie", "Alice", "Bob"]);
+    }
+
+    #[test]
+    fn test_parse_authoritarian_order_bare_array() {
+        let raw = r#"["Charlie","Alice"]"#;
+        let result = parse_authoritarian_order(raw);
+        assert_eq!(result, vec!["Charlie", "Alice"]);
+    }
+
+    #[test]
+    fn test_parse_authoritarian_order_invalid() {
+        let result = parse_authoritarian_order("garbage");
+        assert!(result.is_empty());
     }
 }

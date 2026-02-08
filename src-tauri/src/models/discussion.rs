@@ -8,6 +8,8 @@ use super::iarbitre::IArbitreConfig;
 pub enum TurnDistribution {
     Sequential,
     Random,
+    Democratic,
+    Authoritarian,
 }
 
 #[derive(Debug, Clone, PartialEq)]

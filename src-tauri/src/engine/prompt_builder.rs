@@ -768,3 +768,158 @@ fn build_end_awareness(current_turn: u32, max_turns: Option<u32>, lang: &str) ->
         String::new()
     }
 }
+
+/// Build the democratic voting prompt for a gladiator.
+/// The gladiator ranks OTHER active speakers by who should speak first.
+pub fn build_democratic_vote_prompt(
+    voter_name: &str,
+    other_active_names: &[String],
+    topic: &str,
+    discussion_summary: &str,
+    discussion_language: &str,
+) -> String {
+    let names_list = other_active_names.join(", ");
+    let context = if discussion_summary.is_empty() {
+        match discussion_language {
+            "en" => format!("The debate topic is: \"{topic}\". The discussion has not started yet."),
+            "zh" => format!("辩论主题是：\"{topic}\"。讨论尚未开始。"),
+            _ => format!("Le sujet du débat est : \"{topic}\". La discussion n'a pas encore commencé."),
+        }
+    } else {
+        match discussion_language {
+            "en" => format!("The debate topic is: \"{topic}\"\nDiscussion so far: {discussion_summary}"),
+            "zh" => format!("辩论主题是：\"{topic}\"\n目前讨论内容：{discussion_summary}"),
+            _ => format!("Le sujet du débat est : \"{topic}\"\nDiscussion jusqu'ici : {discussion_summary}"),
+        }
+    };
+
+    match discussion_language {
+        "en" => format!(
+            "You are {voter_name}. Rank the following participants in the order you think they \
+             should speak next, from most relevant to least relevant.\n\n\
+             {context}\n\n\
+             Participants to rank: {names_list}\n\n\
+             Return a JSON object: {{\"ranking\": [\"first_to_speak\", \"second\", ...]}}\n\
+             Include ALL participants listed above. Respond ONLY with the JSON, no text before or after.",
+        ),
+        "zh" => format!(
+            "你是{voter_name}。按你认为应该先发言的顺序排列以下参与者，从最相关到最不相关。\n\n\
+             {context}\n\n\
+             需要排列的参与者：{names_list}\n\n\
+             返回JSON对象：{{\"ranking\": [\"最先发言的\", \"第二个\", ...]}}\n\
+             包含以上列出的所有参与者。仅用JSON回复，前后不要有任何文字。",
+        ),
+        _ => format!(
+            "Tu es {voter_name}. Classe les participants suivants dans l'ordre où tu penses \
+             qu'ils devraient parler, du plus pertinent au moins pertinent.\n\n\
+             {context}\n\n\
+             Participants à classer : {names_list}\n\n\
+             Retourne un objet JSON : {{\"ranking\": [\"premier_à_parler\", \"deuxième\", ...]}}\n\
+             Inclus TOUS les participants listés ci-dessus. Réponds UNIQUEMENT avec le JSON, \
+             pas de texte avant ou après.",
+        ),
+    }
+}
+
+/// Build the authoritarian ordering prompt for the IArbitre.
+/// The IArbitre decides the full speaking order for this turn.
+pub fn build_authoritarian_order_prompt(
+    active_names: &[String],
+    topic: &str,
+    discussion_summary: &str,
+    current_turn: u32,
+    discussion_language: &str,
+) -> String {
+    let names_list = active_names.join(", ");
+    let context = if discussion_summary.is_empty() {
+        match discussion_language {
+            "en" => format!("This is the opening turn. The topic is: \"{topic}\"."),
+            "zh" => format!("这是开场轮次。主题是：\"{topic}\"。"),
+            _ => format!("C'est le tour d'ouverture. Le sujet est : \"{topic}\"."),
+        }
+    } else {
+        match discussion_language {
+            "en" => format!("Topic: \"{topic}\"\nDiscussion summary: {discussion_summary}"),
+            "zh" => format!("主题：\"{topic}\"\n讨论摘要：{discussion_summary}"),
+            _ => format!("Sujet : \"{topic}\"\nRésumé de la discussion : {discussion_summary}"),
+        }
+    };
+
+    match discussion_language {
+        "en" => format!(
+            "As moderator, decide the speaking order for turn {current_turn}.\n\n\
+             {context}\n\n\
+             Active participants: {names_list}\n\n\
+             Consider: who has the most relevant point to make first? Who should respond to whom? \
+             Use your judgement to create the most productive discussion order.\n\
+             Return a JSON object: {{\"order\": [\"first_speaker\", \"second_speaker\", ...]}}\n\
+             Include ALL active participants. Respond ONLY with the JSON, no text before or after.",
+        ),
+        "zh" => format!(
+            "作为主持人，决定第{current_turn}轮的发言顺序。\n\n\
+             {context}\n\n\
+             活跃参与者：{names_list}\n\n\
+             考虑：谁最应该先发言？谁应该回应谁？用你的判断创造最有效的讨论顺序。\n\
+             返回JSON对象：{{\"order\": [\"第一个发言者\", \"第二个发言者\", ...]}}\n\
+             包含所有活跃参与者。仅用JSON回复，前后不要有任何文字。",
+        ),
+        _ => format!(
+            "En tant que modérateur, décide l'ordre de parole pour le tour {current_turn}.\n\n\
+             {context}\n\n\
+             Participants actifs : {names_list}\n\n\
+             Réfléchis : qui a le point le plus pertinent à faire en premier ? Qui devrait \
+             répondre à qui ? Utilise ton jugement pour créer l'ordre de discussion le plus productif.\n\
+             Retourne un objet JSON : {{\"order\": [\"premier_intervenant\", \"deuxième\", ...]}}\n\
+             Inclus TOUS les participants actifs. Réponds UNIQUEMENT avec le JSON, \
+             pas de texte avant ou après.",
+        ),
+    }
+}
+
+/// Build the tie-breaking prompt for the IArbitre when democratic voting results in a tie.
+pub fn build_tiebreak_prompt(
+    tied_names: &[String],
+    topic: &str,
+    discussion_summary: &str,
+    current_turn: u32,
+    discussion_language: &str,
+) -> String {
+    let names_list = tied_names.join(", ");
+    let context = if discussion_summary.is_empty() {
+        match discussion_language {
+            "en" => format!("Topic: \"{topic}\". Turn {current_turn}."),
+            "zh" => format!("主题：\"{topic}\"。第{current_turn}轮。"),
+            _ => format!("Sujet : \"{topic}\". Tour {current_turn}."),
+        }
+    } else {
+        match discussion_language {
+            "en" => format!("Topic: \"{topic}\". Turn {current_turn}.\nSummary: {discussion_summary}"),
+            "zh" => format!("主题：\"{topic}\"。第{current_turn}轮。\n摘要：{discussion_summary}"),
+            _ => format!("Sujet : \"{topic}\". Tour {current_turn}.\nRésumé : {discussion_summary}"),
+        }
+    };
+
+    match discussion_language {
+        "en" => format!(
+            "There is a tie in the democratic vote. The following participants received equal votes: \
+             {names_list}\n\n\
+             {context}\n\n\
+             Decide their speaking order. Return a JSON object: {{\"order\": [\"first\", \"second\", ...]}}\n\
+             Include ALL tied participants. Respond ONLY with the JSON, no text before or after.",
+        ),
+        "zh" => format!(
+            "民主投票出现了平局。以下参与者获得了相同的票数：{names_list}\n\n\
+             {context}\n\n\
+             决定他们的发言顺序。返回JSON对象：{{\"order\": [\"第一个\", \"第二个\", ...]}}\n\
+             包含所有平局参与者。仅用JSON回复，前后不要有任何文字。",
+        ),
+        _ => format!(
+            "Il y a une égalité dans le vote démocratique. Les participants suivants ont reçu \
+             le même nombre de voix : {names_list}\n\n\
+             {context}\n\n\
+             Décide leur ordre de parole. Retourne un objet JSON : {{\"order\": [\"premier\", \"deuxième\", ...]}}\n\
+             Inclus TOUS les participants à égalité. Réponds UNIQUEMENT avec le JSON, \
+             pas de texte avant ou après.",
+        ),
+    }
+}

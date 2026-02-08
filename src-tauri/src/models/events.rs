@@ -39,6 +39,9 @@ pub enum ArenaEvent {
         reason: String,
         next_available_turn: u32,
     },
+    /// Turn order is being determined (democratic/authoritarian modes)
+    #[serde(rename_all = "camelCase")]
+    DeterminingOrder { turn_number: u32 },
     /// Active speaker changed
     #[serde(rename_all = "camelCase")]
     SpeakerActive { speaker_id: String },

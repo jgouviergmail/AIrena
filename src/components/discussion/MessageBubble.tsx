@@ -5,16 +5,28 @@ import { SpeakerBadge } from "./SpeakerBadge";
 import { cn } from "@/lib/utils";
 import type { Message, SpeakerRole } from "@/lib/types";
 
-/** Extract short forms from French-style names for better matching.
- *  "Le Scientifique" → ["Scientifique"], "L'Avocat du Diable" → ["Avocat du Diable"] */
+/** Extract short forms from names for better matching.
+ *  "Le Scientifique" → ["Scientifique"]
+ *  "Napoléon Bonaparte" → ["Napoléon", "Bonaparte"]
+ *  "L'Avocat du Diable" → ["Avocat du Diable"] */
 function extractShortForms(name: string): string[] {
   const shorts: string[] = [];
   // Remove leading French articles: "Le ", "La ", "L'", "Les "
   const articleMatch = name.match(/^(?:Le |La |L'|Les )/i);
   if (articleMatch) {
     const base = name.slice(articleMatch[0].length);
-    if (base.length >= 5) {
+    if (base.length >= 4) {
       shorts.push(base);
+    }
+  }
+  // Split multi-word names into individual parts (min 4 chars, skip articles/prepositions)
+  const stopWords = new Set(["le", "la", "les", "l'", "du", "de", "des", "the", "of"]);
+  const parts = name.split(/\s+/).filter(
+    (p) => p.length >= 4 && !stopWords.has(p.toLowerCase()),
+  );
+  if (parts.length > 1) {
+    for (const part of parts) {
+      shorts.push(part);
     }
   }
   return shorts;

@@ -13,6 +13,7 @@ pub struct ChatStreamResult {
     pub thinking: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct OllamaClient {
     client: reqwest::Client,
     base_url: String,
