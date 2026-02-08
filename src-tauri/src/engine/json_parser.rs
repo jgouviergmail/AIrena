@@ -278,15 +278,7 @@ fn remove_trailing_commas(input: &str) -> String {
 
 /// Safe string truncation that respects UTF-8 char boundaries
 fn safe_truncate(s: &str, max_bytes: usize) -> String {
-    if s.len() <= max_bytes {
-        s.to_string()
-    } else {
-        let mut end = max_bytes;
-        while !s.is_char_boundary(end) && end > 0 {
-            end -= 1;
-        }
-        s[..end].to_string()
-    }
+    s[..s.floor_char_boundary(max_bytes)].to_string()
 }
 
 #[cfg(test)]

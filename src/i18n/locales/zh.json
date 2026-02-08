@@ -44,7 +44,9 @@
     "modelPreloading": "正在将模型加载到内存中...",
     "modelPreloaded": "模型已加载就绪",
     "modelPreloadError": "模型加载失败",
-    "usernameRequired": "用户名为必填项"
+    "usernameRequired": "用户名为必填项",
+    "emotionDriven": "情绪驱动行为",
+    "emotionDrivenDesc": "情绪影响AI的论述风格"
   },
   "setup": {
     "title": "讨论配置",

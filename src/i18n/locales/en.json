@@ -44,7 +44,9 @@
     "modelPreloading": "Loading model into memory...",
     "modelPreloaded": "Model loaded and ready",
     "modelPreloadError": "Failed to load model",
-    "usernameRequired": "Username is required"
+    "usernameRequired": "Username is required",
+    "emotionDriven": "Emotion-driven behavior",
+    "emotionDrivenDesc": "Emotions influence the AI argumentation style"
   },
   "setup": {
     "title": "Discussion setup",

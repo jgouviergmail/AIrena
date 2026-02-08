@@ -1,0 +1,125 @@
+DEMANDER LA PAROLE
+- l'utilisateur ne doit pouvoir cliquer qu'une fois par tour sur "demander la parole" et le bouton doit changer d'apparence pour valider la bonne prise en compte.
+- je remarque également un problème : dès que j'ai la parole, je publie mon message mais l'édition de message reste systématiquement affichée et "Annuler mon intervention" ne fonctionne pas. Ca doit disparaitre une fois que j'ai envoyé ma réponse et le bouton "Demander la parole" se réactiver au début du prochain tour.
+- j'ai également l'impression qu'aucune IA ne réagit à mon intervention : est elle bien visible et prise en compte ?
+
+EMOTIONS
+Je ne vois aucune réprésentation visuelle des émotions.
+
+DISCUSSION GENERALE
+- je remarque un biais qu'il faudrait corriger : si X commence, il arive très souvent que tous les autres ne prennent que la déclaration de X comme référence lors du tour de parole, ce qui ferme un peu les échanges et donne une impression de tous contre X. 
+Je te rappelle le besoin initial :
+"l'IA intervient et s'exprime pour rebondir sur les échanges et faire progresser la discussion en tenant compte :
+** de son system prompt,
+** du thème de la discussion, 
+** de son historique d'intervention,
+** de l'historique complet de la discussion avec un poids un peu plus important sur le denier tour et les échanges précédents le tour courant afin de rebondir sur les interventions des autres ou une IA spécifiquement de temps en temps. Il peut également brièvement commenter un ban fait par l'IArbitre, mais continue ensuite de développer la discussion. ".
+=> il faut favoriser les échanges vivants, naturels et conversationnels et qui ne soient pas systématiques ni toujours symétriques, bien qu'il soit pertinent quelques fois que certains interlocuteurs confrontent leurs idées plus directement ou centralisent leurs remaqrues sur un intervenant ou une intervention. Est ce un sujet technique ou une mise à jour du prompt par défaut de l'IArbitre ?
+
+ARRIVEE DE LA FIN DE DISCUSSION
+- Les IA, comme l'IArbitre, doivent être conscients de l'arrivée de la fin de la discussion (lorsque définie) et donc préciser leurs argumentaires et échanges afin d'aboutir (ou pas) à la fin de la discussion.
+
+PARAMETRAGE DE LA DISCUSSION
+- pour le mode de distribution des tours il pourrait être intéressant de rajouter :
+* démocratique : vote des IA participantes pour définir qui est le prochain à parler. En cas d'égalité c'est IArbitre qui choisit comme bon lui semble
+* autoritaire : c'est IArbitre qui distribue la parole comme bon lui semble selon ses propres critères
+=> pour chaque mode afficher un ptit descriptif explicatif
+
+SYNTHESE/HISTORIQUE
+- A la fin de la discussion s'affiche la synthèse, qui est très bien, mais l'utilisateur doit pouvoir visualiser toute la discussion et revenir à la synthèse comme bon lui semble. Il serait aussi bien maintenant de mettre en place un historisation des discussions/synthèse avec possibilité de tout supprimer ou supprimer unitairement chaque discussion/synthèse
+
+--------------------------------------------------------------------
+
+## Système d'engagement émotionnel
+
+### Les états émotionnels (6 axes)
+
+Plutôt qu'une émotion unique, chaque GladIAteur aurait un **profil émotionnel à 6 axes** (chacun sur une échelle de 0 à 100) :
+
+| Axe | Bas (0) | Haut (100) | Ce que ça influence |
+|-----|---------|------------|-------------------|
+| **Engagement** | Désintéressé | Passionné | Longueur et intensité des réponses |
+| **Accord** | En opposition | En alignement | Tendance à soutenir ou challenger |
+| **Confiance** | Hésitant | Assertif | Ton affirmatif vs nuancé |
+| **Frustration** | Serein | Agacé | Réactions plus vives, impatience |
+| **Curiosité** | Indifférent | Très intrigué | Pose des questions, explore des tangentes |
+| **Enthousiasme** | Réservé | Exalté | Énergie du discours, exclamations |
+
+### Comment ça évolue (automatiquement, à chaque tour)
+
+À la fin de chaque intervention, un appel LLM léger analyse la dynamique et met à jour les axes :
+
+```
+Voici l'état émotionnel actuel de {name}: {axes actuels}
+Voici ce qui vient de se passer dans la discussion: {résumé du tour}
+
+Événements à considérer:
+- Quelqu'un a-t-il contredit {name} ? → frustration ↑, engagement ↑
+- Quelqu'un a-t-il soutenu {name} ? → enthousiasme ↑, confiance ↑
+- {name} a-t-il reçu des likes ? → confiance ↑, engagement ↑
+- {name} a-t-il reçu des dislikes ? → frustration ↑ ou confiance ↓
+- {name} a-t-il été banni récemment ? → frustration ↑↑
+- Un nouveau sujet intéressant a émergé ? → curiosité ↑
+- La discussion tourne en rond ? → engagement ↓
+
+Retourne les nouveaux axes en JSON :
+{"engagement": X, "accord": X, "confiance": X, "frustration": X, "curiosite": X, "enthousiasme": X}
+```
+
+### Comment ça influence les réponses
+
+L'état émotionnel est injecté dans le prompt du GladIAteur :
+
+```
+## Ton état émotionnel actuel
+Tu te sens : {description textuelle dérivée des axes}
+Exemple: "Tu es très engagé dans le débat (85/100), plutôt en désaccord 
+avec la majorité (30/100), confiant dans tes arguments (70/100), 
+légèrement frustré par le manque de rigueur (60/100)."
+
+Laisse cet état transparaître naturellement dans ton intervention, 
+sans le mentionner explicitement.
+```
+
+## Système d'engagement émotionnel\n\n### Les 6 axes\n\n| Axe | Bas (0) | Haut (100) | Influence sur le style |\n|-----|---------|------------|----------------------|\n| **Engagement** | Désintéressé | Passionné | Longueur et intensité des réponses |\n| **Accord** | En opposition | En alignement | Tendance à soutenir ou challenger le groupe |\n| **Confiance** | Hésitant | Assertif | Ton affirmatif vs nuancé/interrogatif |\n| **Frustration** | Serein | Agacé | Réactions plus vives, impatience, sarcasme léger |\n| **Curiosité** | Indifférent | Très intrigué | Pose des questions, explore des tangentes |\n| **Enthousiasme** | Réservé | Exalté | Énergie du discours, dynamisme |\n\n### Évolution dynamique (fin de chaque intervention)\n\nUn appel LLM léger analyse la dynamique et met à jour les axes :\n```\nÉtat émotionnel actuel de {name}: {axes JSON}\nCe qui vient de se passer: {résumé des derniers échanges}\n\nDéclencheurs:\n- Contradiction reçue → frustration ↑, engagement ↑\n- Soutien reçu → enthousiasme ↑, confiance ↑\n- Likes reçus → confiance ↑, engagement ↑\n- Dislikes reçus → frustration ↑ ou confiance ↓\n- Ban récent → frustration ↑↑, engagement ↓\n- Nouveau sujet émergent → curiosité ↑\n- Discussion qui tourne en rond → engagement ↓, frustration ↑\n\nRetourne UNIQUEMENT le JSON mis à jour:\n{\"engagement\": X, \"accord\": X, \"confiance\": X, \"frustration\": X, \"curiosite\": X, \"enthousiasme\": X}\nChaque valeur entre 0 et 100. Variations de ±5 à ±15 par tour max.\n```\n\n### Injection dans le prompt du GladIAteur\n\nAjouté dans le contexte envoyé au GladIAteur avant son intervention :\n```\n## Ton état émotionnel actuel\nTu te sens : très engagé dans le débat (85/100), plutôt en désaccord avec la majorité (30/100),\nconfiant dans tes arguments (70/100), légèrement frustré par le manque de rigueur (60/100),\ncurieux des pistes soulevées par {Nom} (75/100), enthousiaste sur la tournure du débat (65/100).\n\nLaisse cet état transparaître naturellement dans ton style et ton ton,\nsans jamais le mentionner explicitement.\n```\n\n### Affichage visuel : indicateur coloré + tooltip\n\n- **Cercle coloré** à côté du nom du GladIAteur dans le feed\n- **Couleur** dérivée de l'émotion dominante :\n  - Vert → serein/confiant (confiance haute, frustration basse)\n  - Orange → engagé/passionné (engagement + enthousiasme hauts)\n  - Rouge → frustré/agacé (frustration haute)\n  - Bleu → curieux/réfléchi (curiosité haute)\n  - Jaune → enthousiaste (enthousiasme dominant)\n  - Gris → désengagé (engagement bas)\n- **Tooltip au survol** : affiche les 6 axes avec barres de progression miniatures\n- **Transition fluide** : la couleur change graduellement entre les tours (CSS transition)\n\n### Fichier Rust associé\n\nAjout d'un module `src-tauri/src/engine/emotion_engine.rs` :\n- `update_emotions(profile: &EmotionalProfile, context: &TurnContext) → EmotionalProfile`\n- `emotions_to_prompt_text(profile: &EmotionalProfile) → String`\n- `dominant_emotion(profile: &EmotionalProfile) → EmotionLabel`\n\n### Composant React associé\n\n`src/components/discussion/EmotionIndicator.tsx` :\n- Cercle coloré avec animation de transition\n- Tooltip (shadcn/ui Tooltip) avec mini barres de progression pour les 6 axes\n\n---\n\n## Communication IPC (Tauri v2)"
+
+---------------------------------------------------------------
+
+Objectif : permettre aux IA de rechercher des informations sur internet afin de combler l'obsolescence des données d'entrainement et avoir des échanges encore plus argumentés et factuels à l'aide d'informations à jour et expertes.
+
+DANS LES PARAMETRES DE L'APPLICATION
+L'activation de la recherche internet n'est possible que si une clé tavily est définie dans les paramètres (indiquer le lien https://www.tavily.com et préciser 1000 tokens gratuits par mois).
+Lorsque cette clé définie alors l'utilisateur peut définnir/modifier :
+- la date de début de période (par défaut date du jour au moment de la saisie de la clé). Cette date reste modifiable au besoin.
+- le compteur général de recherches internet, par défaut à 0 au moment de la définie de la clé (jusqu'à 1000 tokens gratuits par mois). Ce compteur reste modificable par l'utilisateur. Ce compteur est cumulatif toutes discussions incluses et permet de suivre la consommation des tokens tavily sur une période d'un mois. 
+A la date de période +1 mois glissant (ou pour toute date ultérieure) la date de début de période est recalculée pour le mois glissant en cours par rapport à la date initiale et le compteur de recherches internet est automatiquement remis à 0. Il y a un historique de consommation scrollable pour chaque période mensuelle glissante passée.
+
+PARAMETRAGE DE LA DISCUSSION
+Avant le démarrage de la discussion, l'utilisateur peut définir pour chaque agent :
+- sa capacité à aller rechercher des informations sur internet (actif/inactif)
+- le nombre de recherches sur internet que peut faire cet agent pour l'ensemble de la discussion
+- le nombre de recherches sur internet que peut faire cet agent pour un tour (max = nb recherches sur la discussion)
+Impact sur le prompt des IA :
+- si l'option Internet est activée il faut enrichir le prompt avec une directive spécifique afin de définir une stratégie d'utilisation des ressources internet (injecter une directive de base pour que l'IA fasse des recherches lorsqu'il a besoin d'informations ou données récentes, s'il a besoin d'obtenir des informations sur un domaine qu'il ne connait pas, etc... ). Cette directive, comme le prompt de l'IA peuvent être modifiées par l'utilisateur
+- un indicateur global est systématiquement mis à jour pour montrer le nombre maximum de recherches internet qui pourront être faites dans la discussion
+=> TIPS : l'utilisateur peut définir ces informations de manière globale pour toutes les IA.
+- avant de démarrer la discussion un message informe l'utilisateur du nombre maximum de recherches internet qui pourront être faites dans la discussion, toutes IA confondues. L'utilisateur pourra revenir en arriève pour ajuster si besoin
+
+PENDANT LA DISCUSSION
+Pendant la discussion un compteur de nb recherches internet est mis à jour et lorsqu'une IA utilise la recherche internet dans une réponse un petit indicateur indiquant combien de recherches ont été faites est affiché.
+
+ATTENTION
+** CRITIQUE/IMPORTANT : il est IMPERATIF de GARANTIR qu'une IA ne pourra PAS dépasser son quotat par discussion et par tour.
+
+BONUS : chaque IA, et IArbitre également, doit recevoir la date et heure du jour avec le bon fuseau horaire de l'utilisateur (système).
+
+IMPLEMENTATION
+Techniquement : je propose d'utiliser SEARCH (en CURL ?) en mode BASIC. Mais à challenger avec ta vision technique. Je te laisse voir pour les autres paramètres. Voici les liens pour que tu puisses implémenter :
+
+Site tavily : https://www.tavily.com/
+Introduction : https://docs.tavily.com/documentation/api-reference/introduction
+Gestion des tokens/credits : https://docs.tavily.com/documentation/api-credits
+Usage de SEARCH : https://docs.tavily.com/documentation/api-reference/endpoint/search
+Bonnes pratiques SERACH : https://docs.tavily.com/documentation/best-practices/best-practices-search#search-depth
+
+Si tu as des questions, des remarques ou des idées et des suggestions pour améliorer cette fonctionnalité alors dis les et donne les moi.

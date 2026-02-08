@@ -84,8 +84,18 @@ pub fn build_thought_prompt(
     emotions: &EmotionalProfile,
     discussion_language: &str,
     has_prior_context: bool,
+    emotion_driven: bool,
 ) -> String {
-    let emotion_desc = describe_emotions(emotions, discussion_language);
+    let emotion_suffix = if emotion_driven {
+        let desc = describe_emotions(emotions, discussion_language);
+        match discussion_language {
+            "en" => format!("\n\nYour emotional state: {}", desc),
+            "zh" => format!("\n\n你的情绪状态：{}", desc),
+            _ => format!("\n\nTon état émotionnel : {}", desc),
+        }
+    } else {
+        String::new()
+    };
 
     if has_prior_context {
         match discussion_language {
@@ -94,58 +104,51 @@ pub fn build_thought_prompt(
                  Reflect in 2-4 sentences:\n\
                  1. Which argument from the last turn struck you most and why?\n\
                  2. What angle will you take in your intervention?\n\
-                 3. Is there a weak point in your position you need to anticipate?\n\n\
-                 Your emotional state: {}",
-                emotion_desc
+                 3. Is there a weak point in your position you need to anticipate?{}",
+                emotion_suffix
             ),
             "zh" => format!(
                 "[这是你的私人反思，其他参与者看不到。]\n\n\
                  用2-4句话思考：\n\
                  1. 上一轮哪个论点最让你印象深刻，为什么？\n\
                  2. 你的发言将采取什么角度？\n\
-                 3. 你的立场是否有需要预见的弱点？\n\n\
-                 你的情绪状态：{}",
-                emotion_desc
+                 3. 你的立场是否有需要预见的弱点？{}",
+                emotion_suffix
             ),
             _ => format!(
                 "[Ce texte est ta réflexion PRIVÉE, invisible des autres participants.]\n\n\
                  Réfléchis en 2-4 phrases :\n\
                  1. Quel argument du dernier tour t'a le plus marqué et pourquoi ?\n\
                  2. Quel angle vas-tu prendre dans ton intervention ?\n\
-                 3. Y a-t-il un point faible dans ta position que tu dois anticiper ?\n\n\
-                 Ton état émotionnel : {}",
-                emotion_desc
+                 3. Y a-t-il un point faible dans ta position que tu dois anticiper ?{}",
+                emotion_suffix
             ),
         }
     } else {
-        // First speaker with no prior context — different questions
         match discussion_language {
             "en" => format!(
                 "[This text is your PRIVATE reflection, invisible to other participants.]\n\n\
                  You are the first to speak on this topic. Reflect in 2-4 sentences:\n\
                  1. What is your initial position on this topic?\n\
                  2. What angle will you take to open the debate?\n\
-                 3. What key argument will you lead with?\n\n\
-                 Your emotional state: {}",
-                emotion_desc
+                 3. What key argument will you lead with?{}",
+                emotion_suffix
             ),
             "zh" => format!(
                 "[这是你的私人反思，其他参与者看不到。]\n\n\
                  你是第一个就此话题发言的人。用2-4句话思考：\n\
                  1. 你对这个话题的初始立场是什么？\n\
                  2. 你将以什么角度开启辩论？\n\
-                 3. 你将以什么关键论点开始？\n\n\
-                 你的情绪状态：{}",
-                emotion_desc
+                 3. 你将以什么关键论点开始？{}",
+                emotion_suffix
             ),
             _ => format!(
                 "[Ce texte est ta réflexion PRIVÉE, invisible des autres participants.]\n\n\
                  Tu es le premier à prendre la parole sur ce sujet. Réfléchis en 2-4 phrases :\n\
                  1. Quelle est ta position initiale sur ce sujet ?\n\
                  2. Quel angle vas-tu prendre pour ouvrir le débat ?\n\
-                 3. Quel argument clé vas-tu avancer en premier ?\n\n\
-                 Ton état émotionnel : {}",
-                emotion_desc
+                 3. Quel argument clé vas-tu avancer en premier ?{}",
+                emotion_suffix
             ),
         }
     }
@@ -161,12 +164,12 @@ pub fn build_intervention_prompt(
     emotions: &EmotionalProfile,
     discussion_language: &str,
     user_name: &str,
+    emotion_driven: bool,
 ) -> (String, String) {
     // Detect if the user has spoken in this turn
     let user_has_spoken = current_turn_messages
         .iter()
         .any(|m| m.role == SpeakerRole::User);
-    let emotion_desc = describe_emotions(emotions, discussion_language);
 
     let lang_instruction = match discussion_language {
         "en" => "Respond in English.",
@@ -258,13 +261,16 @@ pub fn build_intervention_prompt(
         user_msg.push_str(&format!("[{}]\n{}\n\n", label, thought));
     }
 
-    // Emotional state
-    let emotion_label = match discussion_language {
-        "en" => "Your emotional state",
-        "zh" => "你的情绪状态",
-        _ => "Ton état émotionnel",
-    };
-    user_msg.push_str(&format!("[{}] {}\n\n", emotion_label, emotion_desc));
+    // Emotional state (only when emotion-driven behavior is enabled)
+    if emotion_driven {
+        let emotion_desc = describe_emotions(emotions, discussion_language);
+        let emotion_label = match discussion_language {
+            "en" => "Your emotional state",
+            "zh" => "你的情绪状态",
+            _ => "Ton état émotionnel",
+        };
+        user_msg.push_str(&format!("[{}] {}\n\n", emotion_label, emotion_desc));
+    }
 
     // Detect if this is the first speaker with no prior context
     let is_opening = current_turn_messages.is_empty() && memory.immediate.is_empty();
@@ -621,13 +627,5 @@ pub fn get_dominant_emotion(emotions: &EmotionalProfile, lang: &str) -> &'static
 }
 
 fn truncate(s: &str, max_chars: usize) -> &str {
-    if s.len() <= max_chars {
-        s
-    } else {
-        let mut end = max_chars;
-        while !s.is_char_boundary(end) && end > 0 {
-            end -= 1;
-        }
-        &s[..end]
-    }
+    &s[..s.floor_char_boundary(max_chars)]
 }

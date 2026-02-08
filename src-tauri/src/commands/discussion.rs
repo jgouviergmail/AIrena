@@ -4,7 +4,6 @@ use tauri::State;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::db::repository;
 use crate::engine::orchestrator::DiscussionEngine;
 use crate::error::CommandError;
 use crate::models::discussion::DiscussionConfig;
@@ -37,7 +36,6 @@ pub async fn start_discussion(
 
     // ATOMIC check-and-reserve: prevents TOCTOU race where two near-simultaneous
     // calls could both see None before either sets Some.
-    let db_clone;
     let cleanup_tx: Arc<std::sync::Mutex<Option<mpsc::Sender<EngineCommand>>>>;
     let cleanup_cancel: Arc<std::sync::Mutex<Option<CancellationToken>>>;
     {
@@ -53,27 +51,22 @@ pub async fn start_discussion(
         *cancel_guard = Some(cancel_token);
     }
 
-    db_clone = state.db.clone();
     cleanup_tx = Arc::clone(&state.engine_cmd_tx);
     cleanup_cancel = Arc::clone(&state.cancel_token);
 
     // Read settings for ollama_url and ollama_model
-    let settings = match repository::get_settings(&db_clone).await {
+    let settings = match state.get_settings().await {
         Ok(s) => s,
         Err(e) => {
-            // Rollback: clear the reserved slot
-            *AppState::lock_or_recover(&cleanup_tx) = None;
-            *AppState::lock_or_recover(&cleanup_cancel) = None;
-            return Err(CommandError::Settings(e.to_string()));
+            AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
+            return Err(e);
         }
     };
 
     // Validate that the Ollama model exists
     let client = OllamaClient::new(&settings.ollama_url, &settings.ollama_model);
     if let Err(e) = client.validate_model().await {
-        // Rollback: clear the reserved slot
-        *AppState::lock_or_recover(&cleanup_tx) = None;
-        *AppState::lock_or_recover(&cleanup_cancel) = None;
+        AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
         return Err(CommandError::Ollama(e.to_string()));
     }
 
@@ -82,16 +75,17 @@ pub async fn start_discussion(
     let id_clone = discussion_id.clone();
     let ollama_url = settings.ollama_url.clone();
     let ollama_model = settings.ollama_model.clone();
+    let emotion_driven = settings.emotion_driven;
 
     tauri::async_runtime::spawn(async move {
         let mut engine =
             DiscussionEngine::new(config, id_clone, &ollama_url, &ollama_model);
         engine.set_cancel_token(engine_cancel);
+        engine.set_emotion_driven(emotion_driven);
         engine.run(cmd_rx, on_event).await;
 
         // Cleanup: remove sender and token so a new discussion can start
-        *AppState::lock_or_recover(&cleanup_tx) = None;
-        *AppState::lock_or_recover(&cleanup_cancel) = None;
+        AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
     });
 
     Ok(discussion_id)

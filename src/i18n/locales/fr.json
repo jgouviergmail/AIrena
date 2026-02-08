@@ -44,7 +44,9 @@
     "modelPreloading": "Chargement du modèle en mémoire...",
     "modelPreloaded": "Modèle chargé et prêt",
     "modelPreloadError": "Échec du chargement du modèle",
-    "usernameRequired": "Le nom d'utilisateur est requis"
+    "usernameRequired": "Le nom d'utilisateur est requis",
+    "emotionDriven": "Comportement émotionnel",
+    "emotionDrivenDesc": "Les émotions influencent le style d'argumentation des IA"
   },
   "setup": {
     "title": "Configuration de la discussion",

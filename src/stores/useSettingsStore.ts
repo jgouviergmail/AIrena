@@ -33,6 +33,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     theme: "dark",
     ollamaUrl: "http://localhost:11434",
     ollamaModel: "",
+    emotionDriven: false,
   },
   profiles: [],
   models: [],

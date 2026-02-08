@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use tauri::ipc::Channel;
@@ -21,8 +22,10 @@ use crate::ollama::error::OllamaError;
 /// Response from the combined memory update LLM call
 #[derive(Debug, serde::Deserialize)]
 struct MemoryUpdateResponse {
+    #[serde(default)]
     summary: String,
-    positions: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    positions: HashMap<String, String>,
 }
 
 pub struct DiscussionEngine {
@@ -36,10 +39,12 @@ pub struct DiscussionEngine {
     messages_history: Vec<Message>,
     turn_messages: Vec<Message>,
     /// Reaction counts per speaker for the current turn: speaker_id → (likes, dislikes)
-    turn_reaction_counts: std::collections::HashMap<String, (u32, u32)>,
+    turn_reaction_counts: HashMap<String, (u32, u32)>,
     user_intervention_pending: bool,
     user_intervention_handled: bool,
     cancel_token: CancellationToken,
+    /// Whether emotions should influence AI prompts (behavior variation)
+    emotion_driven: bool,
 }
 
 impl DiscussionEngine {
@@ -67,15 +72,38 @@ impl DiscussionEngine {
             gladiateurs,
             messages_history: Vec::new(),
             turn_messages: Vec::new(),
-            turn_reaction_counts: std::collections::HashMap::new(),
+            turn_reaction_counts: HashMap::new(),
             user_intervention_pending: false,
             user_intervention_handled: false,
             cancel_token: CancellationToken::new(),
+            emotion_driven: false,
         }
     }
 
     pub fn set_cancel_token(&mut self, token: CancellationToken) {
         self.cancel_token = token;
+    }
+
+    pub fn set_emotion_driven(&mut self, enabled: bool) {
+        self.emotion_driven = enabled;
+    }
+
+    /// Localized message when a speaker's LLM call fails
+    fn speaker_difficulty_msg(&self, speaker_name: &str) -> String {
+        match self.config.discussion_language.as_str() {
+            "en" => format!("[{} seems to be having difficulties]", speaker_name),
+            "zh" => format!("[{} 似乎遇到了困难]", speaker_name),
+            _ => format!("[{} semble avoir des difficultés]", speaker_name),
+        }
+    }
+
+    /// Localized message when a speaker is banned
+    fn ban_notification_msg(&self, speaker_name: &str, duration: u32, reason: &str) -> String {
+        match self.config.discussion_language.as_str() {
+            "en" => format!("{} is banned for {} turn(s): {}", speaker_name, duration, reason),
+            "zh" => format!("{} 被禁言 {} 回合：{}", speaker_name, duration, reason),
+            _ => format!("{} est banni(e) pour {} tour(s) : {}", speaker_name, duration, reason),
+        }
     }
 
     /// Main orchestration loop
@@ -443,6 +471,7 @@ impl DiscussionEngine {
             &self.gladiateurs[glad_idx].emotions,
             &self.config.discussion_language,
             has_prior_context,
+            self.emotion_driven,
         );
         let request = self.ollama_client.build_request(
             &self.gladiateurs[glad_idx].config.system_prompt,
@@ -495,6 +524,7 @@ impl DiscussionEngine {
             &self.gladiateurs[glad_idx].emotions,
             &self.config.discussion_language,
             &self.config.user_name,
+            self.emotion_driven,
         );
 
         let request = self.ollama_client.build_request(
@@ -561,14 +591,14 @@ impl DiscussionEngine {
                     Ok(_) => {
                         tracing::error!(speaker = %speaker_name, "Retry also returned empty");
                         let _ = channel.send(ArenaEvent::Error {
-                            message: format!("[{} semble avoir des difficultés]", speaker_name),
+                            message: self.speaker_difficulty_msg(&speaker_name),
                         });
                         None
                     }
                     Err(e) => {
                         tracing::error!(speaker = %speaker_name, error = %e, "Retry failed");
                         let _ = channel.send(ArenaEvent::Error {
-                            message: format!("[{} semble avoir des difficultés]", speaker_name),
+                            message: self.speaker_difficulty_msg(&speaker_name),
                         });
                         None
                     }
@@ -584,7 +614,7 @@ impl DiscussionEngine {
                     "Intervention failed"
                 );
                 let _ = channel.send(ArenaEvent::Error {
-                    message: format!("[{} semble avoir des difficultés]", speaker_name),
+                    message: self.speaker_difficulty_msg(&speaker_name),
                 });
                 None
             }
@@ -664,10 +694,7 @@ impl DiscussionEngine {
                     duration,
                 });
 
-                let ban_text = format!(
-                    "{} est banni(e) pour {} tour(s) : {}",
-                    speaker_name, duration, moderation.ban_reason
-                );
+                let ban_text = self.ban_notification_msg(&speaker_name, duration, &moderation.ban_reason);
                 self.emit_arbitre_message(&ban_text, channel);
             }
             ModerationAction::Comment if !moderation.comment.is_empty() => {
@@ -782,7 +809,13 @@ impl DiscussionEngine {
                     memory_manager::update_from_llm_response(&mut g.memory, parsed.summary.clone(), parsed.positions.clone());
                 }
             } else {
-                tracing::warn!("Failed to parse memory update response");
+                let end = raw.floor_char_boundary(500);
+                tracing::warn!(
+                    turn = self.current_turn,
+                    raw_len = raw.len(),
+                    raw_preview = %&raw[..end],
+                    "Failed to parse memory update response"
+                );
             }
         }
     }

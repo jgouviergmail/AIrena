@@ -30,6 +30,13 @@ function makeSystemMessage(
   };
 }
 
+/** Callbacks from the token buffer in DiscussionFeed */
+interface StreamBufferCallbacks {
+  pushToken: (speakerId: string, token: string) => void;
+  clearSpeaker: (speakerId: string) => void;
+  clearAll: () => void;
+}
+
 interface ArenaState {
   discussionId: string | null;
   status: "idle" | "running" | "paused" | "synthesizing" | "ended";
@@ -37,8 +44,6 @@ interface ArenaState {
   speakerOrder: string[];
   activeSpeakerId: string | null;
   messages: Message[];
-  streamingContent: Map<string, string>;
-  streamingThoughts: Map<string, string>;
   emotions: Map<string, EmotionalProfile>;
   synthesis: string;
   synthesisStreaming: string;
@@ -46,10 +51,8 @@ interface ArenaState {
   error: string | null;
 
   handleEvent: (event: ArenaEvent) => void;
-  pushStreamToken: (speakerId: string, chunk: string) => void;
-  pushThoughtToken: (speakerId: string, chunk: string) => void;
-  getStreamingContent: (speakerId: string) => string;
-  getStreamingThought: (speakerId: string) => string;
+  registerStreamBuffer: (cb: StreamBufferCallbacks) => void;
+  unregisterStreamBuffer: () => void;
   reset: () => void;
 }
 
@@ -60,8 +63,6 @@ const initialState = {
   speakerOrder: [] as string[],
   activeSpeakerId: null as string | null,
   messages: [] as Message[],
-  streamingContent: new Map<string, string>(),
-  streamingThoughts: new Map<string, string>(),
   emotions: new Map<string, EmotionalProfile>(),
   synthesis: "",
   synthesisStreaming: "",
@@ -69,8 +70,45 @@ const initialState = {
   error: null as string | null,
 };
 
-export const useArenaStore = create<ArenaState>((set, get) => ({
+// Stream buffer ref — lives outside store to avoid triggering re-renders
+let streamBuffer: StreamBufferCallbacks | null = null;
+
+// Synthesis buffer — same pattern: collect tokens, flush every 60ms
+let synthBuffer: string[] = [];
+let synthFlushTimer: ReturnType<typeof setInterval> | null = null;
+
+function flushSynthBuffer() {
+  if (synthBuffer.length === 0) return;
+  const chunk = synthBuffer.join("");
+  synthBuffer = [];
+  useArenaStore.setState((s) => ({
+    synthesisStreaming: s.synthesisStreaming + chunk,
+  }));
+}
+
+function startSynthBuffering() {
+  if (synthFlushTimer) return;
+  synthFlushTimer = setInterval(flushSynthBuffer, 60);
+}
+
+function stopSynthBuffering() {
+  if (synthFlushTimer) {
+    clearInterval(synthFlushTimer);
+    synthFlushTimer = null;
+  }
+  flushSynthBuffer();
+  synthBuffer = [];
+}
+
+export const useArenaStore = create<ArenaState>((set) => ({
   ...initialState,
+
+  registerStreamBuffer: (cb) => {
+    streamBuffer = cb;
+  },
+  unregisterStreamBuffer: () => {
+    streamBuffer = null;
+  },
 
   handleEvent: (event: ArenaEvent) => {
     try {
@@ -90,7 +128,8 @@ export const useArenaStore = create<ArenaState>((set, get) => ({
         break;
 
       case "messageChunk":
-        get().pushStreamToken(event.data.speakerId, event.data.chunk);
+        // Delegate to the external token buffer (no Zustand state update)
+        streamBuffer?.pushToken(event.data.speakerId, event.data.chunk);
         break;
 
       case "messageComplete": {
@@ -98,19 +137,17 @@ export const useArenaStore = create<ArenaState>((set, get) => ({
           console.error("Received messageComplete with invalid message", event.data);
           break;
         }
+        // Clear the buffer for this speaker
+        streamBuffer?.clearSpeaker(event.data.message.speakerId);
         set((s) => {
-          // Defensive copy: ensure reactions is always an array (serialization edge cases)
           const msg = {
             ...event.data.message,
             reactions: Array.isArray(event.data.message.reactions)
               ? event.data.message.reactions
               : [],
           };
-          const sc = new Map(s.streamingContent);
-          sc.delete(msg.speakerId);
           return {
             messages: [...s.messages, msg],
-            streamingContent: sc,
           };
         });
         break;
@@ -127,17 +164,12 @@ export const useArenaStore = create<ArenaState>((set, get) => ({
         break;
 
       case "thoughtChunk":
-        get().pushThoughtToken(event.data.speakerId, event.data.chunk);
+        // Thoughts also go through the buffer (reuse same mechanism)
+        // Not rendered separately for now — just ignore to avoid perf cost
         break;
 
       case "thoughtComplete":
-        // Just clear the streaming thought — the thought is attached to the
-        // Message by the backend when MessageComplete arrives
-        set((s) => {
-          const st = new Map(s.streamingThoughts);
-          st.delete(event.data.speakerId);
-          return { streamingThoughts: st };
-        });
+        // The thought is attached to the Message by the backend when MessageComplete arrives
         break;
 
       case "turnStarted":
@@ -148,16 +180,14 @@ export const useArenaStore = create<ArenaState>((set, get) => ({
         break;
 
       case "turnSkipped":
-        // Just a notification, no state change needed
         break;
 
       case "speakerActive":
-        // Clear any lingering streaming content from previous speakers
-        set(() => ({
+        // Clear streaming buffer for new speaker
+        streamBuffer?.clearAll();
+        set({
           activeSpeakerId: event.data.speakerId,
-          streamingContent: new Map<string, string>(),
-          streamingThoughts: new Map<string, string>(),
-        }));
+        });
         break;
 
       case "emotionUpdated":
@@ -213,17 +243,21 @@ export const useArenaStore = create<ArenaState>((set, get) => ({
         break;
 
       case "synthesisChunk":
-        set((s) => ({
-          status: "synthesizing",
-          synthesisStreaming: s.synthesisStreaming + event.data.chunk,
-        }));
+        // Buffer synthesis tokens (same pattern as message streaming)
+        synthBuffer.push(event.data.chunk);
+        if (!synthFlushTimer) {
+          startSynthBuffering();
+          set({ status: "synthesizing" });
+        }
         break;
 
       case "synthesisComplete":
+        stopSynthBuffering();
         set({ synthesis: event.data.summary, synthesisStreaming: "", status: "ended" });
         break;
 
       case "discussionEnded":
+        stopSynthBuffering();
         set({ status: "ended" });
         break;
 
@@ -239,35 +273,12 @@ export const useArenaStore = create<ArenaState>((set, get) => ({
     }
   },
 
-  pushStreamToken: (speakerId, chunk) => {
-    set((s) => {
-      const sc = new Map(s.streamingContent);
-      sc.set(speakerId, (sc.get(speakerId) ?? "") + chunk);
-      return { streamingContent: sc };
-    });
-  },
-
-  pushThoughtToken: (speakerId, chunk) => {
-    set((s) => {
-      const st = new Map(s.streamingThoughts);
-      st.set(speakerId, (st.get(speakerId) ?? "") + chunk);
-      return { streamingThoughts: st };
-    });
-  },
-
-  getStreamingContent: (speakerId) => {
-    return get().streamingContent.get(speakerId) ?? "";
-  },
-
-  getStreamingThought: (speakerId) => {
-    return get().streamingThoughts.get(speakerId) ?? "";
-  },
-
-  reset: () =>
+  reset: () => {
+    streamBuffer?.clearAll();
+    stopSynthBuffering();
     set({
       ...initialState,
-      streamingContent: new Map<string, string>(),
-      streamingThoughts: new Map<string, string>(),
       emotions: new Map<string, EmotionalProfile>(),
-    }),
+    });
+  },
 }));

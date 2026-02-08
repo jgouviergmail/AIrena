@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Brain, ThumbsDown, ThumbsUp } from "lucide-react";
 import { SpeakerBadge } from "./SpeakerBadge";
 import { cn } from "@/lib/utils";
-import type { Message } from "@/lib/types";
+import type { Message, SpeakerRole } from "@/lib/types";
 
 export function MessageBubble({
   message,
@@ -100,15 +100,17 @@ export function MessageBubble({
 
 export function StreamingBubble({
   speakerName,
+  role,
   content,
 }: {
   speakerName: string;
+  role: SpeakerRole;
   content: string;
 }) {
   return (
     <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
       <div className="mb-2">
-        <SpeakerBadge name={speakerName} role="GladIAteur" active />
+        <SpeakerBadge name={speakerName} role={role} active />
       </div>
       <div className="text-sm text-foreground">
         <p className="whitespace-pre-wrap">

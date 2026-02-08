@@ -75,13 +75,10 @@ pub fn format_turn_messages(messages: &[Message]) -> String {
 }
 
 fn truncate_content(content: &str, max_chars: usize) -> String {
-    if content.len() <= max_chars {
-        content.to_string()
-    } else {
-        let mut end = max_chars;
-        while !content.is_char_boundary(end) && end > 0 {
-            end -= 1;
-        }
+    let end = content.floor_char_boundary(max_chars);
+    if end < content.len() {
         format!("{}...", &content[..end])
+    } else {
+        content.to_string()
     }
 }

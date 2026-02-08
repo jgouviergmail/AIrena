@@ -18,6 +18,7 @@ pub async fn get_settings(db: &Connection) -> Result<AppSettings, tokio_rusqlite
                 "theme" => settings.theme = value,
                 "ollama_url" => settings.ollama_url = value,
                 "ollama_model" => settings.ollama_model = value,
+                "emotion_driven" => settings.emotion_driven = value == "true",
                 _ => {}
             }
         }
@@ -33,14 +34,15 @@ pub async fn save_settings(
     let settings = settings.clone();
     db.call(move |conn| {
         let tx = conn.transaction()?;
-        let pairs = [
-            ("username", &settings.username),
-            ("language", &settings.language),
-            ("theme", &settings.theme),
-            ("ollama_url", &settings.ollama_url),
-            ("ollama_model", &settings.ollama_model),
+        let pairs: Vec<(&str, String)> = vec![
+            ("username", settings.username.clone()),
+            ("language", settings.language.clone()),
+            ("theme", settings.theme.clone()),
+            ("ollama_url", settings.ollama_url.clone()),
+            ("ollama_model", settings.ollama_model.clone()),
+            ("emotion_driven", settings.emotion_driven.to_string()),
         ];
-        for (key, value) in pairs {
+        for (key, value) in &pairs {
             tx.execute(
                 "INSERT INTO settings (key, value) VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET value = ?2",
@@ -53,22 +55,29 @@ pub async fn save_settings(
     .await
 }
 
+/// Column list for predefined_profiles queries
+const PROFILE_COLUMNS: &str = "id, name, personality, system_prompt, is_builtin";
+
+/// Map a database row to PredefinedProfile
+fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<PredefinedProfile> {
+    Ok(PredefinedProfile {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        personality: row.get(2)?,
+        system_prompt: row.get(3)?,
+        is_builtin: row.get::<_, i32>(4)? != 0,
+    })
+}
+
 pub async fn list_profiles(
     db: &Connection,
 ) -> Result<Vec<PredefinedProfile>, tokio_rusqlite::Error> {
     db.call(|conn| {
-        let mut stmt =
-            conn.prepare("SELECT id, name, personality, system_prompt, is_builtin FROM predefined_profiles ORDER BY name")?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROFILE_COLUMNS} FROM predefined_profiles ORDER BY name"
+        ))?;
         let profiles = stmt
-            .query_map([], |row| {
-                Ok(PredefinedProfile {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    personality: row.get(2)?,
-                    system_prompt: row.get(3)?,
-                    is_builtin: row.get::<_, i32>(4)? != 0,
-                })
-            })?
+            .query_map([], row_to_profile)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(profiles)
     })
@@ -81,19 +90,11 @@ pub async fn get_profile(
 ) -> Result<Option<PredefinedProfile>, tokio_rusqlite::Error> {
     let id = id.to_string();
     db.call(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, personality, system_prompt, is_builtin FROM predefined_profiles WHERE id = ?1",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROFILE_COLUMNS} FROM predefined_profiles WHERE id = ?1"
+        ))?;
         let profile = stmt
-            .query_row(rusqlite::params![id], |row| {
-                Ok(PredefinedProfile {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    personality: row.get(2)?,
-                    system_prompt: row.get(3)?,
-                    is_builtin: row.get::<_, i32>(4)? != 0,
-                })
-            })
+            .query_row(rusqlite::params![id], row_to_profile)
             .optional()?;
         Ok(profile)
     })

@@ -4,6 +4,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::CommandError;
 use crate::models::engine_command::EngineCommand;
+use crate::models::settings::AppSettings;
 
 /// Global application state managed by Tauri
 /// Uses std::sync::Mutex (NOT tokio::sync::Mutex) because the lock
@@ -32,5 +33,23 @@ impl AppState {
                 .map_err(|_| CommandError::NoActiveDiscussion),
             None => Err(CommandError::NoActiveDiscussion),
         }
+    }
+
+    /// Read app settings from the database.
+    pub async fn get_settings(&self) -> Result<AppSettings, CommandError> {
+        let db = self.db.clone();
+        crate::db::repository::get_settings(&db)
+            .await
+            .map_err(|e| CommandError::Settings(e.to_string()))
+    }
+
+    /// Clear the engine command sender and cancel token slots.
+    /// Used for cleanup after engine ends or on startup failure rollback.
+    pub fn clear_engine_slots(
+        tx: &Arc<Mutex<Option<mpsc::Sender<EngineCommand>>>>,
+        cancel: &Arc<Mutex<Option<CancellationToken>>>,
+    ) {
+        *Self::lock_or_recover(tx) = None;
+        *Self::lock_or_recover(cancel) = None;
     }
 }

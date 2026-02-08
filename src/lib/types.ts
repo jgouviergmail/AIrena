@@ -13,7 +13,7 @@ export const DEFAULT_LLM_PARAMS: LlmParams = {
   temperature: 0.7,
   topP: 0.9,
   topK: 40,
-  numPredict: 512,
+  numPredict: 1024,
   numCtx: 8192,
   repeatPenalty: 1.1,
 };
@@ -83,6 +83,7 @@ export interface AppSettings {
   theme: string;
   ollamaUrl: string;
   ollamaModel: string;
+  emotionDriven: boolean;
 }
 
 export interface PredefinedProfile {

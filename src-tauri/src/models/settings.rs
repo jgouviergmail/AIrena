@@ -17,7 +17,7 @@ impl Default for LlmParams {
             temperature: 0.7,
             top_p: 0.9,
             top_k: 40,
-            num_predict: 512,
+            num_predict: 1024,
             num_ctx: 8192,
             repeat_penalty: 1.1,
         }
@@ -32,6 +32,7 @@ pub struct AppSettings {
     pub theme: String,
     pub ollama_url: String,
     pub ollama_model: String,
+    pub emotion_driven: bool,
 }
 
 impl Default for AppSettings {
@@ -42,6 +43,7 @@ impl Default for AppSettings {
             theme: "dark".to_string(),
             ollama_url: "http://localhost:11434".to_string(),
             ollama_model: String::new(),
+            emotion_driven: false,
         }
     }
 }
