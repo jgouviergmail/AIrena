@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { MessageSquarePlus, Settings, Swords } from "lucide-react";
+import { History, MessageSquarePlus, Settings, Swords } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 
 export default function HomePage() {
@@ -30,6 +30,13 @@ export default function HomePage() {
           >
             <MessageSquarePlus className="h-4 w-4" />
             {t("home.startDiscussion")}
+          </button>
+          <button
+            onClick={() => navigate("/history")}
+            className="flex items-center gap-2 rounded-lg border border-border bg-card px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <History className="h-4 w-4" />
+            {t("home.history")}
           </button>
           <button
             onClick={() => navigate("/settings")}

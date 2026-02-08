@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Send, X } from "lucide-react";
 import * as api from "@/lib/tauri-api";
+import { useArenaStore } from "@/stores/useArenaStore";
 
 export function UserInputArea({
   timeoutSecs,
@@ -29,12 +30,22 @@ export function UserInputArea({
 
   const handleSubmit = async () => {
     if (!message.trim()) return;
-    await api.submitUserMessage(message.trim());
-    setMessage("");
+    try {
+      await api.submitUserMessage(message.trim());
+      setMessage("");
+      useArenaStore.setState({ userTurnActive: false });
+    } catch (e) {
+      console.error("Failed to submit user message:", e);
+    }
   };
 
   const handleSkip = async () => {
-    await api.skipUserTurn();
+    try {
+      await api.skipUserTurn();
+      useArenaStore.setState({ userTurnActive: false });
+    } catch (e) {
+      console.error("Failed to skip turn:", e);
+    }
   };
 
   return (

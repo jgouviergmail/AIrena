@@ -30,11 +30,6 @@ pub fn determine_speaker_order(
     }
 }
 
-/// Check if all gladiators are banned
-pub fn all_banned(gladiateurs: &[GladIAteurState]) -> bool {
-    gladiateurs.iter().all(|g| g.is_banned())
-}
-
 /// Count active (non-banned) gladiators
 pub fn active_count(gladiateurs: &[GladIAteurState]) -> usize {
     gladiateurs.iter().filter(|g| !g.is_banned()).count()
@@ -66,6 +61,10 @@ mod tests {
     use crate::models::gladiateur::GladIAteurConfig;
     use crate::models::settings::LlmParams;
 
+    fn all_banned(gladiateurs: &[GladIAteurState]) -> bool {
+        gladiateurs.iter().all(|g| g.is_banned())
+    }
+
     fn make_gladiateur(id: &str, number: u32, banned: u32) -> GladIAteurState {
         let mut state = GladIAteurState::new(GladIAteurConfig {
             id: id.to_string(),
@@ -73,6 +72,7 @@ mod tests {
             intervention_number: number,
             system_prompt: String::new(),
             llm_params: LlmParams::default(),
+            emoji: None,
         });
         state.ban_remaining_turns = banned;
         state

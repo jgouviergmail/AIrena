@@ -7,6 +7,12 @@ use super::error::OllamaError;
 use super::types::{ChatRequest, ChatResponse, ModelInfo};
 use crate::models::settings::LlmParams;
 
+/// Result of a streaming chat with think mode
+pub struct ChatStreamResult {
+    pub content: String,
+    pub thinking: Option<String>,
+}
+
 pub struct OllamaClient {
     client: reqwest::Client,
     base_url: String,
@@ -23,10 +29,6 @@ impl OllamaClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
         }
-    }
-
-    pub fn model(&self) -> &str {
-        &self.model
     }
 
     /// Validate that the model exists BEFORE starting a discussion
@@ -49,12 +51,27 @@ impl OllamaClient {
         on_token: impl Fn(&str) + Send,
         cancel: CancellationToken,
     ) -> Result<String, OllamaError> {
+        let result = self
+            .chat_streaming_with_think(request, on_token, |_| {}, cancel)
+            .await?;
+        Ok(result.content)
+    }
+
+    /// Chat streaming with think mode — separate callbacks for content and thinking tokens.
+    /// Includes retry with exponential backoff (up to 3 attempts).
+    pub async fn chat_streaming_with_think(
+        &self,
+        request: &ChatRequest,
+        on_content_token: impl Fn(&str) + Send,
+        on_thinking_token: impl Fn(&str) + Send,
+        cancel: CancellationToken,
+    ) -> Result<ChatStreamResult, OllamaError> {
         for attempt in 0..=2u32 {
             match self
-                .chat_streaming_inner(request, &on_token, &cancel)
+                .stream_ndjson(request, &on_content_token, &on_thinking_token, &cancel)
                 .await
             {
-                Ok(content) => return Ok(content),
+                Ok(result) => return Ok(result),
                 Err(OllamaError::Cancelled) => return Err(OllamaError::Cancelled),
                 Err(e) if e.is_connection_error() && attempt < 2 => {
                     tracing::warn!(
@@ -79,26 +96,32 @@ impl OllamaClient {
         self.chat_streaming(request, |_| {}, cancel).await
     }
 
-    /// Streaming NDJSON — buffered parsing with Vec<u8> (no String reallocation)
-    async fn chat_streaming_inner(
+    /// Unified NDJSON streaming — buffered parsing with Vec<u8>.
+    /// Handles both content and thinking tokens via separate callbacks.
+    async fn stream_ndjson(
         &self,
         request: &ChatRequest,
-        on_token: &(impl Fn(&str) + Send),
+        on_content_token: &(impl Fn(&str) + Send),
+        on_thinking_token: &(impl Fn(&str) + Send),
         cancel: &CancellationToken,
-    ) -> Result<String, OllamaError> {
+    ) -> Result<ChatStreamResult, OllamaError> {
         let url = format!("{}/api/chat", self.base_url);
         let response = self.client.post(&url).json(request).send().await?;
 
         if !response.status().is_success() {
-            return Err(OllamaError::ConnectionFailed(format!(
-                "HTTP {}",
-                response.status()
-            )));
+            let status = response.status();
+            let msg = format!("HTTP {}", status);
+            return Err(if status.is_client_error() {
+                OllamaError::ClientError(msg)
+            } else {
+                OllamaError::ConnectionFailed(msg)
+            });
         }
 
         let mut stream = response.bytes_stream();
         let mut buf = Vec::<u8>::new();
-        let mut accumulated = String::new();
+        let mut accumulated_content = String::new();
+        let mut accumulated_thinking = String::new();
 
         loop {
             tokio::select! {
@@ -106,7 +129,6 @@ impl OllamaClient {
                     match chunk {
                         Some(Ok(bytes)) => {
                             buf.extend_from_slice(&bytes);
-                            // NDJSON: process complete lines
                             while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
                                 let line: Vec<u8> = buf.drain(..=pos).collect();
                                 let line = String::from_utf8_lossy(&line);
@@ -114,15 +136,37 @@ impl OllamaClient {
                                 if !line.is_empty() {
                                     let resp: ChatResponse = serde_json::from_str(line)?;
                                     if resp.done {
-                                        return Ok(accumulated);
+                                        return Ok(ChatStreamResult {
+                                            content: accumulated_content,
+                                            thinking: if accumulated_thinking.is_empty() {
+                                                None
+                                            } else {
+                                                Some(accumulated_thinking)
+                                            },
+                                        });
                                     }
-                                    on_token(&resp.message.content);
-                                    accumulated.push_str(&resp.message.content);
+                                    if let Some(thinking) = &resp.message.thinking {
+                                        if !thinking.is_empty() {
+                                            on_thinking_token(thinking);
+                                            accumulated_thinking.push_str(thinking);
+                                        }
+                                    }
+                                    if !resp.message.content.is_empty() {
+                                        on_content_token(&resp.message.content);
+                                        accumulated_content.push_str(&resp.message.content);
+                                    }
                                 }
                             }
                         }
                         Some(Err(e)) => return Err(OllamaError::RequestFailed(e)),
-                        None => return Ok(accumulated),
+                        None => return Ok(ChatStreamResult {
+                            content: accumulated_content,
+                            thinking: if accumulated_thinking.is_empty() {
+                                None
+                            } else {
+                                Some(accumulated_thinking)
+                            },
+                        }),
                     }
                 }
                 _ = cancel.cancelled() => {
@@ -159,7 +203,7 @@ impl OllamaClient {
 
     pub async fn check_connection(&self) -> bool {
         self.client
-            .get(&format!("{}/api/tags", self.base_url))
+            .get(format!("{}/api/tags", self.base_url))
             .timeout(Duration::from_secs(5))
             .send()
             .await
@@ -219,6 +263,7 @@ impl OllamaClient {
                 num_ctx: Some(params.num_ctx),
                 repeat_penalty: Some(params.repeat_penalty),
             }),
+            think: None,
         }
     }
 }

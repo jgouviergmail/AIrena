@@ -3,8 +3,11 @@ import type {
   AppSettings,
   ArenaEvent,
   DiscussionConfig,
+  DiscussionDetail,
+  DiscussionSummary,
   ModelInfo,
   PredefinedProfile,
+  SaveDiscussionRequest,
 } from "./types";
 
 // -- Discussion commands --
@@ -77,6 +80,10 @@ export async function listProfiles(): Promise<PredefinedProfile[]> {
   return await invoke<PredefinedProfile[]>("list_profiles");
 }
 
+export async function listArbitreProfiles(): Promise<PredefinedProfile[]> {
+  return await invoke<PredefinedProfile[]>("list_arbitre_profiles");
+}
+
 export async function getProfile(
   id: string,
 ): Promise<PredefinedProfile | null> {
@@ -89,4 +96,30 @@ export async function saveProfile(profile: PredefinedProfile): Promise<void> {
 
 export async function deleteProfile(id: string): Promise<void> {
   return await invoke("delete_profile", { id });
+}
+
+// -- History commands --
+
+export async function saveDiscussionHistory(
+  request: SaveDiscussionRequest,
+): Promise<void> {
+  return await invoke("save_discussion_history", { request });
+}
+
+export async function listDiscussionHistory(): Promise<DiscussionSummary[]> {
+  return await invoke<DiscussionSummary[]>("list_discussion_history");
+}
+
+export async function getDiscussionHistory(
+  id: string,
+): Promise<DiscussionDetail | null> {
+  return await invoke<DiscussionDetail | null>("get_discussion_history", { id });
+}
+
+export async function deleteDiscussionHistory(id: string): Promise<void> {
+  return await invoke("delete_discussion_history", { id });
+}
+
+export async function deleteAllDiscussionHistory(): Promise<void> {
+  return await invoke("delete_all_discussion_history");
 }

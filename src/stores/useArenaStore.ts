@@ -1,34 +1,16 @@
 import { create } from "zustand";
-import i18n from "@/i18n/config";
 import { logger } from "@/lib/logger";
+import { saveDiscussionHistory } from "@/lib/tauri-api";
+import { getProfileEmoji, ROLE_EMOJIS } from "@/lib/profile-emoji";
+import { useSetupStore } from "@/stores/useSetupStore";
+import { useSettingsStore } from "@/stores/useSettingsStore";
 import type {
   ArenaEvent,
   EmotionalProfile,
   Message,
+  ParticipantInfo,
   SpeakerRole,
 } from "@/lib/types";
-
-/** Build a system notification message (ban/unban) for the feed. */
-function makeSystemMessage(
-  discussionId: string,
-  turnNumber: number,
-  content: string,
-  idPrefix: string,
-): Message {
-  return {
-    id: `${idPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    discussionId,
-    turnNumber,
-    speakerId: "system",
-    speakerName: "IArbitre",
-    role: "IArbitre" as SpeakerRole,
-    content,
-    innerThought: null,
-    reactions: [],
-    isBanNotification: true,
-    timestamp: new Date().toISOString(),
-  };
-}
 
 /** Callbacks from the token buffer in DiscussionFeed */
 interface StreamBufferCallbacks {
@@ -48,6 +30,7 @@ interface ArenaState {
   synthesis: string;
   synthesisStreaming: string;
   userTurnActive: boolean;
+  interventionRequested: boolean;
   error: string | null;
 
   handleEvent: (event: ArenaEvent) => void;
@@ -67,6 +50,7 @@ const initialState = {
   synthesis: "",
   synthesisStreaming: "",
   userTurnActive: false,
+  interventionRequested: false,
   error: null as string | null,
 };
 
@@ -153,15 +137,18 @@ export const useArenaStore = create<ArenaState>((set) => ({
         break;
       }
 
-      case "reactionEmitted":
+      case "reactionEmitted": {
+        const targetId = event.data.messageId;
+        const reaction = event.data.reaction;
         set((s) => ({
           messages: s.messages.map((m) =>
-            m.id === event.data.messageId
-              ? { ...m, reactions: [...(m.reactions ?? []), event.data.reaction] }
+            m.id === targetId
+              ? { ...m, reactions: [...(m.reactions ?? []), reaction] }
               : m,
           ),
         }));
         break;
+      }
 
       case "thoughtChunk":
         // Thoughts also go through the buffer (reuse same mechanism)
@@ -176,6 +163,7 @@ export const useArenaStore = create<ArenaState>((set) => ({
         set({
           currentTurn: event.data.turnNumber,
           speakerOrder: event.data.speakerOrder,
+          interventionRequested: false,
         });
         break;
 
@@ -199,35 +187,15 @@ export const useArenaStore = create<ArenaState>((set) => ({
         break;
 
       case "banIssued":
-        set((s) => ({
-          messages: [
-            ...s.messages,
-            makeSystemMessage(
-              s.discussionId ?? "",
-              s.currentTurn,
-              i18n.t("arena.banned", { name: event.data.bannedName, duration: event.data.duration, reason: event.data.reason }),
-              "ban",
-            ),
-          ],
-        }));
+        // Display handled by backend MessageComplete with is_ban_notification=true
         break;
 
       case "banLifted":
-        set((s) => ({
-          messages: [
-            ...s.messages,
-            makeSystemMessage(
-              s.discussionId ?? "",
-              s.currentTurn,
-              i18n.t("arena.banLifted", { name: event.data.speakerName }),
-              "unban",
-            ),
-          ],
-        }));
+        // Display handled by backend MessageComplete with is_ban_notification=true
         break;
 
       case "userTurnReady":
-        set({ userTurnActive: true });
+        set({ userTurnActive: true, interventionRequested: false });
         break;
 
       case "userTurnTimeout":
@@ -256,10 +224,54 @@ export const useArenaStore = create<ArenaState>((set) => ({
         set({ synthesis: event.data.summary, synthesisStreaming: "", status: "ended" });
         break;
 
-      case "discussionEnded":
+      case "discussionEnded": {
         stopSynthBuffering();
+
+        // Auto-save discussion to history before setting status
+        const arenaState = useArenaStore.getState();
+        if (arenaState.discussionId && arenaState.messages.length > 0) {
+          const setupState = useSetupStore.getState();
+          const settingsState = useSettingsStore.getState();
+
+          const participants: ParticipantInfo[] = [
+            {
+              id: setupState.arbitre.id,
+              name: setupState.arbitre.name,
+              role: "IArbitre" as SpeakerRole,
+              emoji: ROLE_EMOJIS.IArbitre,
+            },
+            ...setupState.gladiateurs.map((g) => ({
+              id: g.id,
+              name: g.name,
+              role: "GladIAteur" as SpeakerRole,
+              emoji: g.emoji ?? getProfileEmoji(g.name, g.systemPrompt),
+            })),
+            {
+              id: "user",
+              name: settingsState.settings.username,
+              role: "user" as SpeakerRole,
+              emoji: ROLE_EMOJIS.user,
+            },
+          ];
+
+          saveDiscussionHistory({
+            id: arenaState.discussionId,
+            topic: setupState.topic,
+            discussionLanguage: setupState.discussionLanguage,
+            modelName: settingsState.settings.ollamaModel,
+            participants,
+            totalTurns: arenaState.currentTurn,
+            synthesis: arenaState.synthesis,
+            createdAt: new Date().toISOString(),
+            messages: arenaState.messages,
+          }).catch((err) =>
+            console.error("Failed to save discussion history:", err),
+          );
+        }
+
         set({ status: "ended" });
         break;
+      }
 
       case "error":
         logger.error("arena", `Engine error: ${event.data.message}`);

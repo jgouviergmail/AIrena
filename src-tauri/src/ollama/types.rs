@@ -15,6 +15,8 @@ pub struct ChatRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<ChatOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub think: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,8 +43,12 @@ pub struct ChatResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct ChatResponseMessage {
+    #[allow(dead_code)]
     pub role: String,
+    #[serde(default)]
     pub content: String,
+    #[serde(default)]
+    pub thinking: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

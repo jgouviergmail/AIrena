@@ -14,12 +14,12 @@ pub struct LlmParams {
 impl Default for LlmParams {
     fn default() -> Self {
         Self {
-            temperature: 0.7,
+            temperature: 0.8,
             top_p: 0.9,
             top_k: 40,
             num_predict: 1024,
             num_ctx: 8192,
-            repeat_penalty: 1.1,
+            repeat_penalty: 1.3,
         }
     }
 }

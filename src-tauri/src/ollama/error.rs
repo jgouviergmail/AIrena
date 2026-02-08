@@ -2,6 +2,8 @@
 pub enum OllamaError {
     #[error("Connection failed: {0}")]
     ConnectionFailed(String),
+    #[error("HTTP client error: {0}")]
+    ClientError(String), // 4xx errors — not retryable
     #[error("Model not found: {0}")]
     ModelNotFound(String),
     #[error("Request failed: {0}")]
@@ -12,15 +14,15 @@ pub enum OllamaError {
     ConnectionLost,
     #[error("Request cancelled")]
     Cancelled,
-    #[error("Empty response from model")]
-    EmptyResponse,
 }
 
 impl OllamaError {
+    /// Only retryable errors: server errors (5xx), connection drops, timeouts
     pub fn is_connection_error(&self) -> bool {
         match self {
             Self::ConnectionFailed(_) | Self::ConnectionLost => true,
             Self::RequestFailed(e) => e.is_connect() || e.is_timeout(),
+            Self::ClientError(_) => false, // 4xx: don't retry
             _ => false,
         }
     }

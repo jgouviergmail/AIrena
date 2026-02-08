@@ -11,6 +11,8 @@ const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
 const SetupPage = lazy(() => import("@/pages/SetupPage"));
 const ArenaPage = lazy(() => import("@/pages/ArenaPage"));
 const SummaryPage = lazy(() => import("@/pages/SummaryPage"));
+const HistoryPage = lazy(() => import("@/pages/HistoryPage"));
+const HistoryDetailPage = lazy(() => import("@/pages/HistoryDetailPage"));
 
 function Loading() {
   return (
@@ -42,6 +44,8 @@ function App() {
                   <Route path="/setup" element={<SetupPage />} />
                   <Route path="/arena" element={<ArenaPage />} />
                   <Route path="/summary" element={<SummaryPage />} />
+                  <Route path="/history" element={<HistoryPage />} />
+                  <Route path="/history/:id" element={<HistoryDetailPage />} />
                 </Route>
               </Routes>
             </Suspense>

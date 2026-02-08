@@ -6,6 +6,7 @@ import * as api from "@/lib/tauri-api";
 interface SettingsState {
   settings: AppSettings;
   profiles: PredefinedProfile[];
+  arbitreProfiles: PredefinedProfile[];
   models: ModelInfo[];
   ollamaConnected: boolean;
   loading: boolean;
@@ -22,6 +23,9 @@ interface SettingsState {
   refreshProfiles: () => Promise<void>;
   saveProfile: (profile: PredefinedProfile) => Promise<void>;
   deleteProfile: (id: string) => Promise<void>;
+  refreshArbitreProfiles: () => Promise<void>;
+  saveArbitreProfile: (profile: PredefinedProfile) => Promise<void>;
+  deleteArbitreProfile: (id: string) => Promise<void>;
 }
 
 let preloadGeneration = 0;
@@ -36,6 +40,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     emotionDriven: false,
   },
   profiles: [],
+  arbitreProfiles: [],
   models: [],
   ollamaConnected: false,
   loading: true,
@@ -45,11 +50,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   hydrate: async () => {
     try {
-      const [settings, profiles] = await Promise.all([
+      const [settings, profiles, arbitreProfiles] = await Promise.all([
         api.getSettings(),
         api.listProfiles(),
+        api.listArbitreProfiles(),
       ]);
-      set({ settings, profiles, loading: false });
+      set({ settings, profiles, arbitreProfiles, loading: false });
     } catch (e) {
       console.error("Failed to hydrate settings:", e);
       set({ loading: false });
@@ -143,6 +149,33 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       await get().refreshProfiles();
     } catch (e) {
       console.error("Failed to delete profile:", e);
+    }
+  },
+
+  refreshArbitreProfiles: async () => {
+    try {
+      const arbitreProfiles = await api.listArbitreProfiles();
+      set({ arbitreProfiles });
+    } catch (e) {
+      console.error("Failed to refresh arbitre profiles:", e);
+    }
+  },
+
+  saveArbitreProfile: async (profile) => {
+    try {
+      await api.saveProfile(profile);
+      await get().refreshArbitreProfiles();
+    } catch (e) {
+      console.error("Failed to save arbitre profile:", e);
+    }
+  },
+
+  deleteArbitreProfile: async (id) => {
+    try {
+      await api.deleteProfile(id);
+      await get().refreshArbitreProfiles();
+    } catch (e) {
+      console.error("Failed to delete arbitre profile:", e);
     }
   },
 }));

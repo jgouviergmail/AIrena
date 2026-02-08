@@ -28,10 +28,12 @@ export function SpeakerBadge({
   name,
   role,
   active,
+  emoji,
 }: {
   name: string;
   role: SpeakerRole;
   active?: boolean;
+  emoji?: string;
 }) {
   const { t } = useTranslation();
   const hue = nameToHue(name);
@@ -41,12 +43,13 @@ export function SpeakerBadge({
     <div className="flex items-center gap-2">
       <div
         className={cn(
-          "flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white",
+          "flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold",
+          emoji ? "bg-muted" : "text-white",
           active && "ring-2 ring-primary ring-offset-1 ring-offset-background",
         )}
-        style={{ backgroundColor: `oklch(0.6 0.15 ${hue})` }}
+        style={emoji ? undefined : { backgroundColor: `oklch(0.6 0.15 ${hue})` }}
       >
-        {(name || "?").charAt(0).toUpperCase()}
+        {emoji || (name || "?").charAt(0).toUpperCase()}
       </div>
       <div className="flex items-center gap-1.5">
         <span className="text-sm font-medium text-foreground">{name}</span>

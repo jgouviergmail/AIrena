@@ -1,13 +1,5 @@
-DEMANDER LA PAROLE
-- l'utilisateur ne doit pouvoir cliquer qu'une fois par tour sur "demander la parole" et le bouton doit changer d'apparence pour valider la bonne prise en compte.
-- je remarque également un problème : dès que j'ai la parole, je publie mon message mais l'édition de message reste systématiquement affichée et "Annuler mon intervention" ne fonctionne pas. Ca doit disparaitre une fois que j'ai envoyé ma réponse et le bouton "Demander la parole" se réactiver au début du prochain tour.
-- j'ai également l'impression qu'aucune IA ne réagit à mon intervention : est elle bien visible et prise en compte ?
-
-EMOTIONS
-Je ne vois aucune réprésentation visuelle des émotions.
-
 DISCUSSION GENERALE
-- je remarque un biais qu'il faudrait corriger : si X commence, il arive très souvent que tous les autres ne prennent que la déclaration de X comme référence lors du tour de parole, ce qui ferme un peu les échanges et donne une impression de tous contre X. 
+- je remarque un biais qu'il faudrait corriger : si X commence, il arrive très souvent que tous les autres ne prennent que la déclaration de X comme référence lors du tour de parole, ce qui ferme un peu les échanges et donne une impression de tous contre X. 
 Je te rappelle le besoin initial :
 "l'IA intervient et s'exprime pour rebondir sur les échanges et faire progresser la discussion en tenant compte :
 ** de son system prompt,
@@ -16,21 +8,46 @@ Je te rappelle le besoin initial :
 ** de l'historique complet de la discussion avec un poids un peu plus important sur le denier tour et les échanges précédents le tour courant afin de rebondir sur les interventions des autres ou une IA spécifiquement de temps en temps. Il peut également brièvement commenter un ban fait par l'IArbitre, mais continue ensuite de développer la discussion. ".
 => il faut favoriser les échanges vivants, naturels et conversationnels et qui ne soient pas systématiques ni toujours symétriques, bien qu'il soit pertinent quelques fois que certains interlocuteurs confrontent leurs idées plus directement ou centralisent leurs remaqrues sur un intervenant ou une intervention. Est ce un sujet technique ou une mise à jour du prompt par défaut de l'IArbitre ?
 
+ILLUSTRATION DES IA
+Il faudrait au démarrage de la discussion associer un emoji illustratif représentatif du prompt pour chaque avatar d'IA + sélection manuelle
+
+ADAPTABILITE RFELEXION DES IA
+Les IA peuvent et doivent varier leur niveau de réflexion en fonction des problématiques. Mais attention, le rythme de la discussion ne doit pas être trop ralenti pas des reflexions trop longues, cela doit rester dynamique et vivant !
+
 ARRIVEE DE LA FIN DE DISCUSSION
 - Les IA, comme l'IArbitre, doivent être conscients de l'arrivée de la fin de la discussion (lorsque définie) et donc préciser leurs argumentaires et échanges afin d'aboutir (ou pas) à la fin de la discussion.
 
 PARAMETRAGE DE LA DISCUSSION
 - pour le mode de distribution des tours il pourrait être intéressant de rajouter :
-* démocratique : vote des IA participantes pour définir qui est le prochain à parler. En cas d'égalité c'est IArbitre qui choisit comme bon lui semble
+* démocratique : vote masqué (interne) des IA participantes pour définir qui est le prochain le plus pertinent à parler. 
+En cas d'égalité c'est IArbitre qui choisit comme bon lui semble.
+La parole doit malgré tout être distribuée à chaque IA pour chaque tour.
 * autoritaire : c'est IArbitre qui distribue la parole comme bon lui semble selon ses propres critères
-=> pour chaque mode afficher un ptit descriptif explicatif
+=> pour chaque mode afficher un petit descriptif explicatif
 
 SYNTHESE/HISTORIQUE
-- A la fin de la discussion s'affiche la synthèse, qui est très bien, mais l'utilisateur doit pouvoir visualiser toute la discussion et revenir à la synthèse comme bon lui semble. Il serait aussi bien maintenant de mettre en place un historisation des discussions/synthèse avec possibilité de tout supprimer ou supprimer unitairement chaque discussion/synthèse
+- A la fin de la discussion s'affiche la synthèse, qui est très bien, mais l'utilisateur doit pouvoir revoir toute la discussion et revenir à la synthèse comme bon lui semble. 
+- Il serait aussi bien maintenant de mettre en place une historisation des discussions/synthèse avec possibilité de tout supprimer ou supprimer unitairement chaque discussion/synthèse
+
+--------------------------------------------------------------------
+
+Pendant la discussion :
+- l'IArbitre introduit fidèlement le thème et démarre la discussion en distribuant la parole
+- les IA interviennent au tour par tour :
+* une IA peut liker ou disliker une intervention d'une IA au tour précédent (affichage emoji pouce up ou pouce down avec affichage à côté du nom de l'IA qui a émis le like ou dislike)
+* l'IA intervient et s'exprime pour rebondir sur les échanges et faire progresser la discussion en tenant compte :
+** de son system prompt,
+** du thème de la discussion, 
+** de son historique d'intervention,
+** de l'historique complet de la discussion avec un poids un peu plus important sur le denier tour et les échange précédent du tour courant afin de rebondir sur le sujet. Il peut également brièvement commenter un ban fait par l'IArbitre, mais continuer de développer la discussion.
+- l'IArbitre peut commenter ou pas une intervention avant de distribuer la parole à une autre IA
+- si l'utilisateur veut intervenir il appuie sur un bouton : "je veux intervenir" et l'IArbitre lui donnera la parole quand il le jugera opportun mais impérativement avant la fin du tour, sinon au tout début du tour précédent.
 
 --------------------------------------------------------------------
 
 ## Système d'engagement émotionnel
+
+L'objectif est de sensiblement améliorer le système d'émotion des IA.
 
 ### Les états émotionnels (6 axes)
 

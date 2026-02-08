@@ -3,6 +3,7 @@ pub mod emotion;
 pub mod engine_command;
 pub mod events;
 pub mod gladiateur;
+pub mod history;
 pub mod iarbitre;
 pub mod memory;
 pub mod message;

@@ -1,8 +1,9 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { useSetupStore } from "@/stores/useSetupStore";
 import { useTokenBuffer } from "@/hooks/useTokenBuffer";
 import { MessageBubble, StreamingBubble } from "./MessageBubble";
+import { getProfileEmoji, ROLE_EMOJIS } from "@/lib/profile-emoji";
 
 export function DiscussionFeed() {
   const messages = useArenaStore((s) => s.messages);
@@ -42,6 +43,23 @@ export function DiscussionFeed() {
     [arbitre],
   );
 
+  // Pre-compute emoji map from gladiateur/arbitre configs
+  const emojiMap = useMemo(() => {
+    const map = new Map<string, string>();
+    map.set(arbitre.id, ROLE_EMOJIS.IArbitre);
+    for (const g of gladiateurs) {
+      map.set(g.id, g.emoji ?? getProfileEmoji(g.name, g.systemPrompt));
+    }
+    map.set("user", ROLE_EMOJIS.user);
+    return map;
+  }, [gladiateurs, arbitre]);
+
+  // All participant names for highlighting mentions in messages
+  const participantNames = useMemo(
+    () => [arbitre.name, ...gladiateurs.map((g) => g.name)],
+    [arbitre.name, gladiateurs],
+  );
+
   return (
     <div className="flex-1 space-y-3 overflow-y-auto p-4">
       {messages.map((msg) => (
@@ -49,6 +67,9 @@ export function DiscussionFeed() {
           key={msg.id}
           message={msg}
           isActive={msg.speakerId === activeSpeakerId}
+          emoji={emojiMap.get(msg.speakerId)}
+          participantNames={participantNames}
+          emojiMap={emojiMap}
         />
       ))}
 
@@ -61,6 +82,8 @@ export function DiscussionFeed() {
             speakerName={resolveName(speakerId)}
             role={resolveRole(speakerId)}
             content={content}
+            emoji={emojiMap.get(speakerId)}
+            participantNames={participantNames}
           />
         );
       })}

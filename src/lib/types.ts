@@ -10,12 +10,12 @@ export interface LlmParams {
 }
 
 export const DEFAULT_LLM_PARAMS: LlmParams = {
-  temperature: 0.7,
+  temperature: 0.8,
   topP: 0.9,
   topK: 40,
   numPredict: 1024,
   numCtx: 8192,
-  repeatPenalty: 1.1,
+  repeatPenalty: 1.3,
 };
 
 export interface GladIAteurConfig {
@@ -24,6 +24,7 @@ export interface GladIAteurConfig {
   interventionNumber: number;
   systemPrompt: string;
   llmParams: LlmParams;
+  emoji?: string;
 }
 
 export interface IArbitreConfig {
@@ -92,12 +93,58 @@ export interface PredefinedProfile {
   personality: string;
   systemPrompt: string;
   isBuiltin: boolean;
+  profileType: string;
+  category: string;
 }
 
 export interface ModelInfo {
   name: string;
   size: number;
   digest: string;
+}
+
+// -- Discussion history types --
+
+export interface ParticipantInfo {
+  id: string;
+  name: string;
+  role: SpeakerRole;
+  emoji: string;
+}
+
+export interface SaveDiscussionRequest {
+  id: string;
+  topic: string;
+  discussionLanguage: string;
+  modelName: string;
+  participants: ParticipantInfo[];
+  totalTurns: number;
+  synthesis: string;
+  createdAt: string;
+  messages: Message[];
+}
+
+export interface DiscussionSummary {
+  id: string;
+  topic: string;
+  discussionLanguage: string;
+  modelName: string;
+  participants: ParticipantInfo[];
+  totalTurns: number;
+  hasSynthesis: boolean;
+  createdAt: string;
+}
+
+export interface DiscussionDetail {
+  id: string;
+  topic: string;
+  discussionLanguage: string;
+  modelName: string;
+  participants: ParticipantInfo[];
+  totalTurns: number;
+  synthesis: string;
+  createdAt: string;
+  messages: Message[];
 }
 
 // ArenaEvent — tagged union (discriminated via "type" field)

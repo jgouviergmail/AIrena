@@ -1,23 +1,82 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Brain, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Brain } from "lucide-react";
 import { SpeakerBadge } from "./SpeakerBadge";
 import { cn } from "@/lib/utils";
 import type { Message, SpeakerRole } from "@/lib/types";
+
+/** Extract short forms from French-style names for better matching.
+ *  "Le Scientifique" → ["Scientifique"], "L'Avocat du Diable" → ["Avocat du Diable"] */
+function extractShortForms(name: string): string[] {
+  const shorts: string[] = [];
+  // Remove leading French articles: "Le ", "La ", "L'", "Les "
+  const articleMatch = name.match(/^(?:Le |La |L'|Les )/i);
+  if (articleMatch) {
+    const base = name.slice(articleMatch[0].length);
+    if (base.length >= 5) {
+      shorts.push(base);
+    }
+  }
+  return shorts;
+}
+
+/** Split text by participant names, returning alternating text/highlighted segments */
+function highlightNames(
+  text: string,
+  participantNames: string[],
+): React.ReactNode[] {
+  // Filter out empty/falsy names to avoid regex issues
+  const validNames = participantNames.filter((n) => n && n.length > 1);
+  if (validNames.length === 0) return [text];
+  // Build expanded list: full names + short forms (article-stripped)
+  const allForms = new Set<string>();
+  for (const n of validNames) {
+    allForms.add(n);
+    for (const short of extractShortForms(n)) {
+      allForms.add(short);
+    }
+  }
+  // Sort longest-first so "Le Scientifique" matches before "Scientifique"
+  const sorted = [...allForms].sort((a, b) => b.length - a.length);
+  const escaped = sorted.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
+  const parts = text.split(regex);
+  const lowerNames = new Set(sorted.map((n) => n.toLowerCase()));
+  return parts.map((part, i) => {
+    if (lowerNames.has(part.toLowerCase())) {
+      return (
+        <span key={i} className="font-semibold text-primary">
+          {part}
+        </span>
+      );
+    }
+    return part;
+  });
+}
 
 export function MessageBubble({
   message,
   streaming,
   isActive,
+  emoji,
+  participantNames = [],
+  emojiMap,
 }: {
   message: Message;
   streaming?: string;
   isActive?: boolean;
+  emoji?: string;
+  participantNames?: string[];
+  emojiMap?: Map<string, string>;
 }) {
   const { t } = useTranslation();
   const [showThought, setShowThought] = useState(false);
   const content = streaming ?? message.content;
   const isStreaming = streaming !== undefined;
+  const highlighted = useMemo(
+    () => highlightNames(content, participantNames),
+    [content, participantNames],
+  );
 
   if (message.isBanNotification) {
     return (
@@ -41,6 +100,7 @@ export function MessageBubble({
           name={message.speakerName}
           role={message.role}
           active={isActive}
+          emoji={emoji}
         />
         <div className="flex items-center gap-2">
           {message.innerThought && (
@@ -65,7 +125,7 @@ export function MessageBubble({
 
       <div className="prose prose-sm max-w-none text-sm text-foreground">
         <p className="whitespace-pre-wrap">
-          {content}
+          {highlighted}
           {isStreaming && (
             <span className="inline-block h-4 w-1 animate-pulse bg-primary" />
           )}
@@ -74,24 +134,24 @@ export function MessageBubble({
 
       {(message.reactions?.length ?? 0) > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5 border-t border-border pt-2">
-          {(message.reactions ?? []).map((r, i) => (
-            <span
-              key={i}
-              className={cn(
-                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px]",
-                r.reactionType === "like"
-                  ? "bg-green-500/10 text-green-500"
-                  : "bg-red-500/10 text-red-500",
-              )}
-            >
-              {r.reactionType === "like" ? (
-                <ThumbsUp className="h-2.5 w-2.5" />
-              ) : (
-                <ThumbsDown className="h-2.5 w-2.5" />
-              )}
-              {r.fromSpeakerName}
-            </span>
-          ))}
+          {(message.reactions ?? []).map((r, i) => {
+            const reactorEmoji = emojiMap?.get(r.fromSpeakerId) ?? "";
+            return (
+              <span
+                key={i}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px]",
+                  r.reactionType === "like"
+                    ? "bg-green-500/10 text-green-500"
+                    : "bg-red-500/10 text-red-500",
+                )}
+              >
+                {r.reactionType === "like" ? "👍" : "👎"}
+                {reactorEmoji && <span>{reactorEmoji}</span>}
+                {r.fromSpeakerName}
+              </span>
+            );
+          })}
         </div>
       )}
     </div>
@@ -102,19 +162,27 @@ export function StreamingBubble({
   speakerName,
   role,
   content,
+  emoji,
+  participantNames = [],
 }: {
   speakerName: string;
   role: SpeakerRole;
   content: string;
+  emoji?: string;
+  participantNames?: string[];
 }) {
+  const highlighted = useMemo(
+    () => highlightNames(content, participantNames),
+    [content, participantNames],
+  );
   return (
     <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
       <div className="mb-2">
-        <SpeakerBadge name={speakerName} role={role} active />
+        <SpeakerBadge name={speakerName} role={role} active emoji={emoji} />
       </div>
       <div className="text-sm text-foreground">
         <p className="whitespace-pre-wrap">
-          {content}
+          {highlighted}
           <span className="inline-block h-4 w-1 animate-pulse bg-primary" />
         </p>
       </div>

@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Home, MessageSquarePlus, Settings, Swords } from "lucide-react";
+import { History, Home, MessageSquarePlus, Settings, Swords } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -10,6 +10,12 @@ const navItems = [
     path: "/setup",
     icon: MessageSquarePlus,
     labelKey: "nav.newDiscussion",
+  },
+  {
+    key: "history",
+    path: "/history",
+    icon: History,
+    labelKey: "nav.history",
   },
   {
     key: "settings",
@@ -26,6 +32,7 @@ export function Sidebar() {
 
   const isArenaActive =
     location.pathname === "/arena" || location.pathname === "/summary";
+  const isHistoryActive = location.pathname.startsWith("/history");
 
   return (
     <aside className="flex h-full w-16 flex-col items-center border-r border-sidebar-border bg-sidebar py-4">
@@ -35,7 +42,9 @@ export function Sidebar() {
 
       <nav className="flex flex-1 flex-col items-center gap-2">
         {navItems.map((item) => {
-          const isActive = location.pathname === item.path;
+          const isActive = item.key === "history"
+            ? isHistoryActive
+            : location.pathname === item.path;
           return (
             <button
               key={item.key}

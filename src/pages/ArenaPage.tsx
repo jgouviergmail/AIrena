@@ -55,11 +55,15 @@ export default function ArenaPage() {
                 const emo = emotions.get(g.id);
                 if (!emo) return null;
                 return (
-                  <div key={g.id} className="flex items-center gap-1" title={g.name}>
+                  <div key={g.id} className="group relative flex items-center gap-1">
                     <EmotionIndicator emotions={emo} />
                     <span className="text-[10px] text-muted-foreground">
                       {g.name.slice(0, 8)}
                     </span>
+                    {/* Tooltip below — native title clips at viewport top */}
+                    <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-1 -translate-x-1/2 whitespace-nowrap rounded bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-md opacity-0 transition-opacity group-hover:opacity-100">
+                      {g.name}
+                    </div>
                   </div>
                 );
               })}

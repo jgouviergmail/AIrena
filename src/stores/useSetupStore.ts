@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import i18n from "@/i18n/config";
 import type {
   DiscussionConfig,
   GladIAteurConfig,
@@ -31,20 +32,19 @@ interface SetupState {
   reset: () => void;
 }
 
-const defaultArbitre: IArbitreConfig = {
+const getDefaultArbitre = (): IArbitreConfig => ({
   id: "arbitre-default",
-  name: "IArbitre",
-  systemPrompt:
-    "Tu es l'IArbitre, modérateur impartial de cette discussion. Tu introduis le sujet, distribues la parole, modères les interventions et tu produis une synthèse finale. Tu es bienveillant mais rigoureux.",
+  name: i18n.t("profiles.arb-impartial.name"),
+  systemPrompt: i18n.t("profiles.arb-impartial.systemPrompt"),
   turnDistribution: "sequential",
   llmParams: { ...DEFAULT_LLM_PARAMS },
-};
+});
 
 export const useSetupStore = create<SetupState>((set, get) => ({
   step: 0,
   topic: "",
   discussionLanguage: "fr",
-  arbitre: { ...defaultArbitre },
+  arbitre: getDefaultArbitre(),
   gladiateurs: [],
   maxTurns: null,
   userInterventionTimeoutSecs: 120,
@@ -103,7 +103,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       step: 0,
       topic: "",
       discussionLanguage: "fr",
-      arbitre: { ...defaultArbitre },
+      arbitre: getDefaultArbitre(),
       gladiateurs: [],
       maxTurns: null,
       userInterventionTimeoutSecs: 120,

@@ -36,8 +36,11 @@ impl Default for ModerationResult {
 }
 
 /// Raw reaction structure received from the LLM (before validation)
+/// Aliases handle common alternative field names LLMs may use.
 #[derive(Debug, Deserialize)]
 pub struct RawReaction {
+    #[serde(alias = "name", alias = "participant", alias = "intervenant", alias = "gladiateur")]
     pub speaker: String,
+    #[serde(alias = "response", alias = "opinion", alias = "avis", alias = "vote", alias = "type")]
     pub reaction: String,
 }

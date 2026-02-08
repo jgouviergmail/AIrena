@@ -36,8 +36,6 @@ pub async fn start_discussion(
 
     // ATOMIC check-and-reserve: prevents TOCTOU race where two near-simultaneous
     // calls could both see None before either sets Some.
-    let cleanup_tx: Arc<std::sync::Mutex<Option<mpsc::Sender<EngineCommand>>>>;
-    let cleanup_cancel: Arc<std::sync::Mutex<Option<CancellationToken>>>;
     {
         let mut tx_guard = AppState::lock_or_recover(&state.engine_cmd_tx);
         if tx_guard.is_some() {
@@ -51,8 +49,8 @@ pub async fn start_discussion(
         *cancel_guard = Some(cancel_token);
     }
 
-    cleanup_tx = Arc::clone(&state.engine_cmd_tx);
-    cleanup_cancel = Arc::clone(&state.cancel_token);
+    let cleanup_tx = Arc::clone(&state.engine_cmd_tx);
+    let cleanup_cancel = Arc::clone(&state.cancel_token);
 
     // Read settings for ollama_url and ollama_model
     let settings = match state.get_settings().await {

@@ -9,11 +9,13 @@ import {
   Globe,
   Play,
   Plus,
+  Save,
   Trash2,
-  UserPlus,
 } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { LlmParamsForm } from "@/components/setup/LlmParamsForm";
+import { EmojiPicker } from "@/components/setup/EmojiPicker";
+import { getProfileEmoji } from "@/lib/profile-emoji";
 import { useSetupStore } from "@/stores/useSetupStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useArenaStore } from "@/stores/useArenaStore";
@@ -73,8 +75,9 @@ export default function SetupPage() {
         handleEvent(event);
       });
       navigate("/arena");
-    } catch (e: any) {
-      setError(e?.message ?? t("errors.generic"));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg || t("errors.generic"));
       setStarting(false);
       startingRef.current = false;
     }
@@ -83,9 +86,9 @@ export default function SetupPage() {
   const addGladiateurFromProfile = (profile: PredefinedProfile) => {
     addGladiateur({
       id: `glad-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      name: profile.name,
+      name: t(`profiles.${profile.id}.name`, { defaultValue: profile.name }),
       interventionNumber: gladiateurs.length + 1,
-      systemPrompt: profile.systemPrompt,
+      systemPrompt: t(`profiles.${profile.id}.systemPrompt`, { defaultValue: profile.systemPrompt }),
       llmParams: { ...DEFAULT_LLM_PARAMS },
     });
   };
@@ -244,10 +247,90 @@ function StepArbitre() {
   const arbitre = useSetupStore((s) => s.arbitre);
   const updateArbitre = useSetupStore((s) => s.updateArbitre);
   const updateArbitreLlm = useSetupStore((s) => s.updateArbitreLlm);
+  const arbitreProfiles = useSettingsStore((s) => s.arbitreProfiles);
+  const saveArbitreProfile = useSettingsStore((s) => s.saveArbitreProfile);
+  const deleteArbitreProfile = useSettingsStore((s) => s.deleteArbitreProfile);
   const [showLlm, setShowLlm] = useState(false);
+  const [showSaveForm, setShowSaveForm] = useState(false);
+  const [savePersonality, setSavePersonality] = useState("");
+
+  const handleProfileChange = (profileId: string) => {
+    if (profileId === "") return;
+    const profile = arbitreProfiles.find((p) => p.id === profileId);
+    if (profile) {
+      updateArbitre({
+        name: t(`profiles.${profile.id}.name`, { defaultValue: profile.name }),
+        systemPrompt: t(`profiles.${profile.id}.systemPrompt`, { defaultValue: profile.systemPrompt }),
+      });
+    }
+  };
+
+  // Find which profile matches the current config (if any)
+  const currentProfile = arbitreProfiles.find(
+    (p) =>
+      t(`profiles.${p.id}.name`, { defaultValue: p.name }) === arbitre.name &&
+      t(`profiles.${p.id}.systemPrompt`, { defaultValue: p.systemPrompt }) === arbitre.systemPrompt,
+  );
+  const currentProfileId = currentProfile?.id ?? "";
+  const isCustomConfig = !currentProfileId;
+  const isCustomProfile = currentProfile && !currentProfile.isBuiltin;
+
+  const handleSaveAsProfile = async () => {
+    const id = `arb-custom-${Date.now()}`;
+    await saveArbitreProfile({
+      id,
+      name: arbitre.name,
+      personality: savePersonality || arbitre.name,
+      systemPrompt: arbitre.systemPrompt,
+      isBuiltin: false,
+      profileType: "arbitre",
+      category: "arbitre",
+    });
+    setShowSaveForm(false);
+    setSavePersonality("");
+  };
+
+  const handleDeleteProfile = async () => {
+    if (!currentProfile || currentProfile.isBuiltin) return;
+    await deleteArbitreProfile(currentProfile.id);
+    // Reset to empty custom state
+    updateArbitre({ name: "", systemPrompt: "" });
+  };
 
   return (
     <div className="space-y-4">
+      {/* Profile selector */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-foreground">
+          {t("setup.arbitreProfile")}
+        </label>
+        <div className="flex gap-2">
+          <select
+            value={currentProfileId}
+            onChange={(e) => handleProfileChange(e.target.value)}
+            className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            {isCustomConfig && (
+              <option value="">{t("setup.arbitreCustom")}</option>
+            )}
+            {arbitreProfiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {getProfileEmoji(p.name, p.systemPrompt)} {t(`profiles.${p.id}.name`, { defaultValue: p.name })} — {t(`profiles.${p.id}.personality`, { defaultValue: p.personality })}
+              </option>
+            ))}
+          </select>
+          {isCustomProfile && (
+            <button
+              onClick={handleDeleteProfile}
+              title={t("setup.deleteArbitreProfile")}
+              className="rounded-md border border-border px-2 py-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="space-y-2">
         <label className="text-sm font-medium text-foreground">
           {t("setup.arbitreName")}
@@ -271,6 +354,48 @@ function StepArbitre() {
           className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
         />
       </div>
+
+      {/* Save as custom profile */}
+      {isCustomConfig && arbitre.name.trim() && arbitre.systemPrompt.trim() && (
+        <>
+          {!showSaveForm ? (
+            <button
+              onClick={() => setShowSaveForm(true)}
+              className="flex items-center gap-1.5 text-sm text-primary hover:text-primary/80"
+            >
+              <Save className="h-4 w-4" />
+              {t("setup.saveArbitreProfile")}
+            </button>
+          ) : (
+            <div className="flex items-end gap-2 rounded-md border border-border bg-card p-3">
+              <div className="flex-1 space-y-1">
+                <label className="text-xs text-muted-foreground">
+                  {t("setup.arbitreProfilePersonality")}
+                </label>
+                <input
+                  type="text"
+                  value={savePersonality}
+                  onChange={(e) => setSavePersonality(e.target.value)}
+                  placeholder={t("setup.personalityPlaceholder")}
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              <button
+                onClick={handleSaveAsProfile}
+                className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
+              >
+                {t("settings.save")}
+              </button>
+              <button
+                onClick={() => { setShowSaveForm(false); setSavePersonality(""); }}
+                className="rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </>
+      )}
 
       <div className="space-y-2">
         <label className="text-sm font-medium text-foreground">
@@ -315,6 +440,8 @@ function StepArbitre() {
   );
 }
 
+const CATEGORY_ORDER = ["experts", "imaginaires", "personnalites", "metiers", "autres"] as const;
+
 function StepGladiateurs({
   profiles,
   onAddFromProfile,
@@ -331,24 +458,39 @@ function StepGladiateurs({
   const updateGladiateurLlm = useSetupStore((s) => s.updateGladiateurLlm);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // Group profiles by category
+  const grouped = CATEGORY_ORDER.map((cat) => ({
+    category: cat,
+    profiles: profiles.filter((p) => p.category === cat),
+  })).filter((g) => g.profiles.length > 0);
+
   return (
     <div className="space-y-4">
-      {/* Profile picker */}
-      <div className="space-y-2">
+      {/* Profile picker grouped by category */}
+      <div className="space-y-3">
         <label className="text-sm font-medium text-foreground">
           {t("setup.selectProfile")}
         </label>
-        <div className="flex flex-wrap gap-2">
-          {profiles.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => onAddFromProfile(p)}
-              className="rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
-            >
-              <UserPlus className="mr-1.5 inline h-3.5 w-3.5" />
-              {p.name}
-            </button>
-          ))}
+        {grouped.map((group) => (
+          <div key={group.category}>
+            <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {t(`setup.category_${group.category}`)}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {group.profiles.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => onAddFromProfile(p)}
+                  className="rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
+                >
+                  <span className="mr-1.5 inline-block">{getProfileEmoji(p.name, p.systemPrompt)}</span>
+                  {t(`profiles.${p.id}.name`, { defaultValue: p.name })}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+        <div>
           <button
             onClick={onAddEmpty}
             className="rounded-md border border-dashed border-border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -377,6 +519,11 @@ function StepGladiateurs({
                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">
                   {idx + 1}
                 </span>
+                <EmojiPicker
+                  value={g.emoji}
+                  autoEmoji={getProfileEmoji(g.name, g.systemPrompt)}
+                  onSelect={(emoji) => updateGladiateur(g.id, { emoji })}
+                />
                 <input
                   type="text"
                   value={g.name}

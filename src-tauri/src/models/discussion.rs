@@ -16,7 +16,6 @@ pub enum DiscussionStatus {
     Paused,
     StopRequested,
     ForceStopRequested,
-    Completed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

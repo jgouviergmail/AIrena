@@ -37,6 +37,14 @@ pub async fn list_profiles(state: State<'_, AppState>) -> Result<Vec<PredefinedP
 }
 
 #[tauri::command]
+pub async fn list_arbitre_profiles(state: State<'_, AppState>) -> Result<Vec<PredefinedProfile>, CommandError> {
+    let db = state.db.clone();
+    repository::list_arbitre_profiles(&db)
+        .await
+        .map_err(|e| CommandError::Settings(e.to_string()))
+}
+
+#[tauri::command]
 pub async fn get_profile(
     id: String,
     state: State<'_, AppState>,

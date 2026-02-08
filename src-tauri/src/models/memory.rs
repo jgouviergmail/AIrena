@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ParticipantMemory {
     /// Recent complete turns (last 2-3)
     pub immediate: Vec<TurnSnapshot>,
@@ -10,16 +10,6 @@ pub struct ParticipantMemory {
     pub contextual_summary: String,
     /// Positions of each participant
     pub positional_map: HashMap<String, ParticipantPosition>,
-}
-
-impl Default for ParticipantMemory {
-    fn default() -> Self {
-        Self {
-            immediate: Vec::new(),
-            contextual_summary: String::new(),
-            positional_map: HashMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

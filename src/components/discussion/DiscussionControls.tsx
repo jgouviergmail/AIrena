@@ -19,12 +19,13 @@ export function DiscussionControls({
   userTurnActive: boolean;
 }) {
   const { t } = useTranslation();
-  const setError = useArenaStore((s) => s.handleEvent);
+  const dispatchEvent = useArenaStore((s) => s.handleEvent);
+  const interventionRequested = useArenaStore((s) => s.interventionRequested);
   const [confirmHardStop, setConfirmHardStop] = useState(false);
 
   const handleError = (e: unknown) => {
     const msg = e instanceof Error ? e.message : String(e);
-    setError({ type: "error", data: { message: msg } });
+    dispatchEvent({ type: "error", data: { message: msg } });
   };
 
   const handlePauseResume = async () => {
@@ -64,6 +65,7 @@ export function DiscussionControls({
   const handleIntervene = async () => {
     try {
       await api.userWantsToIntervene();
+      useArenaStore.setState({ interventionRequested: true });
     } catch (e) {
       handleError(e);
     }
@@ -77,11 +79,16 @@ export function DiscussionControls({
         <>
           <button
             onClick={handleIntervene}
-            disabled={userTurnActive || status === "paused"}
-            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-30"
+            disabled={userTurnActive || interventionRequested || status === "paused"}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors",
+              interventionRequested
+                ? "border-2 border-primary bg-primary/10 text-primary"
+                : "border border-border text-foreground hover:bg-accent disabled:opacity-30",
+            )}
           >
             <Hand className="h-3.5 w-3.5" />
-            {t("arena.intervene")}
+            {interventionRequested ? t("arena.interveneRequested") : t("arena.intervene")}
           </button>
 
           <button

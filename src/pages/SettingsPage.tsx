@@ -48,17 +48,24 @@ export default function SettingsPage() {
   }, [checkOllama]);
 
   const handleSave = async () => {
-    await saveSettings();
-    i18n.changeLanguage(settings.language);
-    setTheme(settings.theme as "dark" | "light");
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      await saveSettings();
+      i18n.changeLanguage(settings.language);
+      setTheme(settings.theme as "dark" | "light");
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      console.error("Failed to save settings:", e);
+    }
   };
 
   const handleCheckOllama = async () => {
     setChecking(true);
-    await checkOllama();
-    setChecking(false);
+    try {
+      await checkOllama();
+    } finally {
+      setChecking(false);
+    }
   };
 
   const handleUrlChange = async (url: string) => {
@@ -274,19 +281,19 @@ export default function SettingsPage() {
                 </p>
                 <ol className="mt-2 list-inside list-decimal space-y-1 text-sm text-muted-foreground">
                   <li>
-                    Download Ollama:{" "}
+                    {t("settings.ollamaGuideStep1")}{" "}
                     <span className="font-mono text-primary">
                       https://ollama.com
                     </span>
                   </li>
-                  <li>Install and start Ollama</li>
+                  <li>{t("settings.ollamaGuideStep2")}</li>
                   <li>
-                    Pull a model:{" "}
+                    {t("settings.ollamaGuideStep3")}{" "}
                     <span className="font-mono text-primary">
                       ollama pull llama3.2
                     </span>
                   </li>
-                  <li>Click "Check connection" above</li>
+                  <li>{t("settings.ollamaGuideStep4")}</li>
                 </ol>
               </div>
             )}
@@ -302,10 +309,10 @@ export default function SettingsPage() {
                 >
                   <div>
                     <span className="text-sm font-medium text-foreground">
-                      {p.name}
+                      {t(`profiles.${p.id}.name`, { defaultValue: p.name })}
                     </span>
                     <span className="ml-2 text-xs text-muted-foreground">
-                      {p.personality}
+                      {t(`profiles.${p.id}.personality`, { defaultValue: p.personality })}
                     </span>
                   </div>
                   <div className="flex gap-1">

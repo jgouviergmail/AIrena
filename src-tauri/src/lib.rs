@@ -97,9 +97,16 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::list_profiles,
+            commands::settings::list_arbitre_profiles,
             commands::settings::get_profile,
             commands::settings::save_profile,
             commands::settings::delete_profile,
+            // History commands
+            commands::history::save_discussion_history,
+            commands::history::list_discussion_history,
+            commands::history::get_discussion_history,
+            commands::history::delete_discussion_history,
+            commands::history::delete_all_discussion_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

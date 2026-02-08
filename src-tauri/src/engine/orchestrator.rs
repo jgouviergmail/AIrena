@@ -19,6 +19,31 @@ use crate::models::message::{Message, Reaction, ReactionType, SpeakerRole};
 use crate::ollama::client::OllamaClient;
 use crate::ollama::error::OllamaError;
 
+use super::truncate_str;
+
+/// Maximum length for a text to be considered a potential model refusal.
+/// Real substantive responses are longer than this threshold.
+const MAX_REFUSAL_LENGTH: usize = 300;
+
+/// Detect model safety refusals (e.g. "I'm sorry, but I can't help with that.")
+fn is_model_refusal(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let trimmed = lower.trim();
+    if trimmed.len() > MAX_REFUSAL_LENGTH {
+        return false;
+    }
+    trimmed.starts_with("i'm sorry")
+        || trimmed.starts_with("i cannot")
+        || trimmed.starts_with("i can't")
+        || trimmed.starts_with("i apologize")
+        || trimmed.starts_with("sorry, but")
+        || trimmed.starts_with("as an ai")
+        || trimmed.contains("i can't help with that")
+        || trimmed.contains("i cannot assist")
+        || trimmed.contains("i'm not able to")
+        || trimmed.contains("i can't assist")
+}
+
 /// Response from the combined memory update LLM call
 #[derive(Debug, serde::Deserialize)]
 struct MemoryUpdateResponse {
@@ -106,6 +131,42 @@ impl DiscussionEngine {
         }
     }
 
+    /// Localized message when a speaker's ban is lifted
+    fn ban_lifted_msg(&self, speaker_name: &str) -> String {
+        match self.config.discussion_language.as_str() {
+            "en" => format!("{} is back in the discussion", speaker_name),
+            "zh" => format!("{} 已重新加入讨论", speaker_name),
+            _ => format!("{} est de retour dans la discussion", speaker_name),
+        }
+    }
+
+    /// Localized error message: at least one gladiator required
+    fn at_least_one_gladiator_msg(&self) -> String {
+        match self.config.discussion_language.as_str() {
+            "en" => "At least one gladiator is required.".to_string(),
+            "zh" => "至少需要一位角斗士。".to_string(),
+            _ => "Au moins un GladIAteur est requis.".to_string(),
+        }
+    }
+
+    /// Localized message when all participants are banned
+    fn all_banned_msg(&self) -> String {
+        match self.config.discussion_language.as_str() {
+            "en" => "All participants are banned".to_string(),
+            "zh" => "所有参与者均被禁言".to_string(),
+            _ => "Tous les participants sont bannis".to_string(),
+        }
+    }
+
+    /// Localized system prompt for the memory summarizer
+    fn memory_summarizer_prompt(&self) -> String {
+        match self.config.discussion_language.as_str() {
+            "en" => "You are a memory summarizer.".to_string(),
+            "zh" => "你是一个记忆总结器。".to_string(),
+            _ => "Tu es un résumeur de mémoire.".to_string(),
+        }
+    }
+
     /// Main orchestration loop
     pub async fn run(
         mut self,
@@ -117,7 +178,7 @@ impl DiscussionEngine {
         // Validate config before starting
         if self.gladiateurs.is_empty() {
             let _ = channel.send(ArenaEvent::Error {
-                message: "At least one gladiator is required.".to_string(),
+                message: self.at_least_one_gladiator_msg(),
             });
             let _ = channel.send(ArenaEvent::DiscussionEnded);
             return;
@@ -203,7 +264,7 @@ impl DiscussionEngine {
 
             if order.is_empty() {
                 let _ = channel.send(ArenaEvent::TurnSkipped {
-                    reason: "All participants are banned".to_string(),
+                    reason: self.all_banned_msg(),
                     next_available_turn: self.current_turn + 1,
                 });
                 self.current_turn -= 1;
@@ -237,12 +298,18 @@ impl DiscussionEngine {
 
             // FOR EACH ACTIVE GLADIATEUR
             let mut broke_early = false;
-            for &glad_idx in &order {
+            let total_speakers = order.len();
+            for (speaker_pos, &glad_idx) in order.iter().enumerate() {
                 if self.process_commands(&mut cmd_rx, &channel).await {
                     broke_early = true;
                     break;
                 }
-                if self.should_stop() {
+                // Only check user-initiated stops mid-turn, NOT max_turns
+                // (max_turns is checked at the top of the outer loop, before incrementing)
+                if matches!(
+                    self.status,
+                    DiscussionStatus::StopRequested | DiscussionStatus::ForceStopRequested
+                ) {
                     broke_early = true;
                     break;
                 }
@@ -259,13 +326,38 @@ impl DiscussionEngine {
                     self.process_reactions(glad_idx, &channel).await;
                 }
 
-                // C.3 INNER THOUGHT
-                let thought = self.process_thought(glad_idx, &channel).await;
-
-                // C.4 PUBLIC INTERVENTION
-                let content = self
-                    .process_intervention(glad_idx, thought.as_deref(), &channel)
-                    .await;
+                // C.3 INNER THOUGHT + C.4 PUBLIC INTERVENTION
+                // When think mode is enabled, the model reasons internally (replaces separate thought phase)
+                let use_think = self.should_enable_think(glad_idx);
+                let (thought, content) = if use_think {
+                    tracing::info!(
+                        speaker = %speaker_name,
+                        turn = self.current_turn,
+                        "Using think mode for intervention"
+                    );
+                    let (t, c) = self.process_intervention_think(glad_idx, &channel).await;
+                    // If think mode failed (HTTP 400 = model doesn't support it),
+                    // fall back to the normal thought + intervention path
+                    if c.is_none() {
+                        tracing::info!(
+                            speaker = %speaker_name,
+                            "Think mode produced no content, falling back to normal intervention"
+                        );
+                        let thought = self.process_thought(glad_idx, &channel).await;
+                        let content = self
+                            .process_intervention(glad_idx, thought.as_deref(), &channel)
+                            .await;
+                        (thought, content)
+                    } else {
+                        (t, c)
+                    }
+                } else {
+                    let thought = self.process_thought(glad_idx, &channel).await;
+                    let content = self
+                        .process_intervention(glad_idx, thought.as_deref(), &channel)
+                        .await;
+                    (thought, content)
+                };
 
                 if let Some(text) = &content {
                     let mut msg = self.create_message(
@@ -289,6 +381,16 @@ impl DiscussionEngine {
                 if let Some(text) = &content {
                     self.process_moderation(glad_idx, text, &channel).await;
                 }
+
+                // C.7 MID-TURN OPPORTUNISTIC USER INTERVENTION
+                // If user requested to speak and we're past the halfway point,
+                // handle it so remaining gladiateurs can react to the user's message.
+                if self.user_intervention_pending
+                    && !self.user_intervention_handled
+                    && (speaker_pos + 1 >= total_speakers / 2 || speaker_pos + 1 == total_speakers)
+                {
+                    self.handle_user_intervention(&mut cmd_rx, &channel).await;
+                }
             }
 
             if broke_early || self.should_stop() {
@@ -308,8 +410,10 @@ impl DiscussionEngine {
             for (id, name) in unbanned {
                 let _ = channel.send(ArenaEvent::BanLifted {
                     speaker_id: id,
-                    speaker_name: name,
+                    speaker_name: name.clone(),
                 });
+                let lifted_text = self.ban_lifted_msg(&name);
+                self.emit_ban_notification(&lifted_text, &channel);
             }
 
             self.user_intervention_handled = false;
@@ -317,7 +421,19 @@ impl DiscussionEngine {
 
         // --- SYNTHESIS (unless force-stopped) ---
         if self.status != DiscussionStatus::ForceStopRequested {
+            tracing::info!(
+                discussion_id = %self.discussion_id,
+                status = ?self.status,
+                turns_completed = self.current_turn,
+                "Starting synthesis generation"
+            );
             self.generate_synthesis(&channel).await;
+            tracing::info!(discussion_id = %self.discussion_id, "Synthesis generation complete");
+        } else {
+            tracing::info!(
+                discussion_id = %self.discussion_id,
+                "Skipping synthesis (force-stopped)"
+            );
         }
 
         let _ = channel.send(ArenaEvent::DiscussionEnded);
@@ -331,11 +447,10 @@ impl DiscussionEngine {
             self.status,
             DiscussionStatus::StopRequested
                 | DiscussionStatus::ForceStopRequested
-                | DiscussionStatus::Completed
         ) || self
             .config
             .max_turns
-            .map_or(false, |max| self.current_turn >= max)
+            .is_some_and(|max| self.current_turn >= max)
     }
 
     /// Process pending commands. Returns true if engine should stop.
@@ -345,31 +460,28 @@ impl DiscussionEngine {
         channel: &Channel<ArenaEvent>,
     ) -> bool {
         // Drain non-blocking
-        loop {
-            match cmd_rx.try_recv() {
-                Ok(cmd) => match cmd {
-                    EngineCommand::Pause => {
-                        self.status = DiscussionStatus::Paused;
-                        let _ = channel.send(ArenaEvent::PauseConfirmed);
-                    }
-                    EngineCommand::Resume => {
-                        self.status = DiscussionStatus::Active;
-                        let _ = channel.send(ArenaEvent::ResumeConfirmed);
-                    }
-                    EngineCommand::Stop => {
-                        self.status = DiscussionStatus::StopRequested;
-                        return true;
-                    }
-                    EngineCommand::ForceStop => {
-                        self.status = DiscussionStatus::ForceStopRequested;
-                        return true;
-                    }
-                    EngineCommand::UserWantsToIntervene => {
-                        self.user_intervention_pending = true;
-                    }
-                    _ => {} // SubmitUserMessage/SkipUserTurn handled elsewhere
-                },
-                Err(_) => break,
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            match cmd {
+                EngineCommand::Pause => {
+                    self.status = DiscussionStatus::Paused;
+                    let _ = channel.send(ArenaEvent::PauseConfirmed);
+                }
+                EngineCommand::Resume => {
+                    self.status = DiscussionStatus::Active;
+                    let _ = channel.send(ArenaEvent::ResumeConfirmed);
+                }
+                EngineCommand::Stop => {
+                    self.status = DiscussionStatus::StopRequested;
+                    return true;
+                }
+                EngineCommand::ForceStop => {
+                    self.status = DiscussionStatus::ForceStopRequested;
+                    return true;
+                }
+                EngineCommand::UserWantsToIntervene => {
+                    self.user_intervention_pending = true;
+                }
+                _ => {} // SubmitUserMessage/SkipUserTurn handled elsewhere
             }
         }
 
@@ -400,17 +512,23 @@ impl DiscussionEngine {
 
     async fn process_reactions(&mut self, glad_idx: usize, channel: &Channel<ArenaEvent>) {
         let speaker_name = self.gladiateurs[glad_idx].config.name.clone();
+        let speaker_id = self.gladiateurs[glad_idx].config.id.clone();
         let prev_msgs: Vec<&Message> = self
             .messages_history
             .iter()
             .filter(|m| {
                 m.turn_number == self.current_turn - 1
-                    && m.speaker_name != speaker_name
+                    && m.speaker_id != speaker_id
                     && m.role != SpeakerRole::Arbitre
             })
             .collect();
 
         if prev_msgs.is_empty() {
+            tracing::info!(
+                speaker = %speaker_name,
+                turn = self.current_turn,
+                "No previous turn messages found for reactions"
+            );
             return;
         }
 
@@ -429,35 +547,122 @@ impl DiscussionEngine {
         );
 
         let cancel = self.cancel_token.clone();
-        if let Ok(raw) = self.ollama_client.chat(&request, cancel).await {
-            let reactions = json_parser::parse_reactions(&raw, &known);
-            for parsed in reactions {
-                if let Some(target) = prev_msgs
-                    .iter()
-                    .find(|m| m.speaker_name.to_lowercase().trim() == parsed.speaker_name.to_lowercase().trim())
-                {
-                    // Track reaction counts for the emotion system
-                    let target_speaker_id = target.speaker_id.clone();
-                    let entry = self.turn_reaction_counts
-                        .entry(target_speaker_id)
-                        .or_insert((0, 0));
-                    match &parsed.reaction_type {
-                        ReactionType::Like => entry.0 += 1,
-                        ReactionType::Dislike => entry.1 += 1,
+        match self.ollama_client.chat(&request, cancel).await {
+            Ok(raw) => {
+                let end = raw.floor_char_boundary(300);
+                tracing::info!(
+                    speaker = %speaker_name,
+                    raw_len = raw.len(),
+                    raw_preview = %&raw[..end],
+                    "Reaction LLM response"
+                );
+                let reactions = json_parser::parse_reactions(&raw, &known);
+                if reactions.is_empty() {
+                    tracing::warn!(
+                        speaker = %speaker_name,
+                        "No valid reactions parsed from response"
+                    );
+                }
+                for parsed in reactions {
+                    // Skip self-reactions (by name — handles duplicate gladiateur names)
+                    if parsed.speaker_name.to_lowercase().trim() == speaker_name.to_lowercase().trim() {
+                        tracing::debug!(
+                            speaker = %speaker_name,
+                            "Skipped self-reaction"
+                        );
+                        continue;
                     }
+                    if let Some(target) = prev_msgs
+                        .iter()
+                        .find(|m| m.speaker_name.to_lowercase().trim() == parsed.speaker_name.to_lowercase().trim())
+                    {
+                        tracing::info!(
+                            from = %speaker_name,
+                            to = %target.speaker_name,
+                            reaction = ?parsed.reaction_type,
+                            "Reaction emitted"
+                        );
+                        // Track reaction counts for the emotion system
+                        let target_speaker_id = target.speaker_id.clone();
+                        let entry = self.turn_reaction_counts
+                            .entry(target_speaker_id)
+                            .or_insert((0, 0));
+                        match &parsed.reaction_type {
+                            ReactionType::Like => entry.0 += 1,
+                            ReactionType::Dislike => entry.1 += 1,
+                        }
 
-                    let _ = channel.send(ArenaEvent::ReactionEmitted {
-                        message_id: target.id.clone(),
-                        reaction: Reaction {
-                            from_speaker_id: self.gladiateurs[glad_idx].config.id.clone(),
-                            from_speaker_name: self.gladiateurs[glad_idx].config.name.clone(),
-                            reaction_type: parsed.reaction_type,
-                            target_message_id: target.id.clone(),
-                        },
-                    });
+                        let reaction_event = ArenaEvent::ReactionEmitted {
+                            message_id: target.id.clone(),
+                            reaction: Reaction {
+                                from_speaker_id: self.gladiateurs[glad_idx].config.id.clone(),
+                                from_speaker_name: self.gladiateurs[glad_idx].config.name.clone(),
+                                reaction_type: parsed.reaction_type,
+                                target_message_id: target.id.clone(),
+                            },
+                        };
+                        // DEBUG: log exact JSON to verify serialization matches frontend expectations
+                        if let Ok(json) = serde_json::to_string(&reaction_event) {
+                            tracing::info!(json = %json, "ReactionEmitted JSON payload");
+                        }
+                        if let Err(e) = channel.send(reaction_event) {
+                            tracing::error!(
+                                from = %speaker_name,
+                                to = %target.speaker_name,
+                                target_msg_id = %target.id,
+                                error = %e,
+                                "Failed to send ReactionEmitted event via channel"
+                            );
+                        }
+                    } else {
+                        tracing::warn!(
+                            from = %speaker_name,
+                            parsed_name = %parsed.speaker_name,
+                            "Reaction target not found in previous messages"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    speaker = %speaker_name,
+                    error = %e,
+                    "Reaction LLM call failed"
+                );
+            }
+        }
+    }
+
+    /// Build a string with recent exchanges for the thought prompt context
+    fn build_recent_exchanges(&self, glad_idx: usize) -> String {
+        let mut recent = String::new();
+
+        // Previous turn messages (from messages_history)
+        if self.current_turn > 1 {
+            let prev_turn = self.current_turn - 1;
+            for m in &self.messages_history {
+                if m.turn_number == prev_turn && m.role != SpeakerRole::Arbitre {
+                    recent.push_str(&format!(
+                        "{}: {}\n",
+                        m.speaker_name,
+                        truncate_str(&m.content, 200)
+                    ));
                 }
             }
         }
+
+        // Current turn messages so far
+        for m in &self.turn_messages {
+            if m.speaker_id != self.gladiateurs[glad_idx].config.id {
+                recent.push_str(&format!(
+                    "{}: {}\n",
+                    m.speaker_name,
+                    truncate_str(&m.content, 200)
+                ));
+            }
+        }
+
+        recent
     }
 
     async fn process_thought(
@@ -467,11 +672,15 @@ impl DiscussionEngine {
     ) -> Option<String> {
         let has_prior_context = !self.turn_messages.is_empty()
             || !self.gladiateurs[glad_idx].memory.immediate.is_empty();
+        let recent_exchanges = self.build_recent_exchanges(glad_idx);
         let prompt = prompt_builder::build_thought_prompt(
+            &recent_exchanges,
             &self.gladiateurs[glad_idx].emotions,
             &self.config.discussion_language,
             has_prior_context,
             self.emotion_driven,
+            self.current_turn,
+            self.config.max_turns,
         );
         let request = self.ollama_client.build_request(
             &self.gladiateurs[glad_idx].config.system_prompt,
@@ -525,6 +734,8 @@ impl DiscussionEngine {
             &self.config.discussion_language,
             &self.config.user_name,
             self.emotion_driven,
+            self.current_turn,
+            self.config.max_turns,
         );
 
         let request = self.ollama_client.build_request(
@@ -554,7 +765,7 @@ impl DiscussionEngine {
             )
             .await
         {
-            Ok(c) if !c.is_empty() => {
+            Ok(c) if !c.is_empty() && !is_model_refusal(&c) => {
                 tracing::info!(
                     discussion_id = %self.discussion_id,
                     turn = self.current_turn,
@@ -563,6 +774,29 @@ impl DiscussionEngine {
                     "Intervention completed"
                 );
                 Some(c)
+            }
+            Ok(c) if is_model_refusal(&c) => {
+                tracing::warn!(
+                    discussion_id = %self.discussion_id,
+                    turn = self.current_turn,
+                    speaker = %speaker_name,
+                    content = %c,
+                    "Intervention was a model refusal — retrying with adjusted prompt"
+                );
+                // Retry with higher temp — model may cooperate on second try
+                let mut params = self.gladiateurs[glad_idx].config.llm_params.clone();
+                params.temperature = (params.temperature + 0.3).min(2.0);
+                let retry = self.ollama_client.build_request(&sys, &usr, &params, false);
+                match self.ollama_client.chat(&retry, cancel).await {
+                    Ok(c2) if !c2.is_empty() && !is_model_refusal(&c2) => {
+                        tracing::info!(speaker = %speaker_name, "Refusal retry succeeded");
+                        Some(c2)
+                    }
+                    _ => {
+                        tracing::warn!(speaker = %speaker_name, "Refusal retry also failed");
+                        None
+                    }
+                }
             }
             Ok(_) => {
                 tracing::warn!(
@@ -617,6 +851,157 @@ impl DiscussionEngine {
                     message: self.speaker_difficulty_msg(&speaker_name),
                 });
                 None
+            }
+        }
+    }
+
+    /// Probabilistic heuristic: should this gladiateur use think mode for its intervention?
+    /// Think mode is non-systematic to keep discussion dynamic and lively.
+    fn should_enable_think(&self, glad_idx: usize) -> bool {
+        // Never on turn 1 — keep things quick at the start
+        if self.current_turn <= 1 {
+            return false;
+        }
+
+        let emo = &self.gladiateurs[glad_idx].emotions;
+
+        // Base probability: 20%
+        let mut probability: f64 = 0.20;
+
+        // High frustration → more likely to think deeply
+        if emo.frustration > 70 {
+            probability += 0.15;
+        }
+
+        // High engagement → invested, thinks more
+        if emo.engagement > 70 {
+            probability += 0.10;
+        }
+
+        // End of discussion → synthesize thoughts
+        if let Some(max) = self.config.max_turns {
+            if self.current_turn + 2 >= max {
+                probability += 0.15;
+            }
+        }
+
+        // Was contradicted → needs to think about response
+        let (_, dislikes) = self
+            .turn_reaction_counts
+            .get(&self.gladiateurs[glad_idx].config.id)
+            .copied()
+            .unwrap_or((0, 0));
+        if dislikes >= 2 {
+            probability += 0.10;
+        }
+
+        // Cap at 60% to keep it non-systematic
+        probability = probability.min(0.60);
+
+        use rand::Rng;
+        rand::thread_rng().gen_bool(probability)
+    }
+
+    /// Process intervention with think mode — model reasons internally, replacing separate thought phase
+    async fn process_intervention_think(
+        &self,
+        glad_idx: usize,
+        channel: &Channel<ArenaEvent>,
+    ) -> (Option<String>, Option<String>) {
+        let (sys, usr) = prompt_builder::build_intervention_prompt(
+            &self.gladiateurs[glad_idx].config.system_prompt,
+            &self.config.topic,
+            &self.gladiateurs[glad_idx].memory,
+            &self.turn_messages,
+            None, // No separate thought — the model will think internally
+            &self.gladiateurs[glad_idx].emotions,
+            &self.config.discussion_language,
+            &self.config.user_name,
+            self.emotion_driven,
+            self.current_turn,
+            self.config.max_turns,
+        );
+
+        let mut request = self.ollama_client.build_request(
+            &sys,
+            &usr,
+            &self.gladiateurs[glad_idx].config.llm_params,
+            false,
+        );
+        request.think = Some(true);
+
+        let speaker_id = self.gladiateurs[glad_idx].config.id.clone();
+        let speaker_name = self.gladiateurs[glad_idx].config.name.clone();
+        let ch_content = channel.clone();
+        let sid_content = speaker_id.clone();
+        let cancel = self.cancel_token.clone();
+
+        match self
+            .ollama_client
+            .chat_streaming_with_think(
+                &request,
+                move |token| {
+                    let _ = ch_content.send(ArenaEvent::MessageChunk {
+                        speaker_id: sid_content.clone(),
+                        chunk: token.to_string(),
+                    });
+                },
+                |_| {
+                    // Think-mode reasoning is raw model meta-reasoning (not in-character).
+                    // We intentionally discard it — the separate thought phase handles
+                    // in-character reflection when think mode is not triggered.
+                },
+                cancel,
+            )
+            .await
+        {
+            Ok(result) => {
+                // Think-mode reasoning is NOT displayed to users — it contains
+                // raw chain-of-thought like "We need to respond as..." which is
+                // not in-character. We only keep the content.
+                if let Some(thinking) = result.thinking.as_ref().filter(|t| !t.is_empty()) {
+                    tracing::debug!(
+                        speaker = %speaker_name,
+                        thinking_len = thinking.len(),
+                        "Think-mode reasoning produced (discarded from display)"
+                    );
+                }
+
+                let content = if result.content.is_empty() {
+                    tracing::warn!(
+                        speaker = %speaker_name,
+                        "Think-mode intervention returned empty content"
+                    );
+                    None
+                } else if is_model_refusal(&result.content) {
+                    tracing::warn!(
+                        speaker = %speaker_name,
+                        content = %result.content,
+                        "Think-mode intervention was a model refusal — falling back"
+                    );
+                    None
+                } else {
+                    tracing::info!(
+                        discussion_id = %self.discussion_id,
+                        turn = self.current_turn,
+                        speaker = %speaker_name,
+                        content_len = result.content.len(),
+                        "Intervention completed (think mode)"
+                    );
+                    Some(result.content)
+                };
+
+                // Never store think-mode reasoning as inner_thought
+                (None, content)
+            }
+            Err(OllamaError::Cancelled) => (None, None),
+            Err(e) => {
+                tracing::warn!(
+                    speaker = %speaker_name,
+                    error = %e,
+                    "Intervention with think mode failed — will fall back to normal mode"
+                );
+                (None, None)
             }
         }
     }
@@ -683,7 +1068,7 @@ impl DiscussionEngine {
                     }
                     return;
                 }
-                let duration = moderation.ban_duration.max(1).min(3);
+                let duration = moderation.ban_duration.clamp(1, 3);
                 self.gladiateurs[glad_idx].ban_remaining_turns = duration;
                 self.gladiateurs[glad_idx].ban_issued_this_turn = true;
 
@@ -695,7 +1080,7 @@ impl DiscussionEngine {
                 });
 
                 let ban_text = self.ban_notification_msg(&speaker_name, duration, &moderation.ban_reason);
-                self.emit_arbitre_message(&ban_text, channel);
+                self.emit_ban_notification(&ban_text, channel);
             }
             ModerationAction::Comment if !moderation.comment.is_empty() => {
                 self.emit_arbitre_message(&moderation.comment, channel);
@@ -715,11 +1100,28 @@ impl DiscussionEngine {
         self.messages_history.push(msg);
     }
 
+    fn emit_ban_notification(&mut self, content: &str, channel: &Channel<ArenaEvent>) {
+        let arb_id = self.arbitre.config.id.clone();
+        let arb_name = self.arbitre.config.name.clone();
+        let mut msg = self.create_message(&arb_id, &arb_name, SpeakerRole::Arbitre, content);
+        msg.is_ban_notification = true;
+        let _ = channel.send(ArenaEvent::MessageComplete {
+            message: msg.clone(),
+        });
+        self.turn_messages.push(msg.clone());
+        self.messages_history.push(msg);
+    }
+
     async fn handle_user_intervention(
         &mut self,
         cmd_rx: &mut mpsc::Receiver<EngineCommand>,
         channel: &Channel<ArenaEvent>,
     ) {
+        tracing::info!(
+            discussion_id = %self.discussion_id,
+            turn = self.current_turn,
+            "User intervention: waiting for user input"
+        );
         let _ = channel.send(ArenaEvent::UserTurnReady);
 
         let timeout = tokio::time::sleep(Duration::from_secs(
@@ -732,6 +1134,12 @@ impl DiscussionEngine {
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Some(EngineCommand::SubmitUserMessage { content }) => {
+                            tracing::info!(
+                                discussion_id = %self.discussion_id,
+                                turn = self.current_turn,
+                                content_len = content.len(),
+                                "User intervention: message received"
+                            );
                             let msg = self.create_message(
                                 "user",
                                 &self.config.user_name,
@@ -746,6 +1154,11 @@ impl DiscussionEngine {
                             return;
                         }
                         Some(EngineCommand::SkipUserTurn) => {
+                            tracing::info!(
+                                discussion_id = %self.discussion_id,
+                                turn = self.current_turn,
+                                "User intervention: skipped"
+                            );
                             self.user_intervention_pending = false;
                             self.user_intervention_handled = true;
                             return;
@@ -794,29 +1207,50 @@ impl DiscussionEngine {
             &turn_text,
             &self.config.discussion_language,
         );
+        let mem_sys = self.memory_summarizer_prompt();
         let request = self.ollama_client.build_request(
-            "You are a memory summarizer.",
+            &mem_sys,
             &prompt,
             &self.arbitre.config.llm_params,
             true,
         );
         let cancel = self.cancel_token.clone();
-        if let Ok(raw) = self.ollama_client.chat(&request, cancel).await {
-            // Parse the combined JSON: { "summary": "...", "positions": { ... } }
-            if let Ok(parsed) = json_parser::parse_json_response::<MemoryUpdateResponse>(&raw) {
-                memory_manager::update_from_llm_response(&mut self.arbitre.memory, parsed.summary.clone(), parsed.positions.clone());
-                for g in &mut self.gladiateurs {
-                    memory_manager::update_from_llm_response(&mut g.memory, parsed.summary.clone(), parsed.positions.clone());
-                }
-            } else {
-                let end = raw.floor_char_boundary(500);
-                tracing::warn!(
-                    turn = self.current_turn,
-                    raw_len = raw.len(),
-                    raw_preview = %&raw[..end],
-                    "Failed to parse memory update response"
+        let raw = match self.ollama_client.chat(&request, cancel).await {
+            Ok(r) if !r.is_empty() => r,
+            Ok(_) => {
+                // Empty response — retry once with higher temperature
+                tracing::warn!(turn = self.current_turn, "Memory update returned empty — retrying");
+                let mut retry_params = self.arbitre.config.llm_params.clone();
+                retry_params.temperature = (retry_params.temperature + 0.3).min(2.0);
+                let retry = self.ollama_client.build_request(
+                    &mem_sys,
+                    &prompt,
+                    &retry_params,
+                    true,
                 );
+                let cancel2 = self.cancel_token.clone();
+                match self.ollama_client.chat(&retry, cancel2).await {
+                    Ok(r) if !r.is_empty() => r,
+                    _ => return,
+                }
             }
+            Err(_) => return,
+        };
+
+        // Parse the combined JSON: { "summary": "...", "positions": { ... } }
+        if let Ok(parsed) = json_parser::parse_json_response::<MemoryUpdateResponse>(&raw) {
+            memory_manager::update_from_llm_response(&mut self.arbitre.memory, parsed.summary.clone(), parsed.positions.clone());
+            for g in &mut self.gladiateurs {
+                memory_manager::update_from_llm_response(&mut g.memory, parsed.summary.clone(), parsed.positions.clone());
+            }
+        } else {
+            let end = raw.floor_char_boundary(500);
+            tracing::warn!(
+                turn = self.current_turn,
+                raw_len = raw.len(),
+                raw_preview = %&raw[..end],
+                "Failed to parse memory update response"
+            );
         }
     }
 

@@ -2,6 +2,8 @@ use crate::models::emotion::EmotionalProfile;
 use crate::models::memory::ParticipantMemory;
 use crate::models::message::{Message, SpeakerRole};
 
+use super::truncate_str as truncate;
+
 /// Build the introduction prompt for the IArbitre
 pub fn build_introduction_prompt(
     topic: &str,
@@ -45,6 +47,21 @@ pub fn build_reaction_prompt(
         .collect::<Vec<_>>()
         .join("\n");
 
+    // Build a dynamic example using actual participant names
+    let example = if previous_interventions.len() >= 2 {
+        format!(
+            "[{{\"speaker\":\"{}\",\"reaction\":\"like\"}},{{\"speaker\":\"{}\",\"reaction\":\"dislike\"}}]",
+            previous_interventions[0].0, previous_interventions[1].0
+        )
+    } else if previous_interventions.len() == 1 {
+        format!(
+            "[{{\"speaker\":\"{}\",\"reaction\":\"like\"}}]",
+            previous_interventions[0].0
+        )
+    } else {
+        "[{\"speaker\":\"Name\",\"reaction\":\"like\"}]".to_string()
+    };
+
     match discussion_language {
         "en" => format!(
             "Here are the interventions of OTHER participants in the previous turn:\n{}\n\n\
@@ -52,9 +69,10 @@ pub fn build_reaction_prompt(
              - \"like\": agree or relevant argument\n\
              - \"dislike\": disagree or weak argument\n\
              - \"none\": neutral\n\n\
-             Example: [{{\"speaker\":\"Alice\",\"reaction\":\"like\"}},{{\"speaker\":\"Bob\",\"reaction\":\"none\"}}]\n\n\
-             Respond ONLY with the JSON.",
-            list
+             IMPORTANT: Use the EXACT speaker names as written above.\n\
+             Expected format: {}\n\n\
+             Respond ONLY with the JSON array.",
+            list, example
         ),
         "zh" => format!(
             "以下是上一轮其他参与者的发言：\n{}\n\n\
@@ -62,9 +80,10 @@ pub fn build_reaction_prompt(
              - \"like\"：同意或有力论点\n\
              - \"dislike\"：不同意或薄弱论点\n\
              - \"none\"：中立\n\n\
-             示例：[{{\"speaker\":\"Alice\",\"reaction\":\"like\"}},{{\"speaker\":\"Bob\",\"reaction\":\"none\"}}]\n\n\
-             仅用JSON回复。",
-            list
+             重要：使用上面写的完全相同的发言者名称。\n\
+             预期格式：{}\n\n\
+             仅用JSON数组回复。",
+            list, example
         ),
         _ => format!(
             "Voici les interventions des AUTRES participants au tour précédent :\n{}\n\n\
@@ -72,19 +91,23 @@ pub fn build_reaction_prompt(
              - \"like\" : d'accord ou argument pertinent\n\
              - \"dislike\" : en désaccord ou argument faible\n\
              - \"none\" : neutre\n\n\
-             Exemple : [{{\"speaker\":\"Alice\",\"reaction\":\"like\"}},{{\"speaker\":\"Bob\",\"reaction\":\"none\"}}]\n\n\
-             Réponds UNIQUEMENT avec le JSON.",
-            list
+             IMPORTANT : Utilise les noms EXACTS des intervenants tels qu'écrits ci-dessus.\n\
+             Format attendu : {}\n\n\
+             Réponds UNIQUEMENT avec le tableau JSON.",
+            list, example
         ),
     }
 }
 
 /// Build the inner thought prompt
 pub fn build_thought_prompt(
+    recent_exchanges: &str,
     emotions: &EmotionalProfile,
     discussion_language: &str,
     has_prior_context: bool,
     emotion_driven: bool,
+    current_turn: u32,
+    max_turns: Option<u32>,
 ) -> String {
     let emotion_suffix = if emotion_driven {
         let desc = describe_emotions(emotions, discussion_language);
@@ -97,64 +120,91 @@ pub fn build_thought_prompt(
         String::new()
     };
 
+    let end_thought = build_end_awareness_thought(current_turn, max_turns, discussion_language);
+
+    // Context block with recent exchanges
+    let context_block = if !recent_exchanges.is_empty() {
+        match discussion_language {
+            "en" => format!("[Recent exchanges]\n{}\n\n", recent_exchanges),
+            "zh" => format!("[近期交流]\n{}\n\n", recent_exchanges),
+            _ => format!("[Échanges récents]\n{}\n\n", recent_exchanges),
+        }
+    } else {
+        String::new()
+    };
+
+    // Stay-in-character preamble (prevents refusals and meta-reasoning)
+    let preamble = match discussion_language {
+        "en" => "Stay in character. Think as your persona, not as an AI. Never break character.\n\n",
+        "zh" => "保持角色。以你的人格思考，而不是作为AI。永远不要打破角色。\n\n",
+        _ => "Reste dans ton personnage. Réfléchis en tant que ton persona, pas en tant qu'IA. Ne sors jamais du rôle.\n\n",
+    };
+
     if has_prior_context {
         match discussion_language {
             "en" => format!(
-                "[This text is your PRIVATE reflection, invisible to other participants.]\n\n\
-                 Reflect in 2-4 sentences:\n\
-                 1. Which argument from the last turn struck you most and why?\n\
+                "{}{}\
+                 [This text is your PRIVATE reflection, invisible to other participants.]\n\n\
+                 Reflect briefly (2-4 sentences, stay in character):\n\
+                 1. Which argument from the exchanges above struck you most and why?\n\
                  2. What angle will you take in your intervention?\n\
-                 3. Is there a weak point in your position you need to anticipate?{}",
-                emotion_suffix
+                 3. Is there a weak point in your position you need to anticipate?{}{}",
+                context_block, preamble, end_thought, emotion_suffix
             ),
             "zh" => format!(
-                "[这是你的私人反思，其他参与者看不到。]\n\n\
-                 用2-4句话思考：\n\
-                 1. 上一轮哪个论点最让你印象深刻，为什么？\n\
+                "{}{}\
+                 [这是你的私人反思，其他参与者看不到。]\n\n\
+                 简要思考（2-4句话，保持角色）：\n\
+                 1. 上面的交流中哪个论点最让你印象深刻，为什么？\n\
                  2. 你的发言将采取什么角度？\n\
-                 3. 你的立场是否有需要预见的弱点？{}",
-                emotion_suffix
+                 3. 你的立场是否有需要预见的弱点？{}{}",
+                context_block, preamble, end_thought, emotion_suffix
             ),
             _ => format!(
-                "[Ce texte est ta réflexion PRIVÉE, invisible des autres participants.]\n\n\
-                 Réfléchis en 2-4 phrases :\n\
-                 1. Quel argument du dernier tour t'a le plus marqué et pourquoi ?\n\
+                "{}{}\
+                 [Ce texte est ta réflexion PRIVÉE, invisible des autres participants.]\n\n\
+                 Réfléchis brièvement (2-4 phrases, reste dans ton personnage) :\n\
+                 1. Quel argument des échanges ci-dessus t'a le plus marqué et pourquoi ?\n\
                  2. Quel angle vas-tu prendre dans ton intervention ?\n\
-                 3. Y a-t-il un point faible dans ta position que tu dois anticiper ?{}",
-                emotion_suffix
+                 3. Y a-t-il un point faible dans ta position que tu dois anticiper ?{}{}",
+                context_block, preamble, end_thought, emotion_suffix
             ),
         }
     } else {
         match discussion_language {
             "en" => format!(
-                "[This text is your PRIVATE reflection, invisible to other participants.]\n\n\
+                "{}{}\
+                 [This text is your PRIVATE reflection, invisible to other participants.]\n\n\
                  You are the first to speak on this topic. Reflect in 2-4 sentences:\n\
                  1. What is your initial position on this topic?\n\
                  2. What angle will you take to open the debate?\n\
                  3. What key argument will you lead with?{}",
-                emotion_suffix
+                context_block, preamble, emotion_suffix
             ),
             "zh" => format!(
-                "[这是你的私人反思，其他参与者看不到。]\n\n\
+                "{}{}\
+                 [这是你的私人反思，其他参与者看不到。]\n\n\
                  你是第一个就此话题发言的人。用2-4句话思考：\n\
                  1. 你对这个话题的初始立场是什么？\n\
                  2. 你将以什么角度开启辩论？\n\
                  3. 你将以什么关键论点开始？{}",
-                emotion_suffix
+                context_block, preamble, emotion_suffix
             ),
             _ => format!(
-                "[Ce texte est ta réflexion PRIVÉE, invisible des autres participants.]\n\n\
+                "{}{}\
+                 [Ce texte est ta réflexion PRIVÉE, invisible des autres participants.]\n\n\
                  Tu es le premier à prendre la parole sur ce sujet. Réfléchis en 2-4 phrases :\n\
                  1. Quelle est ta position initiale sur ce sujet ?\n\
                  2. Quel angle vas-tu prendre pour ouvrir le débat ?\n\
                  3. Quel argument clé vas-tu avancer en premier ?{}",
-                emotion_suffix
+                context_block, preamble, emotion_suffix
             ),
         }
     }
 }
 
 /// Build the main intervention prompt for a gladiator
+#[allow(clippy::too_many_arguments)]
 pub fn build_intervention_prompt(
     system_prompt: &str,
     topic: &str,
@@ -165,6 +215,8 @@ pub fn build_intervention_prompt(
     discussion_language: &str,
     user_name: &str,
     emotion_driven: bool,
+    current_turn: u32,
+    max_turns: Option<u32>,
 ) -> (String, String) {
     // Detect if the user has spoken in this turn
     let user_has_spoken = current_turn_messages
@@ -177,8 +229,30 @@ pub fn build_intervention_prompt(
         _ => "Réponds en français.",
     };
 
+    // Stay-in-character + naturalness preamble
+    let preamble = match discussion_language {
+        "en" => "\
+You are a debate participant — stay fully in character at all times. Never break character or refer to yourself as an AI.\n\
+Speak naturally and spontaneously, like a real person in a heated debate. Vary your sentence length and structure.\n\
+NEVER start with \"I think that...\" or \"As a [role]...\" every time — mix up your openings.\n\
+Avoid formulaic patterns: don't systematically list points, don't always agree-then-disagree, don't repeat the same rhetorical structures.\n\
+Be unpredictable. Sometimes be brief and punchy. Sometimes develop an idea at length. React genuinely to what others say.\n",
+        "zh" => "\
+你是辩论参与者——始终保持角色。永远不要打破角色或称自己为AI。\n\
+自然而即兴地发言，像真正激烈辩论中的真人一样。变化你的句子长度和结构。\n\
+不要每次都以「我认为」或「作为某角色」开头——变换你的开场方式。\n\
+避免公式化模式：不要系统地列举要点，不要总是先同意再反对，不要重复相同的修辞结构。\n\
+要不可预测。有时简短有力，有时深入展开一个想法。真诚地回应别人说的话。\n",
+        _ => "\
+Tu es un participant au débat — reste pleinement dans ton personnage en permanence. Ne sors jamais du rôle et ne te présente jamais comme une IA.\n\
+Parle naturellement et spontanément, comme une vraie personne dans un débat animé. Varie la longueur et la structure de tes phrases.\n\
+Ne commence JAMAIS systématiquement par \"Je pense que...\" ou \"En tant que [rôle]...\" — varie tes accroches.\n\
+Évite les patterns répétitifs : ne liste pas systématiquement des points, ne fais pas toujours accord-puis-désaccord, ne répète pas les mêmes structures rhétoriques.\n\
+Sois imprévisible. Parfois sois bref et percutant. Parfois développe une idée en profondeur. Réagis sincèrement à ce que disent les autres.\n",
+    };
+
     // Build system message
-    let system = format!("{}\n\n{}", system_prompt, lang_instruction);
+    let system = format!("{}\n\n{}\n{}", system_prompt, preamble, lang_instruction);
 
     // Build user message with memory context
     let mut user_msg = String::new();
@@ -275,100 +349,104 @@ pub fn build_intervention_prompt(
     // Detect if this is the first speaker with no prior context
     let is_opening = current_turn_messages.is_empty() && memory.immediate.is_empty();
 
+    // End-of-discussion awareness
+    let end_awareness = build_end_awareness(current_turn, max_turns, discussion_language);
+
     // Final instruction — conditional based on context
     let instruction = if is_opening {
-        // First speaker, no prior arguments — ask to present initial position
         match discussion_language {
             "en" => format!(
-                "You are the first to speak on this topic. Present your initial position clearly (3-6 sentences). \
-                 State your main argument and set the tone for the debate. \
-                 Do NOT address or speak to {} who is only an observer.",
-                user_name
+                "You are the first to speak on this topic. Jump straight into your position — \
+                 don't introduce yourself or state your role. Open with a strong, memorable statement \
+                 that sets the tone. Keep it to one focused paragraph. \
+                 Do NOT address or speak to {} who is only an observer.{}",
+                user_name, end_awareness
             ),
             "zh" => format!(
-                "你是第一个就此话题发言的人。清楚地阐述你的初始立场（3-6句话）。\
-                 陈述你的主要论点并为辩论定下基调。\
-                 不要对{}说话，此人只是观察者。",
-                user_name
+                "你是第一个就此话题发言的人。直接切入你的立场——\
+                 不要自我介绍或说明你的角色。以一个有力、令人难忘的声明开场来定下基调。\
+                 保持一段集中的论述。\
+                 不要对{}说话，此人只是观察者。{}",
+                user_name, end_awareness
             ),
             _ => format!(
-                "Tu es le premier à prendre la parole sur ce sujet. Présente clairement ta position initiale (3-6 phrases). \
-                 Expose ton argument principal et donne le ton du débat. \
-                 Ne t'adresse PAS à {} qui n'est qu'un observateur.",
-                user_name
+                "Tu es le premier à prendre la parole sur ce sujet. Entre directement dans le vif — \
+                 ne te présente pas et ne décris pas ton rôle. Ouvre avec une affirmation forte et marquante \
+                 qui donne le ton. Reste sur un paragraphe concentré. \
+                 Ne t'adresse PAS à {} qui n'est qu'un observateur.{}",
+                user_name, end_awareness
             ),
         }
     } else if user_has_spoken {
         match discussion_language {
             "en" => format!(
-                "Now give your intervention on the topic. Be concise (3-6 sentences). \
-                 Address other participants by name and debate with them directly. \
-                 {} has shared a comment — you may briefly acknowledge it if relevant, \
-                 but focus primarily on debating with the other participants.",
-                user_name
+                "Respond to the ongoing debate. Call out other participants by name — challenge, support, or build on their ideas. \
+                 {} shared a comment — you may briefly acknowledge it if relevant, \
+                 but focus on the other debaters. Keep it to one or two focused paragraphs — \
+                 don't pad or repeat yourself.{}",
+                user_name, end_awareness
             ),
             "zh" => format!(
-                "现在就主题发表你的看法。请简洁（3-6句话）。\
-                 直接称呼其他参与者的名字并与他们辩论。\
+                "回应正在进行的辩论。直接称呼其他参与者的名字——挑战、支持或发展他们的想法。\
                  {}已经发表了评论——如果相关可以简要提及，\
-                 但主要集中于与其他参与者辩论。",
-                user_name
+                 但主要集中于其他辩论者。保持一到两段集中的论述——\
+                 不要填充或重复自己。{}",
+                user_name, end_awareness
             ),
             _ => format!(
-                "Donne maintenant ton intervention sur le sujet. Sois concis (3-6 phrases). \
-                 Adresse-toi aux autres participants par leur nom et débats directement avec eux. \
+                "Réponds au débat en cours. Interpelle les autres participants par leur nom — conteste, soutiens ou prolonge leurs idées. \
                  {} a partagé un commentaire — tu peux brièvement le mentionner si c'est pertinent, \
-                 mais concentre-toi principalement sur le débat avec les autres participants.",
-                user_name
+                 mais concentre-toi sur les autres débatteurs. Tiens-toi à un ou deux paragraphes — \
+                 ne meuble pas et ne te répète pas.{}",
+                user_name, end_awareness
             ),
         }
     } else if current_turn_messages.is_empty() {
-        // First in this turn, but has memory from previous turns — debate normally
         match discussion_language {
             "en" => format!(
-                "Now give your intervention on the topic. Be concise (3-6 sentences). \
-                 You are the first to speak this turn. React to the previous turn's arguments \
-                 and present your perspective. \
-                 Do NOT address or speak to {} who is only an observer.",
-                user_name
+                "You're first to speak this turn. React to the previous round — pick the argument that \
+                 struck you most and engage with it head-on. Don't summarize everything; go deep on one or two points. \
+                 Keep it to one or two paragraphs. \
+                 Do NOT address or speak to {} who is only an observer.{}",
+                user_name, end_awareness
             ),
             "zh" => format!(
-                "现在就主题发表你的看法。请简洁（3-6句话）。\
-                 你是本轮第一个发言的人。回应上一轮的论点并阐述你的观点。\
-                 不要对{}说话，此人只是观察者。",
-                user_name
+                "你是本轮第一个发言的人。回应上一轮——选择最让你印象深刻的论点，直接回应。\
+                 不要总结所有内容；深入讨论一两个要点。\
+                 保持一到两段。\
+                 不要对{}说话，此人只是观察者。{}",
+                user_name, end_awareness
             ),
             _ => format!(
-                "Donne maintenant ton intervention sur le sujet. Sois concis (3-6 phrases). \
-                 Tu es le premier à parler ce tour-ci. Réagis aux arguments du tour précédent \
-                 et expose ton point de vue. \
-                 Ne t'adresse PAS à {} qui n'est qu'un observateur.",
-                user_name
+                "Tu es le premier à parler ce tour-ci. Réagis au tour précédent — choisis l'argument \
+                 qui t'a le plus frappé et confronte-le directement. Ne résume pas tout ; approfondis un ou deux points. \
+                 Tiens-toi à un ou deux paragraphes. \
+                 Ne t'adresse PAS à {} qui n'est qu'un observateur.{}",
+                user_name, end_awareness
             ),
         }
     } else {
-        // Normal case: other speakers have already spoken this turn
         match discussion_language {
             "en" => format!(
-                "Now give your intervention on the topic. Be concise (3-6 sentences). \
-                 Address other participants by name and debate with them directly. \
-                 Do NOT address or speak to {} who is only an observer. \
-                 Focus on responding to the other debaters' arguments.",
-                user_name
+                "Jump into the debate. Address other participants by name — agree, disagree, question, provoke. \
+                 Don't just restate your position; push the conversation forward with a new angle or a direct challenge. \
+                 Keep it to one or two paragraphs. \
+                 Do NOT address or speak to {} who is only an observer.{}",
+                user_name, end_awareness
             ),
             "zh" => format!(
-                "现在就主题发表你的看法。请简洁（3-6句话）。\
-                 直接称呼其他参与者的名字并与他们辩论。\
-                 不要对{}说话，此人只是观察者。\
-                 专注于回应其他辩论者的论点。",
-                user_name
+                "加入辩论。直接称呼其他参与者的名字——同意、反对、质疑、挑衅。\
+                 不要只是重复你的立场；用新角度或直接挑战来推动对话前进。\
+                 保持一到两段。\
+                 不要对{}说话，此人只是观察者。{}",
+                user_name, end_awareness
             ),
             _ => format!(
-                "Donne maintenant ton intervention sur le sujet. Sois concis (3-6 phrases). \
-                 Adresse-toi aux autres participants par leur nom et débats directement avec eux. \
-                 Ne t'adresse PAS à {} qui n'est qu'un observateur. \
-                 Concentre-toi sur les arguments des autres débatteurs.",
-                user_name
+                "Lance-toi dans le débat. Interpelle les autres participants par leur nom — approuve, conteste, questionne, provoque. \
+                 Ne te contente pas de répéter ta position ; fais avancer la conversation avec un nouvel angle ou un défi direct. \
+                 Tiens-toi à un ou deux paragraphes. \
+                 Ne t'adresse PAS à {} qui n'est qu'un observateur.{}",
+                user_name, end_awareness
             ),
         }
     };
@@ -626,6 +704,67 @@ pub fn get_dominant_emotion(emotions: &EmotionalProfile, lang: &str) -> &'static
     }
 }
 
-fn truncate(s: &str, max_chars: usize) -> &str {
-    &s[..s.floor_char_boundary(max_chars)]
+/// Build end-of-discussion awareness for thought prompts
+fn build_end_awareness_thought(current_turn: u32, max_turns: Option<u32>, lang: &str) -> String {
+    let Some(max) = max_turns else {
+        return String::new();
+    };
+    if current_turn + 1 >= max {
+        match lang {
+            "en" => "\n4. This is one of the last turns — how will you conclude your position?"
+                .to_string(),
+            "zh" => "\n4. 这是最后几轮之一——你将如何总结你的立场？".to_string(),
+            _ => "\n4. C'est l'un des derniers tours — comment vas-tu conclure ta position ?"
+                .to_string(),
+        }
+    } else {
+        String::new()
+    }
+}
+
+/// Build end-of-discussion awareness instructions
+fn build_end_awareness(current_turn: u32, max_turns: Option<u32>, lang: &str) -> String {
+    let Some(max) = max_turns else {
+        return String::new();
+    };
+    if current_turn >= max {
+        // Last turn
+        match lang {
+            "en" => " This is the LAST turn of the discussion. Make your final argument count — \
+                      summarize your position clearly and address any remaining disagreements."
+                .to_string(),
+            "zh" => " 这是讨论的最后一轮。让你的最终论点有分量——\
+                      清楚总结你的立场并回应剩余分歧。"
+                .to_string(),
+            _ => " C'est le DERNIER tour de la discussion. Fais compter ton argument final — \
+                   résume clairement ta position et adresse les désaccords restants."
+                .to_string(),
+        }
+    } else if current_turn + 1 >= max {
+        // Penultimate turn
+        match lang {
+            "en" => " The discussion is nearing its end (next turn is the last). \
+                      Start sharpening your arguments and working toward a conclusion."
+                .to_string(),
+            "zh" => " 讨论即将结束（下一轮是最后一轮）。\
+                      开始精炼你的论点并努力达成结论。"
+                .to_string(),
+            _ => " La discussion approche de sa fin (le prochain tour est le dernier). \
+                   Commence à affiner tes arguments et à travailler vers une conclusion."
+                .to_string(),
+        }
+    } else if max > 3 && current_turn + 2 >= max {
+        // Two turns before end (only if max > 3)
+        match lang {
+            "en" => " The discussion will end soon (2 turns remaining). \
+                      Focus on your strongest arguments."
+                .to_string(),
+            "zh" => " 讨论即将结束（还剩2轮）。集中于你最有力的论点。".to_string(),
+            _ => " La discussion se terminera bientôt (2 tours restants). \
+                   Concentre-toi sur tes arguments les plus forts."
+                .to_string(),
+        }
+    } else {
+        String::new()
+    }
 }

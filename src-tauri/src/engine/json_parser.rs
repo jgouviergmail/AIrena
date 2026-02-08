@@ -61,11 +61,101 @@ pub fn parse_moderation(raw: &str) -> ModerationResult {
     parse_json_response(raw).unwrap_or_default()
 }
 
+/// Wrapper struct for when the LLM wraps the array in an object
+/// e.g. {"reactions": [...]} or {"responses": [...]} or {"interventions": [...]}
+#[derive(Debug, serde::Deserialize)]
+struct WrappedRawReactions {
+    #[serde(default, alias = "responses", alias = "interventions")]
+    reactions: Vec<RawReaction>,
+}
+
 /// Parse reactions with validation against known speakers
 pub fn parse_reactions(raw: &str, known_speakers: &[String]) -> Vec<ParsedReaction> {
-    parse_json_response::<Vec<RawReaction>>(raw)
+    // 1. Try parsing as bare array: [{"speaker":"A","reaction":"like"}, ...]
+    // 2. Try wrapped object: {"reactions": [...]} or {"responses": [...]} or {"interventions": [...]}
+    // 3. Try single object: {"speaker":"A","reaction":"like"}
+    // 4. Try duplicate-key flat object via regex: {"speaker":"A","reaction":"like","speaker":"B","reaction":"dislike"}
+    let raw_reactions = parse_json_response::<Vec<RawReaction>>(raw)
+        .or_else(|_| {
+            parse_json_response::<WrappedRawReactions>(raw).and_then(|w| {
+                if w.reactions.is_empty() {
+                    Err(JsonParseError::ParseFailed("empty wrapped reactions".to_string()))
+                } else {
+                    Ok(w.reactions)
+                }
+            })
+        })
+        .or_else(|_| {
+            parse_json_response::<RawReaction>(raw).map(|r| vec![r])
+        })
+        .or_else(|_| {
+            // Fallback: extract speaker/reaction pairs from duplicate-key flat objects
+            // e.g. {"speaker":"A","reaction":"like","speaker":"B","reaction":"dislike"}
+            extract_duplicate_key_reactions(raw)
+        });
+
+    raw_reactions
         .map(|r| validate_reactions(r, known_speakers))
         .unwrap_or_default()
+}
+
+/// Extract reactions from invalid JSON with duplicate keys
+/// e.g. {"speaker":"A","reaction":"like","speaker":"B","reaction":"dislike"}
+fn extract_duplicate_key_reactions(raw: &str) -> Result<Vec<RawReaction>, JsonParseError> {
+    let mut reactions = Vec::new();
+    let mut search_from = 0;
+
+    // Find all "speaker":"value" patterns and pair them with following "reaction":"value"
+    while let Some(sp_start) = raw[search_from..].find("\"speaker\"") {
+        let sp_abs = search_from + sp_start;
+        // Find the value after the colon
+        if let Some(speaker) = extract_json_string_value(&raw[sp_abs..]) {
+            // Search for "reaction" starting right after `"speaker":` (always ASCII-safe offset)
+            let search_reaction_from = sp_abs + 10; // len('"speaker":') = 10
+            if let Some(rx_start) = raw[search_reaction_from..].find("\"reaction\"") {
+                let rx_abs = search_reaction_from + rx_start;
+                if let Some(reaction) = extract_json_string_value(&raw[rx_abs..]) {
+                    reactions.push(RawReaction { speaker, reaction });
+                    search_from = rx_abs + 11; // len('"reaction":') = 11
+                    continue;
+                }
+            }
+        }
+        search_from = sp_abs + 10;
+    }
+
+    if reactions.is_empty() {
+        Err(JsonParseError::ParseFailed("no duplicate-key reactions found".to_string()))
+    } else {
+        Ok(reactions)
+    }
+}
+
+/// Extract a JSON string value from a pattern like `"key":"value"` or `"key": "value"`
+fn extract_json_string_value(s: &str) -> Option<String> {
+    // Skip past the key and colon
+    let colon_pos = s.find(':')?;
+    let after_colon = s[colon_pos + 1..].trim_start();
+    if !after_colon.starts_with('"') {
+        return None;
+    }
+    let value_content = &after_colon[1..]; // skip opening quote
+    // Find closing quote (not escaped), tracking byte offsets for UTF-8 safety
+    let mut byte_offset = 0;
+    let mut chars = value_content.chars();
+    loop {
+        let ch = chars.next()?;
+        if ch == '\\' {
+            byte_offset += ch.len_utf8();
+            if let Some(escaped) = chars.next() {
+                byte_offset += escaped.len_utf8();
+            }
+        } else if ch == '"' {
+            return Some(value_content[..byte_offset].to_string());
+        } else {
+            byte_offset += ch.len_utf8();
+        }
+    }
 }
 
 /// Validated reaction ready to be converted to a Reaction
@@ -74,15 +164,41 @@ pub struct ParsedReaction {
     pub reaction_type: ReactionType,
 }
 
+/// Strip leading French articles: "Le ", "La ", "L'", "Les "
+fn strip_french_article(name: &str) -> &str {
+    let trimmed = name.trim();
+    for prefix in &["le ", "la ", "l'", "les "] {
+        if trimmed.len() > prefix.len() {
+            let lower_start: String = trimmed.chars().take(prefix.len()).collect::<String>().to_lowercase();
+            if lower_start == *prefix {
+                return trimmed[prefix.len()..].trim();
+            }
+        }
+    }
+    trimmed
+}
+
 fn validate_reactions(raw: Vec<RawReaction>, known_speakers: &[String]) -> Vec<ParsedReaction> {
     raw.into_iter()
         .filter_map(|r| {
             let r_lower = r.speaker.to_lowercase().trim().to_string();
+            let r_stripped = strip_french_article(&r_lower).to_lowercase();
+
             // 1. Exact match (case-insensitive, trimmed)
             let speaker = known_speakers
                 .iter()
                 .find(|s| s.to_lowercase().trim() == r_lower)
-                // 2. Fallback: known name starts with the LLM-provided string (min 3 chars)
+                // 2. Article-stripped match: "Scientifique" matches "Le Scientifique"
+                .or_else(|| {
+                    if r_stripped.len() >= 3 {
+                        known_speakers
+                            .iter()
+                            .find(|s| strip_french_article(&s.to_lowercase()) == r_stripped)
+                    } else {
+                        None
+                    }
+                })
+                // 3. Prefix match: known name starts with the LLM-provided string (min 3 chars)
                 .or_else(|| {
                     if r_lower.len() >= 3 {
                         known_speakers
@@ -91,12 +207,25 @@ fn validate_reactions(raw: Vec<RawReaction>, known_speakers: &[String]) -> Vec<P
                     } else {
                         None
                     }
+                })
+                // 4. Contains match: LLM output contains the stripped known name or vice versa
+                .or_else(|| {
+                    if r_stripped.len() >= 4 {
+                        known_speakers
+                            .iter()
+                            .find(|s| {
+                                let s_stripped = strip_french_article(&s.to_lowercase()).to_lowercase();
+                                s_stripped.contains(&r_stripped) || r_stripped.contains(&s_stripped)
+                            })
+                    } else {
+                        None
+                    }
                 })?;
 
             // Normalize the reaction value
             let reaction_type = match r.reaction.to_lowercase().as_str() {
-                "like" | "agree" | "d'accord" => Some(ReactionType::Like),
-                "dislike" | "disagree" | "pas d'accord" => Some(ReactionType::Dislike),
+                "like" | "agree" | "d'accord" | "👍" | "positive" | "positif" => Some(ReactionType::Like),
+                "dislike" | "disagree" | "pas d'accord" | "👎" | "negative" | "négatif" | "negatif" => Some(ReactionType::Dislike),
                 _ => None,
             }?;
 
@@ -276,9 +405,8 @@ fn remove_trailing_commas(input: &str) -> String {
     result
 }
 
-/// Safe string truncation that respects UTF-8 char boundaries
 fn safe_truncate(s: &str, max_bytes: usize) -> String {
-    s[..s.floor_char_boundary(max_bytes)].to_string()
+    super::truncate_str(s, max_bytes).to_string()
 }
 
 #[cfg(test)]
@@ -382,6 +510,92 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_reactions_single_object() {
+        let raw = r#"{"speaker":"Alice","reaction":"like"}"#;
+        let known = vec!["Alice".to_string(), "Bob".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].speaker_name, "Alice");
+        assert_eq!(reactions[0].reaction_type, ReactionType::Like);
+    }
+
+    #[test]
+    fn test_parse_reactions_wrapped_reactions_key() {
+        let raw = r#"{"reactions":[{"speaker":"Alice","reaction":"like"},{"speaker":"Bob","reaction":"dislike"}]}"#;
+        let known = vec!["Alice".to_string(), "Bob".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 2);
+        assert_eq!(reactions[0].speaker_name, "Alice");
+        assert_eq!(reactions[0].reaction_type, ReactionType::Like);
+        assert_eq!(reactions[1].speaker_name, "Bob");
+        assert_eq!(reactions[1].reaction_type, ReactionType::Dislike);
+    }
+
+    #[test]
+    fn test_parse_reactions_wrapped_responses_key() {
+        let raw = r#"{"responses":[{"speaker":"Alice","reaction":"like"}]}"#;
+        let known = vec!["Alice".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].speaker_name, "Alice");
+    }
+
+    #[test]
+    fn test_parse_reactions_wrapped_interventions_key() {
+        let raw = r#"{"interventions":[{"speaker":"Alice","reaction":"dislike"},{"speaker":"Bob","reaction":"like"}]}"#;
+        let known = vec!["Alice".to_string(), "Bob".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 2);
+        assert_eq!(reactions[0].speaker_name, "Alice");
+        assert_eq!(reactions[0].reaction_type, ReactionType::Dislike);
+        assert_eq!(reactions[1].speaker_name, "Bob");
+        assert_eq!(reactions[1].reaction_type, ReactionType::Like);
+    }
+
+    #[test]
+    fn test_parse_reactions_duplicate_key_flat_object() {
+        let raw = r#"{"speaker":"Alice","reaction":"like","speaker":"Bob","reaction":"dislike"}"#;
+        let known = vec!["Alice".to_string(), "Bob".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 2);
+        assert_eq!(reactions[0].speaker_name, "Alice");
+        assert_eq!(reactions[0].reaction_type, ReactionType::Like);
+        assert_eq!(reactions[1].speaker_name, "Bob");
+        assert_eq!(reactions[1].reaction_type, ReactionType::Dislike);
+    }
+
+    #[test]
+    fn test_parse_reactions_duplicate_key_with_none() {
+        let raw = r#"{"speaker":"Alice","reaction":"like","speaker":"Bob","reaction":"none","speaker":"Carol","reaction":"dislike"}"#;
+        let known = vec!["Alice".to_string(), "Bob".to_string(), "Carol".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        // "none" is filtered by validate_reactions
+        assert_eq!(reactions.len(), 2);
+        assert_eq!(reactions[0].speaker_name, "Alice");
+        assert_eq!(reactions[1].speaker_name, "Carol");
+    }
+
+    #[test]
+    fn test_parse_reactions_duplicate_key_multibyte_utf8() {
+        // Regression test: multi-byte chars like 'é' caused panics in extract_json_string_value
+        // because char indices were used as byte indices.
+        let raw = r#"{"speaker":"La Singularité","reaction":"like","speaker":"Satan","reaction":"dislike","speaker":"Le Pragmatique","reaction":"like"}"#;
+        let known = vec![
+            "La Singularité".to_string(),
+            "Satan".to_string(),
+            "Le Pragmatique".to_string(),
+        ];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 3);
+        assert_eq!(reactions[0].speaker_name, "La Singularité");
+        assert_eq!(reactions[0].reaction_type, ReactionType::Like);
+        assert_eq!(reactions[1].speaker_name, "Satan");
+        assert_eq!(reactions[1].reaction_type, ReactionType::Dislike);
+        assert_eq!(reactions[2].speaker_name, "Le Pragmatique");
+        assert_eq!(reactions[2].reaction_type, ReactionType::Like);
+    }
+
+    #[test]
     fn test_fix_common_json_preserves_apostrophes() {
         let input = r#"{'action':'none','comment':'That's a good point','ban_reason':'','ban_duration':0}"#;
         let fixed = fix_common_json_issues(input);
@@ -409,5 +623,79 @@ mod tests {
         assert_eq!(result.action, ModerationAction::Comment);
         assert_eq!(result.ban_reason, "");
         assert_eq!(result.ban_duration, 0);
+    }
+
+    #[test]
+    fn test_parse_reactions_french_article_stripped() {
+        // LLM outputs "Scientifique" but known name is "Le Scientifique"
+        let raw = r#"[{"speaker":"Scientifique","reaction":"like"}]"#;
+        let known = vec!["Le Scientifique".to_string(), "L'Avocat du Diable".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].speaker_name, "Le Scientifique");
+        assert_eq!(reactions[0].reaction_type, ReactionType::Like);
+    }
+
+    #[test]
+    fn test_parse_reactions_french_apostrophe_article() {
+        // LLM outputs "Avocat du Diable" without "L'"
+        let raw = r#"[{"speaker":"Avocat du Diable","reaction":"dislike"}]"#;
+        let known = vec!["Le Scientifique".to_string(), "L'Avocat du Diable".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].speaker_name, "L'Avocat du Diable");
+        assert_eq!(reactions[0].reaction_type, ReactionType::Dislike);
+    }
+
+    #[test]
+    fn test_parse_reactions_full_french_names() {
+        // LLM outputs exact full names — should still work
+        let raw = r#"[{"speaker":"Le Scientifique","reaction":"like"},{"speaker":"L'Avocat du Diable","reaction":"dislike"}]"#;
+        let known = vec!["Le Scientifique".to_string(), "L'Avocat du Diable".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 2);
+        assert_eq!(reactions[0].speaker_name, "Le Scientifique");
+        assert_eq!(reactions[1].speaker_name, "L'Avocat du Diable");
+    }
+
+    #[test]
+    fn test_parse_reactions_alias_name_field() {
+        // LLM uses "name" instead of "speaker"
+        let raw = r#"[{"name":"Alice","reaction":"like"}]"#;
+        let known = vec!["Alice".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].speaker_name, "Alice");
+    }
+
+    #[test]
+    fn test_parse_reactions_alias_opinion_field() {
+        // LLM uses "opinion" instead of "reaction"
+        let raw = r#"[{"speaker":"Alice","opinion":"like"}]"#;
+        let known = vec!["Alice".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].reaction_type, ReactionType::Like);
+    }
+
+    #[test]
+    fn test_parse_reactions_french_reaction_values() {
+        // LLM uses French reaction values
+        let raw = r#"[{"speaker":"Alice","reaction":"positif"},{"speaker":"Bob","reaction":"négatif"}]"#;
+        let known = vec!["Alice".to_string(), "Bob".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 2);
+        assert_eq!(reactions[0].reaction_type, ReactionType::Like);
+        assert_eq!(reactions[1].reaction_type, ReactionType::Dislike);
+    }
+
+    #[test]
+    fn test_strip_french_article() {
+        assert_eq!(strip_french_article("Le Scientifique"), "Scientifique");
+        assert_eq!(strip_french_article("La Féministe"), "Féministe");
+        assert_eq!(strip_french_article("L'Avocat du Diable"), "Avocat du Diable");
+        assert_eq!(strip_french_article("Les Experts"), "Experts");
+        assert_eq!(strip_french_article("Dieu"), "Dieu"); // no article
+        assert_eq!(strip_french_article("Satan"), "Satan"); // no article
     }
 }

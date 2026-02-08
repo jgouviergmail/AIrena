@@ -12,6 +12,8 @@ pub struct GladIAteurConfig {
     pub intervention_number: u32,
     pub system_prompt: String,
     pub llm_params: LlmParams,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
 }
 
 #[derive(Debug, Clone)]

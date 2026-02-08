@@ -8,4 +8,16 @@ pub struct PredefinedProfile {
     pub personality: String,
     pub system_prompt: String,
     pub is_builtin: bool,
+    #[serde(default = "default_profile_type")]
+    pub profile_type: String,
+    #[serde(default = "default_category")]
+    pub category: String,
+}
+
+fn default_profile_type() -> String {
+    "gladiateur".to_string()
+}
+
+fn default_category() -> String {
+    "autres".to_string()
 }
