@@ -52,6 +52,14 @@ export async function skipUserTurn(): Promise<void> {
   return await invoke("skip_user_turn");
 }
 
+export async function adjustEmotion(
+  speakerId: string,
+  axis: string,
+  value: number,
+): Promise<void> {
+  return await invoke("adjust_emotion", { speakerId, axis, value });
+}
+
 // -- Ollama commands --
 
 export async function checkOllamaConnection(): Promise<boolean> {

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::discussion::TurnDistribution;
+use super::emotion::{EmotionSnapshot, EmotionalProfile};
 use super::memory::ParticipantMemory;
 use super::settings::LlmParams;
 
@@ -22,6 +23,10 @@ pub struct IArbitreState {
     pub config: IArbitreConfig,
     /// The IArbitre has its own memory
     pub memory: ParticipantMemory,
+    /// Emotional profile of the IArbitre
+    pub emotions: EmotionalProfile,
+    /// Emotion history per turn (capped at 30)
+    pub emotion_history: Vec<EmotionSnapshot>,
 }
 
 impl IArbitreState {
@@ -29,6 +34,8 @@ impl IArbitreState {
         Self {
             config,
             memory: ParticipantMemory::default(),
+            emotions: EmotionalProfile::default(),
+            emotion_history: Vec::new(),
         }
     }
 }

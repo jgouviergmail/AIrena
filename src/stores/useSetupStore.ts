@@ -30,6 +30,7 @@ interface SetupState {
   setMaxTurns: (val: number | null) => void;
   setUserTimeout: (val: number) => void;
   setWebSearchMaxPerGladiateur: (val: number) => void;
+  reorderGladiateurs: (fromIndex: number, toIndex: number) => void;
   buildConfig: (userName: string) => DiscussionConfig;
   reset: () => void;
 }
@@ -96,6 +97,14 @@ export const useSetupStore = create<SetupState>((set, get) => ({
     set((s) => ({
       webSearchMaxPerGladiateur: Math.min(val, s.maxTurns ?? Infinity),
     })),
+
+  reorderGladiateurs: (fromIndex, toIndex) =>
+    set((s) => {
+      const list = [...s.gladiateurs];
+      const [moved] = list.splice(fromIndex, 1);
+      list.splice(toIndex, 0, moved);
+      return { gladiateurs: list };
+    }),
 
   buildConfig: (userName) => {
     const s = get();

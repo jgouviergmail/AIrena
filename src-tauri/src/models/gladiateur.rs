@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::emotion::EmotionalProfile;
+use super::emotion::{EmotionSnapshot, EmotionalProfile};
 use super::memory::ParticipantMemory;
 use super::settings::LlmParams;
 
@@ -14,6 +14,9 @@ pub struct GladIAteurConfig {
     pub llm_params: LlmParams,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji: Option<String>,
+    /// JSON string of initial EmotionalProfile (from predefined profile)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_emotions: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,17 +28,21 @@ pub struct GladIAteurState {
     pub ban_issued_this_turn: bool,
     pub memory: ParticipantMemory,
     pub emotions: EmotionalProfile,
+    /// Emotion history per turn (capped at 30)
+    pub emotion_history: Vec<EmotionSnapshot>,
     pub web_searches_used_discussion: u32,
 }
 
 impl GladIAteurState {
-    pub fn new(config: GladIAteurConfig) -> Self {
+    pub fn new(config: GladIAteurConfig, initial_emotions: Option<EmotionalProfile>) -> Self {
+        let emotions = initial_emotions.unwrap_or_default();
         Self {
             config,
             ban_remaining_turns: 0,
             ban_issued_this_turn: false,
             memory: ParticipantMemory::default(),
-            emotions: EmotionalProfile::default(),
+            emotions,
+            emotion_history: Vec::new(),
             web_searches_used_discussion: 0,
         }
     }

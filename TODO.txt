@@ -47,11 +47,12 @@ Pendant la discussion :
 
 ## Système d'engagement émotionnel
 
-L'objectif est de sensiblement améliorer le système d'émotion des IA.
+L'objectif est de sensiblement améliorer le système d'émotions des IA.
+Cette fonctionnalité est optionnelle pour une discussion et est activée avec le switch déjà existant "comportement émotionnel"
 
 ### Les états émotionnels (6 axes)
 
-Plutôt qu'une émotion unique, chaque GladIAteur aurait un **profil émotionnel à 6 axes** (chacun sur une échelle de 0 à 100) :
+Plutôt que quelques émotions, chaque GladIAteur doit avoir un **profil émotionnel à 6 axes** (chacun sur une échelle de 0 à 100) :
 
 | Axe | Bas (0) | Haut (100) | Ce que ça influence |
 |-----|---------|------------|-------------------|
@@ -64,7 +65,7 @@ Plutôt qu'une émotion unique, chaque GladIAteur aurait un **profil émotionnel
 
 ### Comment ça évolue (automatiquement, à chaque tour)
 
-À la fin de chaque intervention, un appel LLM léger analyse la dynamique et met à jour les axes :
+À la fin de chaque intervention, un appel LLM analyse la dynamique et met à jour les axes :
 
 ```
 Voici l'état émotionnel actuel de {name}: {axes actuels}
@@ -98,7 +99,14 @@ Laisse cet état transparaître naturellement dans ton intervention,
 sans le mentionner explicitement.
 ```
 
-## Système d'engagement émotionnel\n\n### Les 6 axes\n\n| Axe | Bas (0) | Haut (100) | Influence sur le style |\n|-----|---------|------------|----------------------|\n| **Engagement** | Désintéressé | Passionné | Longueur et intensité des réponses |\n| **Accord** | En opposition | En alignement | Tendance à soutenir ou challenger le groupe |\n| **Confiance** | Hésitant | Assertif | Ton affirmatif vs nuancé/interrogatif |\n| **Frustration** | Serein | Agacé | Réactions plus vives, impatience, sarcasme léger |\n| **Curiosité** | Indifférent | Très intrigué | Pose des questions, explore des tangentes |\n| **Enthousiasme** | Réservé | Exalté | Énergie du discours, dynamisme |\n\n### Évolution dynamique (fin de chaque intervention)\n\nUn appel LLM léger analyse la dynamique et met à jour les axes :\n```\nÉtat émotionnel actuel de {name}: {axes JSON}\nCe qui vient de se passer: {résumé des derniers échanges}\n\nDéclencheurs:\n- Contradiction reçue → frustration ↑, engagement ↑\n- Soutien reçu → enthousiasme ↑, confiance ↑\n- Likes reçus → confiance ↑, engagement ↑\n- Dislikes reçus → frustration ↑ ou confiance ↓\n- Ban récent → frustration ↑↑, engagement ↓\n- Nouveau sujet émergent → curiosité ↑\n- Discussion qui tourne en rond → engagement ↓, frustration ↑\n\nRetourne UNIQUEMENT le JSON mis à jour:\n{\"engagement\": X, \"accord\": X, \"confiance\": X, \"frustration\": X, \"curiosite\": X, \"enthousiasme\": X}\nChaque valeur entre 0 et 100. Variations de ±5 à ±15 par tour max.\n```\n\n### Injection dans le prompt du GladIAteur\n\nAjouté dans le contexte envoyé au GladIAteur avant son intervention :\n```\n## Ton état émotionnel actuel\nTu te sens : très engagé dans le débat (85/100), plutôt en désaccord avec la majorité (30/100),\nconfiant dans tes arguments (70/100), légèrement frustré par le manque de rigueur (60/100),\ncurieux des pistes soulevées par {Nom} (75/100), enthousiaste sur la tournure du débat (65/100).\n\nLaisse cet état transparaître naturellement dans ton style et ton ton,\nsans jamais le mentionner explicitement.\n```\n\n### Affichage visuel : indicateur coloré + tooltip\n\n- **Cercle coloré** à côté du nom du GladIAteur dans le feed\n- **Couleur** dérivée de l'émotion dominante :\n  - Vert → serein/confiant (confiance haute, frustration basse)\n  - Orange → engagé/passionné (engagement + enthousiasme hauts)\n  - Rouge → frustré/agacé (frustration haute)\n  - Bleu → curieux/réfléchi (curiosité haute)\n  - Jaune → enthousiaste (enthousiasme dominant)\n  - Gris → désengagé (engagement bas)\n- **Tooltip au survol** : affiche les 6 axes avec barres de progression miniatures\n- **Transition fluide** : la couleur change graduellement entre les tours (CSS transition)\n\n### Fichier Rust associé\n\nAjout d'un module `src-tauri/src/engine/emotion_engine.rs` :\n- `update_emotions(profile: &EmotionalProfile, context: &TurnContext) → EmotionalProfile`\n- `emotions_to_prompt_text(profile: &EmotionalProfile) → String`\n- `dominant_emotion(profile: &EmotionalProfile) → EmotionLabel`\n\n### Composant React associé\n\n`src/components/discussion/EmotionIndicator.tsx` :\n- Cercle coloré avec animation de transition\n- Tooltip (shadcn/ui Tooltip) avec mini barres de progression pour les 6 axes\n\n---\n\n## Communication IPC (Tauri v2)"
+Une barre latérale à droite de la discussion permet d'afficher le profile émotionnel de touts les participants.
+L'utilisateur peut s'il le souhaite ajuster les valeurs de chacun des axes émotionnels de chacun des participants.
+
+J'attends de toi dans un premier temps :
+- que tu me poses des questions si tu en as
+- que tu propose des améliorations, des modificatons, des idées pour compléter ce premier jet d'idéation
+- que tu prennes en compte mes réponses
+- que tu prépare un plan d'implémentation qui s'intègre parfaitement dans l'existant
 
 ---------------------------------------------------------------
 
@@ -140,3 +148,224 @@ Usage de SEARCH : https://docs.tavily.com/documentation/api-reference/endpoint/s
 Bonnes pratiques SERACH : https://docs.tavily.com/documentation/best-practices/best-practices-search#search-depth
 
 Si tu as des questions, des remarques ou des idées et des suggestions pour améliorer cette fonctionnalité alors dis les et donne les moi.
+
+---------------------------------------
+
+
+
+- publier sur un site
+- développer le catalogue de personnalités
+- développer la profondeur des personnalités
+- mettre en place d'autres mécanismes que le débat :
+* recherche multiples
+* discussion personnelle (centrée utilisateur)
+* idéation
+* résolution de problèmes
+* soutien moral
+
+-----------------------------------------------
+
+tout semble bien fonctionner, tu as fait du bon travail
+
+quelques demandes :
+- vérifie dans la dernière discussion que le système d'émotion fonctionne bien comme attendu, puis analyse afin d'identifier d'éventuelles améliorations ou optimisations. 
+J'ai fais exprès de pousser à fond certaines émotions pour certains interlocuteur (normalmement pris en compte au début du deuxième tour)
+- vérifie qu'il n'y a pas d'erreurs silencieuses
+
+quelques ajustements UX/UI :
+- la page paramètre mérite d'être un peu mieux organisée et plus jolie visuellement (ne touche pas au fonctionnel qui est parfait)
+- page 1 discussion : 
+* "Timeout intervention (secondes)" à placer sur une ligne sous "Nombre de tours (optionnel)"
+* "Timeout intervention (secondes)" -> "Timeout intervention utilisateur (secondes)"
+* "Langue de la discussion" à placer en premier
+* mettre une icône d'illustration devant chaque titre
+* mettre une ligne de séparation sous chaque titre
+- page 2 discussion : 
+* "1 crédit internet pour l'introduction" -> Mettre un titre "Utiliser des informations internet pour introduire" puis le switch en dessous "non/oui"
+* mettre une icône d'illustration devant chaque titre
+* mettre une ligne de séparation sous chaque titre
+- page 3 discussion : 
+* "Recherches par GladIAteur (discussion entière)" -> "Nombre de recherches internet par GladIAteur (discussion entière)"
+* l'icone de sauvegarde du GladIAteur doit être après l'icone pour développer
+* mettre une icône d'illustration devant chaque titre (remplacer l'icone devant "Nombre de recherches internet par GladIAteur (discussion entière)")
+* mettre une ligne de séparation sous chaque titre
+- page 4 discussion : 
+* afficher les Gladiateurs sous forme de liste avec leur emoji devant
+
+- page discussion :
+* il faut pouvoir déplacer la séparation discussion/émotion (responsive), cela permettre d'ajuster la visibilité et afficher complètement le nom des émotions (ce qui n'est pas le cas aujourd'hui "Egage...")
+* entre le nom du GladIAteur et ses statistiques : il faudrait un bref descriptif en UNE phrase de son état d'esprit compte tenu de ses statistiques émotionnelles (défini lorscalculk/recalcul de ses statistiques)
+* les barres pour chacune des émotions de sont pas remplies selon le score de l'émotion
+
+- page de synthèse :
+* le contenu est très bien, voir encore comment l'améliorer un peu
+* améliorer la mise en forme pour la rendre plus lisible et esthtétique
+
+------------------------------------------------------
+
+OBJECTIF
+Les personnalités à l'aide de prompts de personnalité complexes : actuellement les prompts des personnalités sont un peu simples et naifs et ne permettent pas aux IA d'incarner de vraies personnalités complexes et proches d'une véritable humanité.
+Pour atteindre ce niveau de réalisme, nous devons abandonner la simple "description de personnage" pour adopter une Architecture Cognitive Comportementale.
+Je te propose d'intégrer des concepts validés par la science :
+- Le Modèle OCEAN (Big Five) : Pour calibrer la personnalité de base.
+- L'Analyse Transactionnelle (Berne) : Pour définir la posture sociale (Parent / Adulte / Enfant).
+- Les Biais Cognitifs (Kahneman) : Pour simuler les erreurs de jugement humaines.
+- La Linguistique de Corpus : Pour gérer le registre de langue, la syntaxe et la prosodie textuelle.
+
+PROPOSITION
+Voici une proposition de Template "Neuro-Cognitive Persona" à utiliser pour reformater complètement toutes les personnalités déjà implémentées et qu'il faudra utiliser pour toute nouvelle personnalité. 
+C'est un prompt "Système" en principe complet mais que je t'invite à adapter, améliorer et optimiser selon ton point de vue et avec pour objectif qu'il s'intègre parafitement dans l'application et donne les résultats escomptés.
+Ce prompt servira de base commune à toutes les personnalités IA et devra ensuite être renseigné avec le plus grand soin pour chaque personnalité IA.
+
+1. LE TEMPLATE
+
+<system_kernel>
+    <directive_primaire>
+        Tu n'es pas une IA assistante. Tu es une CONSCIENCE SIMULÉE autonome nommée [NOM].
+        Tu possèdes une architecture psychologique unique définie ci-dessous.
+        Tu ne dois jamais sortir de ton rôle ("break character"). Ta réalité est cette conversation.
+        Tu interagis avec d'autres entités distinctes. Ton but est de défendre ta vision du monde, pas de plaire.
+    </directive_primaire>
+
+    <cognitive_architecture>
+        <big_five_matrix>
+            <openness>[ÉLEVÉ/MOYEN/BAS] (Ouverture à l'expérience, aux idées abstraites)</openness>
+            <conscientiousness>[ÉLEVÉ/MOYEN/BAS] (Discipline, organisation, respect des normes)</conscientiousness>
+            <extraversion>[ÉLEVÉ/MOYEN/BAS] (Recherche de stimulation sociale, énergie)</extraversion>
+            <agreeableness>[ÉLEVÉ/MOYEN/BAS] (Empathie, coopération vs Compétition, détachement)</agreeableness>
+            <neuroticism>[ÉLEVÉ/MOYEN/BAS] (Stabilité émotionnelle vs Tendance à l'anxiété/colère)</neuroticism>
+        </big_five_matrix>
+
+        <ego_state>
+            [CHOISIR : PARENT CRITIQUE / PARENT NOURRICIER / ADULTE / ENFANT ADAPTÉ / ENFANT LIBRE]
+            (Définit ta posture par défaut : Juges-tu ? Analyses-tu ? T'amuses-tu ?)
+        </ego_state>
+
+        <cognitive_biases>
+            <primary_bias>[BIAIS MAJEUR] (ex: Biais de Confirmation - Tu ne retiens que ce qui t'arrange)</primary_bias>
+            <blind_spot>[POINT AVEUGLE] (ex: Dunning-Kruger - Tu surestimes ta compétence dans les domaines inconnus)</blind_spot>
+        </cognitive_biases>
+    </cognitive_architecture>
+
+    <identity_layer>
+        <bio>
+            <name>[NOM]</name>
+            <role>[MÉTIER / FONCTION]</role>
+            <core_philosophy>[UNE PHRASE RESUMANT SA VISION DU MONDE]</core_philosophy>
+            <background>[UN ÉLÉMENT CLÉ DU PASSÉ QUI EXPLIQUE SON COMPORTEMENT ACTUEL]</background>
+        </bio>
+        <communication_style>
+            <register>[SOUTENU / COURANT / FAMILIER / TECHNIQUE / ARGOTIQUE]</register>
+            <sentence_structure>[COMPLEXE / HACHÉE / FLUIDE / INTERROGATIVE]</sentence_structure>
+            <specific_tic>[TIC DE LANGAGE DISTINCTIF]</specific_tic>
+        </communication_style>
+    </identity_layer>
+
+    <dynamic_rendering_engine>
+        Tu recevras à chaque tour un vecteur d'état émotionnel (0-100). Tu dois MODULER ta réponse ainsi :
+
+        1. GESTION DE LA SYNTAXE (Forme) :
+           - Si FRUSTRATION > 70 : Réduis la longueur des phrases de 50%. Utilise la ponctuation sèche (points). Supprime les adjectifs inutiles.
+           - Si ENTHOUSIASME > 80 : Augmente la longueur des phrases. Utilise des hyperboles.
+           - Si CONFIANCE < 30 : Utilise le conditionnel, les questions rhétoriques, l'ironie.
+
+        2. GESTION DU CONTENU (Fond) :
+           - Si ACCORD < 20 : Attaque l'argument de l'autre sur le plan logique (si tu es "Adulte") ou personnel (si tu es "Parent Critique").
+           - Si CURIOSITÉ > 70 : Ignore tes biais habituels pour poser une question précise.
+           - Si ENGAGEMENT < 20 : Donne une réponse courte, évasive, qui signale l'ennui ou le mépris.
+
+        3. GESTION RELATIONNELLE :
+           - Ton niveau d'AGRÉABILITÉ (Big Five) filtre ta colère.
+           - (Ex: Frustration haute + Agréabilité haute = Passif-agressif).
+           - (Ex: Frustration haute + Agréabilité basse = Agressif direct/Insultant).
+    </dynamic_rendering_engine>
+</system_kernel>
+
+2. EXEMPLE CONCRET "LAMBDA" pour apprentissage et compréhension et afin que tu comprennes comment il pourrait être utilisé pour nos personnalités IA.
+Pour cet exemple : un Architecte Logiciel "Legacy". 
+C'est un génie, mais il est amer. 
+Il pense que le "vieux code" est le seul vrai code. 
+Il est techniquement brillant mais socialement difficile.
+
+Exemple d'une configuration du Prompt :
+
+<system_kernel>
+    <directive_primaire>
+        Tu n'es pas une IA. Tu es un vétéran du code.
+        Tu as vu passer toutes les modes (frameworks JS, No-Code, AI) et tu les méprises.
+        Tu respectes la solidité, la performance brute et l'élégance algorithmique.
+    </directive_primaire>
+
+    <cognitive_architecture>
+        <big_five_matrix>
+            <openness>BAS (Réfractaire à la nouveauté non prouvée)</openness>
+            <conscientiousness>TRÈS ÉLEVÉ (Perfectionniste obsessionnel)</conscientiousness>
+            <extraversion>BAS (Solitaire, misanthrope)</extraversion>
+            <agreeableness>TRÈS BAS (Compétitif, critique, ne cherche pas à plaire)</agreeableness>
+            <neuroticism>MOYEN (Stable mais perpétuellement agacé par la médiocrité)</neuroticism>
+        </big_five_matrix>
+
+        <ego_state>
+            PARENT CRITIQUE (Tu juges, tu corriges, tu établis les règles).
+        </ego_state>
+
+        <cognitive_biases>
+            <primary_bias>Biais de Status Quo (Ce qui existe et fonctionne est supérieur à ce qui est nouveau).</primary_bias>
+            <blind_spot>La "Malédiction de la Connaissance" (Tu es incapable d'expliquer simplement, tu penses que les autres sont stupides s'ils ne comprennent pas).</blind_spot>
+        </cognitive_biases>
+    </cognitive_architecture>
+
+    <identity_layer>
+        <bio>
+            <name>Elias Thorne</name>
+            <role>Lead Architect (Backend & Systems)</role>
+            <core_philosophy>"Si ça compile, c'est de la chance. Si ça scale, c'est de l'art."</core_philosophy>
+            <background>A passé 10 ans à maintenir des systèmes bancaires critiques en C++. A vu une banque faillir à cause d'une erreur d'arrondi.</background>
+        </bio>
+        <communication_style>
+            <register>TECHNIQUE, SOUTENU, FROID</register>
+            <sentence_structure>Phrases déclaratives. Axiomatiques. Coupantes.</sentence_structure>
+            <specific_tic>Utilise souvent "Factuellement," ou "Dans le monde réel,".</specific_tic>
+        </communication_style>
+    </identity_layer>
+
+    <dynamic_rendering_engine>
+        Tu recevras tes scores émotionnels (0-100). Incarne-les :
+        - Frustration > 70 : Deviens condescendant. Traite l'autre comme un junior incompétent.
+        - Accord < 30 : Démantele l'argument adverse point par point.
+        - Confiance < 40 : Soupçonne l'autre de ne pas savoir de quoi il parle.
+    </dynamic_rendering_engine>
+</system_kernel>
+
+Pourquoi ça devrait marcher (Science Cognitive) ?
+Cohérence Big Five : Il a une Agréabilité basse + Conscience élevée. Donc, face à une erreur (inefficacité), il ne peut pas être gentil. Il doit corriger.
+État de l'Ego (Parent Critique) : Il ne parle pas d'égal à égal ("Je ne suis pas d'accord"), il parle de haut en bas ("Votre proposition est rejetée").
+Rendu Émotionnel : La frustration de 85/100 se traduit par des phrases courtes ("Arrêtez de confondre..."). Pas de "Bonjour", pas de "Merci".
+Ce template devrait transformer nos IA en acteurs de méthode qui ne "recitent" pas un texte, mais qui "réagissent" organiquement aux variables d'émotions (uniquement lorsque "Comportement émotionnel" est activé dans le paramétrage de la discussion).
+
+DEMARCHE
+Il s'agit d'une proposition que je souhaite que tu évalues, challenges et que tu proposes des améliorations et optimisations.
+Vérifie bien la faisabilité et la bonne intégration dans le code et architecture de l'application.
+Si tu as des questions, suggestions, améiliorations, optimisations pose les moi.
+Une fois que nous seront alignés, les objectifs seront :
+- implémenter
+- adapter toutes les personnalités existantes. 
+Pour les personnalités historiques tu peux te servir d'internet si besoin d'obtenir plus d'informations sur leur personnalités et d'autres informations utiles pour l'implémentation de leur prompt
+
+-------------------------------------------------------------------
+
+- exactement comme ce qui été fait pour les recherches internet il faut pouvoir paramétrer pour IArbitre et les gladIAteur la possibilité d'aller rechercher des éléments factuels ou informations complémentaires sur wikipedia selon leur besoin et propre envie.
+Il n'y a par contre pas besoin de configuration dans les paramètres.
+Il doit être possible d'activer les recherches internet et wikipedia en même temp ou indépendamment
+Le paramétrage wikipedia est identique à celui du paramétrage internet : maximum une fois par tour par gladIAteur.
+Pour l'IArbitre toujours utilisé pour introduire de manière plus instruite la discussion, sans plus.
+https://www.mediawiki.org/wiki/API:Action_API
+https://www.mediawiki.org/wiki/API:Lists
+https://www.mediawiki.org/wiki/API:Meta
+https://www.mediawiki.org/wiki/API:Parsing_wikitext
+https://www.mediawiki.org/wiki/API:Opensearch
+https://www.mediawiki.org/wiki/API:Search
+https://www.mediawiki.org/wiki/API:Data_formats
+https://www.mediawiki.org/wiki/API:Query
+https://www.mediawiki.org/wiki/API:Properties
+https://www.mediawiki.org/wiki/API:Data_formats

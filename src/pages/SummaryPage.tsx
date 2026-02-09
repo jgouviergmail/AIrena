@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { History, Home, MessageSquarePlus } from "lucide-react";
+import { History, Home, MessageSquarePlus, Bot, Users, Repeat } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { ReadOnlyFeed } from "@/components/discussion/ReadOnlyFeed";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { useSetupStore } from "@/stores/useSetupStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { getProfileEmoji, ROLE_EMOJIS } from "@/lib/profile-emoji";
+import { SimpleMd } from "@/components/shared/SimpleMd";
 import { cn } from "@/lib/utils";
 import type { ParticipantInfo, SpeakerRole } from "@/lib/types";
 
@@ -22,6 +23,7 @@ export default function SummaryPage() {
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
   const arbitre = useSetupStore((s) => s.arbitre);
   const username = useSettingsStore((s) => s.settings.username);
+  const modelName = useSettingsStore((s) => s.settings.ollamaModel);
 
   // Compute turns from messages as robust fallback (currentTurn can be undefined)
   const turnsCompleted = currentTurn
@@ -61,19 +63,45 @@ export default function SummaryPage() {
         <div className="mx-auto max-w-2xl space-y-6">
           {/* Stats */}
           <div className="space-y-3">
-            <StatCard
-              label={t("summary.topic")}
-              value={topic || "-"}
-            />
-            <div className="grid grid-cols-2 gap-3">
+            {/* Topic — prominent */}
+            <div className="rounded-xl border border-border bg-card p-4">
+              <p className="text-xs text-muted-foreground">{t("summary.topic")}</p>
+              <p className="mt-1 text-base font-semibold text-foreground">{topic || "-"}</p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
               <StatCard
                 label={t("summary.turns")}
                 value={String(turnsCompleted)}
+                icon={<Repeat className="h-3.5 w-3.5 text-muted-foreground" />}
               />
               <StatCard
-                label={t("summary.participants")}
-                value={String(gladiateurs.length)}
+                label={t("summary.model")}
+                value={modelName || "-"}
+                icon={<Bot className="h-3.5 w-3.5 text-muted-foreground" />}
+                truncate
               />
+              <StatCard
+                label={t("summary.participantsList")}
+                value={String(gladiateurs.length)}
+                icon={<Users className="h-3.5 w-3.5 text-muted-foreground" />}
+              />
+            </div>
+
+            {/* Participants with emojis */}
+            <div className="rounded-xl border border-border bg-card p-4">
+              <p className="mb-2 text-xs text-muted-foreground">{t("summary.participantsList")}</p>
+              <div className="flex flex-wrap gap-3">
+                {participants.map((p) => (
+                  <div key={p.id} className="flex items-center gap-1.5 text-sm text-foreground">
+                    <span>{p.emoji}</span>
+                    <span className="font-medium">{p.name}</span>
+                    {p.role === "IArbitre" && (
+                      <span className="rounded bg-primary/10 px-1 text-[9px] font-medium text-primary">IArbitre</span>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -105,15 +133,15 @@ export default function SummaryPage() {
 
           {/* Tab content */}
           {tab === "synthesis" ? (
-            <div className="rounded-lg border border-border bg-card p-6">
+            <div className="rounded-xl border border-border bg-card p-6">
               <h2 className="mb-4 text-lg font-semibold text-foreground">
                 {t("summary.tabSynthesis")}
               </h2>
-              <div className="prose prose-sm max-w-none text-sm text-foreground">
-                <p className="whitespace-pre-wrap">
-                  {synthesis || t("summary.noSynthesis")}
-                </p>
-              </div>
+              {synthesis ? (
+                <SimpleMd text={synthesis} />
+              ) : (
+                <p className="text-sm text-muted-foreground">{t("summary.noSynthesis")}</p>
+              )}
             </div>
           ) : (
             <ReadOnlyFeed messages={messages} participants={participants} />
@@ -152,15 +180,20 @@ export default function SummaryPage() {
 function StatCard({
   label,
   value,
+  icon,
   truncate,
 }: {
   label: string;
   value: string;
+  icon?: React.ReactNode;
   truncate?: boolean;
 }) {
   return (
-    <div className="rounded-lg border border-border bg-card p-3 text-center">
-      <p className="text-xs text-muted-foreground">{label}</p>
+    <div className="rounded-xl border border-border bg-card p-3 text-center">
+      <div className="flex items-center justify-center gap-1">
+        {icon}
+        <p className="text-xs text-muted-foreground">{label}</p>
+      </div>
       <p
         className={`mt-1 text-sm font-semibold text-foreground ${truncate ? "truncate" : ""}`}
         title={truncate ? value : undefined}
@@ -170,3 +203,4 @@ function StatCard({
     </div>
   );
 }
+

@@ -61,6 +61,8 @@
     "tavilyUsageCount": "Crédits utilisés",
     "tavilyHistory": "Historique d'utilisation",
     "tavilyNoHistory": "Aucun historique",
+    "tavilyFree": "gratuits",
+    "tavilyCurrentPeriod": "Période en cours (depuis le {{start}}) — {{count}} crédit(s)",
     "tavilyPeriodEntry": "Du {{start}} au {{end}} — {{count}} crédit(s)"
   },
   "setup": {
@@ -99,7 +101,7 @@
     "repeatPenalty": "Pénalité de répétition",
     "maxTurns": "Nombre de tours (optionnel)",
     "maxTurnsPlaceholder": "Illimité",
-    "userTimeout": "Timeout intervention (secondes)",
+    "userTimeout": "Timeout intervention utilisateur (secondes)",
     "summary": "Récapitulatif",
     "minGladiateurs": "Au moins 1 GladIAteur requis",
     "emojiAuto": "Auto",
@@ -123,10 +125,13 @@
     "deleteProfile": "Supprimer ce profil",
     "webSearch": "Recherche Internet",
     "arbitreWebSearchIntro": "1 crédit internet pour l'introduction",
-    "webSearchMaxPerGladiateur": "Recherches par GladIAteur (discussion entière)",
+    "arbitreWebSearchTitle": "Utiliser des informations internet pour introduire",
+    "webSearchMaxPerGladiateur": "Nombre de recherches internet par GladIAteur (discussion entière)",
     "webSearchMaxPerGladiateurDesc": "Max 1 recherche par tour, maximum {{max}} pour la discussion",
     "webSearchBudget": "Budget total : {{count}} recherche(s)",
-    "webSearchNoKey": "Configurez votre clé API Tavily dans les paramètres"
+    "webSearchNoKey": "Configurez votre clé API Tavily dans les paramètres",
+    "switchNo": "Non",
+    "switchYes": "Oui"
   },
   "arena": {
     "title": "Discussion en cours",
@@ -166,7 +171,10 @@
     "noSynthesis": "(Aucune synthèse disponible)",
     "tabSynthesis": "Synthèse",
     "tabDiscussion": "Discussion complète",
-    "viewHistory": "Historique"
+    "viewHistory": "Historique",
+    "model": "Modèle",
+    "participantsList": "Participants",
+    "date": "Date"
   },
   "history": {
     "title": "Historique des discussions",
@@ -185,7 +193,28 @@
     "confiance": "Confiance",
     "frustration": "Frustration",
     "curiosite": "Curiosité",
-    "enthousiasme": "Enthousiasme"
+    "enthousiasme": "Enthousiasme",
+    "sidebar": {
+      "title": "États émotionnels",
+      "collapse": "Réduire",
+      "expand": "Développer",
+      "disabledNote": "Émotions suivies mais n'influencent pas le comportement"
+    },
+    "threshold": {
+      "frustrationHigh": "Au bord de l'exaspération",
+      "engagementLow": "Détaché du débat",
+      "confianceHigh": "Ultra-assertif",
+      "confianceLow": "En proie au doute",
+      "curiositeHigh": "Fasciné, explore des tangentes",
+      "enthousiasmeHigh": "Exalté et survolté"
+    },
+    "levels": {
+      "veryLow": "Très bas",
+      "low": "Bas",
+      "neutral": "Neutre",
+      "high": "Élevé",
+      "veryHigh": "Très élevé"
+    }
   },
   "errors": {
     "ollamaConnection": "Impossible de se connecter à Ollama",

@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use serde::de::DeserializeOwned;
 
+use crate::models::emotion::EmotionDelta;
 use crate::models::message::ReactionType;
 use crate::models::moderation::{ModerationResult, RawReaction};
 
@@ -265,6 +268,27 @@ pub fn match_speaker_name<'a>(llm_name: &str, known_names: &'a [String]) -> Opti
                 None
             }
         })
+}
+
+/// Parse LLM emotion deltas: `{"Speaker Name": {"engagement": 5, "accord": -3, ...}, ...}`
+/// Uses fuzzy name matching to resolve speaker names.
+pub fn parse_emotion_deltas(
+    raw: &str,
+    known_speakers: &[String],
+) -> HashMap<String, EmotionDelta> {
+    let mut result = HashMap::new();
+
+    // Try parsing as HashMap<String, EmotionDelta>
+    let parsed: Option<HashMap<String, EmotionDelta>> = parse_json_response(raw).ok();
+    if let Some(map) = parsed {
+        for (llm_name, delta) in map {
+            if let Some(matched) = match_speaker_name(&llm_name, known_speakers) {
+                result.insert(matched.clone(), delta);
+            }
+        }
+    }
+
+    result
 }
 
 fn validate_reactions(raw: Vec<RawReaction>, known_speakers: &[String]) -> Vec<ParsedReaction> {

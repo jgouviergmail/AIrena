@@ -1,3 +1,4 @@
+use crate::engine::emotion_engine::{HIGH_THRESHOLD, LOW_THRESHOLD};
 use crate::models::emotion::EmotionalProfile;
 use crate::models::memory::ParticipantMemory;
 use crate::models::message::{Message, SpeakerRole};
@@ -122,10 +123,13 @@ pub fn build_thought_prompt(
 ) -> String {
     let emotion_suffix = if emotion_driven {
         let desc = describe_emotions(emotions, discussion_language);
+        let threshold = build_threshold_instructions(emotions, discussion_language)
+            .map(|t| format!(" {}", t))
+            .unwrap_or_default();
         match discussion_language {
-            "en" => format!("\n\nYour emotional state: {}", desc),
-            "zh" => format!("\n\n你的情绪状态：{}", desc),
-            _ => format!("\n\nTon état émotionnel : {}", desc),
+            "en" => format!("\n\nYour emotional state: {}{}", desc, threshold),
+            "zh" => format!("\n\n你的情绪状态：{}{}", desc, threshold),
+            _ => format!("\n\nTon état émotionnel : {}{}", desc, threshold),
         }
     } else {
         String::new()
@@ -372,7 +376,12 @@ CRITIQUE : Ne te réfère JAMAIS à toi-même à la troisième personne. Tu parl
             "zh" => "你的情绪状态",
             _ => "Ton état émotionnel",
         };
-        user_msg.push_str(&format!("[{}] {}\n\n", emotion_label, emotion_desc));
+        user_msg.push_str(&format!("[{}] {}\n", emotion_label, emotion_desc));
+        if let Some(threshold) = build_threshold_instructions(emotions, discussion_language) {
+            user_msg.push_str(&threshold);
+            user_msg.push('\n');
+        }
+        user_msg.push('\n');
     }
 
     // Detect if this is the first speaker with no prior context
@@ -505,6 +514,7 @@ pub fn build_moderation_prompt(
              - \"comment\": brief useful comment (1-2 sentences)\n\
              - \"ban\": clearly off topic or repeatedly non-constructive\n\
              - \"ban_duration\": 1, 2 or 3 (number of turns)\n\n\
+             IMPORTANT: Write ALL text values (\"comment\" and \"ban_reason\") in English.\n\
              Respond ONLY with the JSON, no text before or after.",
             speaker_name, intervention_text, topic
         ),
@@ -521,6 +531,7 @@ pub fn build_moderation_prompt(
              - \"comment\"：简短有用的评论（1-2句）\n\
              - \"ban\"：明显偏题或反复非建设性\n\
              - \"ban_duration\"：1、2或3（轮数）\n\n\
+             重要：所有文本值（\"comment\"和\"ban_reason\"）必须用中文书写。\n\
              仅用JSON回复。",
             speaker_name, intervention_text, topic
         ),
@@ -537,6 +548,7 @@ pub fn build_moderation_prompt(
              - \"comment\" : bref commentaire utile (1-2 phrases)\n\
              - \"ban\" : clairement hors sujet ou non constructif de manière répétée\n\
              - \"ban_duration\" : 1, 2 ou 3 (nombre de tours)\n\n\
+             IMPORTANT : Rédige TOUTES les valeurs texte (\"comment\" et \"ban_reason\") en français.\n\
              Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.",
             speaker_name, intervention_text, topic
         ),
@@ -652,90 +664,171 @@ pub fn build_synthesis_prompt(
     }
 }
 
-/// Describe emotions as text for prompt injection
+/// Describe emotions as rich text for prompt injection.
+/// Only mentions non-neutral axes (< 40 or > 60) for conciseness.
 pub fn describe_emotions(emotions: &EmotionalProfile, lang: &str) -> String {
-    let dominant = get_dominant_emotion(emotions, lang);
-    match lang {
-        "en" => format!(
-            "Engagement: {}/100, Agreement: {}/100, Confidence: {}/100, \
-             Frustration: {}/100, Curiosity: {}/100, Enthusiasm: {}/100 (dominant: {})",
-            emotions.engagement,
-            emotions.accord,
-            emotions.confiance,
-            emotions.frustration,
-            emotions.curiosite,
-            emotions.enthousiasme,
-            dominant
-        ),
-        "zh" => format!(
-            "投入度: {}/100, 赞同度: {}/100, 信心: {}/100, \
-             挫败感: {}/100, 好奇心: {}/100, 热情: {}/100 (主导: {})",
-            emotions.engagement,
-            emotions.accord,
-            emotions.confiance,
-            emotions.frustration,
-            emotions.curiosite,
-            emotions.enthousiasme,
-            dominant
-        ),
-        _ => format!(
-            "Engagement: {}/100, Accord: {}/100, Confiance: {}/100, \
-             Frustration: {}/100, Curiosité: {}/100, Enthousiasme: {}/100 (dominant: {})",
-            emotions.engagement,
-            emotions.accord,
-            emotions.confiance,
-            emotions.frustration,
-            emotions.curiosite,
-            emotions.enthousiasme,
-            dominant
-        ),
+    let axes: [(u8, &str, &str, &str); 6] = [
+        (emotions.engagement, "engagement", "engagement", "投入度"),
+        (emotions.accord, "accord", "agreement", "赞同度"),
+        (emotions.confiance, "confiance", "confidence", "信心"),
+        (emotions.frustration, "frustration", "frustration", "挫败感"),
+        (emotions.curiosite, "curiosité", "curiosity", "好奇心"),
+        (emotions.enthousiasme, "enthousiasme", "enthusiasm", "热情"),
+    ];
+
+    let mut parts = Vec::new();
+    for (val, fr_name, en_name, zh_name) in &axes {
+        let desc = match lang {
+            "en" => describe_axis_en(*val, en_name),
+            "zh" => describe_axis_zh(*val, zh_name),
+            _ => describe_axis_fr(*val, fr_name),
+        };
+        if let Some(d) = desc {
+            parts.push(d);
+        }
+    }
+
+    if parts.is_empty() {
+        match lang {
+            "en" => "You are in a neutral emotional state.".to_string(),
+            "zh" => "你的情绪状态平稳。".to_string(),
+            _ => "Tu es dans un état émotionnel neutre.".to_string(),
+        }
+    } else {
+        parts.join(" ")
     }
 }
 
-/// Get the name of the dominant emotion in the appropriate language
-pub fn get_dominant_emotion(emotions: &EmotionalProfile, lang: &str) -> &'static str {
-    let idx = [
-        emotions.engagement,
-        emotions.accord,
-        emotions.confiance,
-        emotions.frustration,
-        emotions.curiosite,
-        emotions.enthousiasme,
-    ]
-    .iter()
-    .enumerate()
-    .max_by_key(|(_, v)| **v)
-    .map(|(i, _)| i)
-    .unwrap_or(0);
+fn describe_axis_fr(val: u8, name: &str) -> Option<String> {
+    match val {
+        0..=20 => Some(format!("Tu ressens très peu de {} ({}/100).", name, val)),
+        21..=40 => Some(format!("Ton {} est plutôt bas ({}/100).", name, val)),
+        61..=80 => Some(format!("Tu es assez haut en {} ({}/100).", name, val)),
+        81..=100 => Some(format!("Tu es intensément habité par le/la {} ({}/100).", name, val)),
+        _ => None, // 41-60: neutral, skip
+    }
+}
 
+fn describe_axis_en(val: u8, name: &str) -> Option<String> {
+    match val {
+        0..=20 => Some(format!("You feel very low {} ({}/100).", name, val)),
+        21..=40 => Some(format!("Your {} is rather low ({}/100).", name, val)),
+        61..=80 => Some(format!("You feel fairly high {} ({}/100).", name, val)),
+        81..=100 => Some(format!("You are intensely experiencing {} ({}/100).", name, val)),
+        _ => None,
+    }
+}
+
+fn describe_axis_zh(val: u8, name: &str) -> Option<String> {
+    match val {
+        0..=20 => Some(format!("你的{}非常低 ({}/100)。", name, val)),
+        21..=40 => Some(format!("你的{}偏低 ({}/100)。", name, val)),
+        61..=80 => Some(format!("你的{}较高 ({}/100)。", name, val)),
+        81..=100 => Some(format!("你的{}非常强烈 ({}/100)。", name, val)),
+        _ => None,
+    }
+}
+
+/// Build threshold-specific behavior instructions (only when above/below critical values).
+/// Returns None if no threshold is crossed.
+pub fn build_threshold_instructions(emotions: &EmotionalProfile, lang: &str) -> Option<String> {
+    let mut instructions = Vec::new();
+
+    if emotions.frustration > HIGH_THRESHOLD {
+        instructions.push(match lang {
+            "en" => "You are at the edge of exasperation. Your interventions become cutting and direct. You are losing patience.".to_string(),
+            "zh" => "你已接近崩溃边缘。你的发言变得尖锐直接，你正在失去耐心。".to_string(),
+            _ => "Tu es au bord de l'exaspération. Tes interventions deviennent cassantes et directes. Tu perds patience.".to_string(),
+        });
+    }
+    if emotions.engagement < LOW_THRESHOLD {
+        instructions.push(match lang {
+            "en" => "You feel detached from the debate. Your responses are short and distant.".to_string(),
+            "zh" => "你对辩论感到疏离。你的回答简短而冷淡。".to_string(),
+            _ => "Tu te sens détaché du débat. Tes réponses sont courtes et distantes.".to_string(),
+        });
+    }
+    if emotions.confiance > HIGH_THRESHOLD {
+        instructions.push(match lang {
+            "en" => "You are ultra-assertive. You affirm with authority and conviction.".to_string(),
+            "zh" => "你极度自信。你以权威和信念来断言。".to_string(),
+            _ => "Tu es ultra-assertif. Tu affirmes avec autorité et conviction.".to_string(),
+        });
+    }
+    if emotions.confiance < LOW_THRESHOLD {
+        instructions.push(match lang {
+            "en" => "You doubt yourself. You nuance excessively and hedge your statements.".to_string(),
+            "zh" => "你在怀疑自己。你过度地修饰和犹豫。".to_string(),
+            _ => "Tu doutes de toi. Tu nuances excessivement et hésites dans tes propos.".to_string(),
+        });
+    }
+    if emotions.curiosite > HIGH_THRESHOLD {
+        instructions.push(match lang {
+            "en" => "You are fascinated. You ask many questions and explore tangents.".to_string(),
+            "zh" => "你非常着迷。你提很多问题并探索各种切入点。".to_string(),
+            _ => "Tu es fasciné. Tu poses beaucoup de questions et explores des tangentes.".to_string(),
+        });
+    }
+    if emotions.enthousiasme > HIGH_THRESHOLD {
+        instructions.push(match lang {
+            "en" => "You are elated. You express yourself with energy and exclamations.".to_string(),
+            "zh" => "你非常兴奋。你用充沛的精力和感叹来表达自己。".to_string(),
+            _ => "Tu es exalté. Tu t'exprimes avec énergie et exclamations.".to_string(),
+        });
+    }
+
+    if instructions.is_empty() {
+        None
+    } else {
+        Some(instructions.join(" "))
+    }
+}
+
+/// Build the prompt for LLM-based emotion analysis of all participants.
+/// Returns a single prompt that asks for signed deltas for each participant.
+pub fn build_emotion_analysis_prompt(
+    participants_json: &str,
+    recent_context: &str,
+    events_summary: &str,
+    lang: &str,
+) -> String {
     match lang {
-        "en" => match idx {
-            0 => "engagement",
-            1 => "agreement",
-            2 => "confidence",
-            3 => "frustration",
-            4 => "curiosity",
-            5 => "enthusiasm",
-            _ => "neutral",
-        },
-        "zh" => match idx {
-            0 => "投入",
-            1 => "赞同",
-            2 => "信心",
-            3 => "挫败",
-            4 => "好奇",
-            5 => "热情",
-            _ => "中立",
-        },
-        _ => match idx {
-            0 => "engagement",
-            1 => "accord",
-            2 => "confiance",
-            3 => "frustration",
-            4 => "curiosité",
-            5 => "enthousiasme",
-            _ => "neutre",
-        },
+        "en" => format!(
+            "Analyze the emotional evolution of each participant based on the recent exchanges.\n\n\
+             Participants and their current emotions:\n{}\n\n\
+             Recent exchanges:\n{}\n\n\
+             Events this turn:\n{}\n\n\
+             For EACH participant, provide signed deltas (positive or negative integers) for how their emotions should change.\n\
+             Keep deltas in the range [-15, +15]. Use 0 for axes that shouldn't change.\n\
+             Consider: tone, content, reactions received, contradictions, support, engagement level.\n\n\
+             Respond with ONLY a JSON object:\n\
+             {{\"Participant Name\": {{\"engagement\": 0, \"accord\": 0, \"confiance\": 0, \"frustration\": 0, \"curiosite\": 0, \"enthousiasme\": 0}}, ...}}",
+            participants_json, recent_context, events_summary
+        ),
+        "zh" => format!(
+            "根据最近的对话分析每位参与者的情绪变化。\n\n\
+             参与者及其当前情绪：\n{}\n\n\
+             最近的对话：\n{}\n\n\
+             本轮事件：\n{}\n\n\
+             为每位参与者提供情绪变化的有符号增量（正数或负数整数）。\n\
+             增量范围为 [-15, +15]。如果某个轴不需要变化，使用 0。\n\
+             考虑：语气、内容、收到的反应、矛盾、支持、参与程度。\n\n\
+             仅用 JSON 对象回复：\n\
+             {{\"参与者名称\": {{\"engagement\": 0, \"accord\": 0, \"confiance\": 0, \"frustration\": 0, \"curiosite\": 0, \"enthousiasme\": 0}}, ...}}",
+            participants_json, recent_context, events_summary
+        ),
+        _ => format!(
+            "Analyse l'évolution émotionnelle de chaque participant en fonction des échanges récents.\n\n\
+             Participants et leurs émotions actuelles :\n{}\n\n\
+             Échanges récents :\n{}\n\n\
+             Événements de ce tour :\n{}\n\n\
+             Pour CHAQUE participant, fournis des deltas signés (entiers positifs ou négatifs) pour chaque axe émotionnel.\n\
+             Garde les deltas dans la plage [-15, +15]. Utilise 0 pour les axes qui ne changent pas.\n\
+             Prends en compte : le ton, le contenu, les réactions reçues, les contradictions, le soutien, le niveau d'engagement.\n\n\
+             Réponds UNIQUEMENT avec un objet JSON :\n\
+             {{\"Nom du Participant\": {{\"engagement\": 0, \"accord\": 0, \"confiance\": 0, \"frustration\": 0, \"curiosite\": 0, \"enthousiasme\": 0}}, ...}}",
+            participants_json, recent_context, events_summary
+        ),
     }
 }
 
@@ -1107,9 +1200,197 @@ pub fn build_datetime_context(discussion_language: &str) -> String {
     }
 }
 
+/// Generate a short mood sentence based on the most extreme emotional axes.
+/// Used to display a brief text under each participant in the emotion sidebar.
+/// Returns a varied, full constructed sentence.
+pub fn summarize_emotional_state(emotions: &EmotionalProfile, lang: &str) -> String {
+    // Deterministic seed from all emotion values for variant selection
+    let seed = (emotions.engagement as usize)
+        .wrapping_mul(7)
+        .wrapping_add(emotions.accord as usize)
+        .wrapping_mul(13)
+        .wrapping_add(emotions.confiance as usize)
+        .wrapping_mul(17)
+        .wrapping_add(emotions.frustration as usize)
+        .wrapping_mul(23)
+        .wrapping_add(emotions.curiosite as usize)
+        .wrapping_mul(29)
+        .wrapping_add(emotions.enthousiasme as usize);
+
+    fn pick<'a>(options: &'a [&'a str], seed: usize) -> &'a str {
+        options[seed % options.len()]
+    }
+
+    // Collect axes with their distance from neutral (50)
+    let axes: [(&str, u8); 6] = [
+        ("frustration", emotions.frustration),
+        ("enthousiasme", emotions.enthousiasme),
+        ("engagement", emotions.engagement),
+        ("curiosite", emotions.curiosite),
+        ("confiance", emotions.confiance),
+        ("accord", emotions.accord),
+    ];
+
+    // Sort by distance from 50, descending
+    let mut sorted = axes;
+    sorted.sort_by(|a, b| {
+        let da = (a.1 as i16 - 50).unsigned_abs();
+        let db = (b.1 as i16 - 50).unsigned_abs();
+        db.cmp(&da)
+    });
+
+    // Collect phrase fragments for up to 2 most extreme axes
+    let mut phrases: Vec<&str> = Vec::new();
+
+    for (i, &(axis, val)) in sorted.iter().take(2).enumerate() {
+        let v = seed.wrapping_add(i * 37); // shift variant per axis position
+        let phrase = match (axis, val) {
+            ("frustration", fv) if fv >= 70 => match lang {
+                "en" => pick(&["tense and irritated", "frustrated by the exchanges", "visibly on edge"], v),
+                "zh" => pick(&["紧张且烦躁", "对交流感到不满", "明显焦躁不安"], v),
+                _ => pick(&["tendu et agacé", "irrité par les échanges", "au bord de l'exaspération"], v),
+            },
+            ("frustration", fv) if fv <= 20 => match lang {
+                "en" => pick(&["calm and serene", "relaxed and at ease", "perfectly composed"], v),
+                "zh" => pick(&["平静而从容", "放松自在", "泰然自若"], v),
+                _ => pick(&["calme et serein", "détendu et apaisé", "parfaitement posé"], v),
+            },
+            ("enthousiasme", ev) if ev >= 70 => match lang {
+                "en" => pick(&["enthusiastic about the discussion", "fired up by the debate", "brimming with energy"], v),
+                "zh" => pick(&["对讨论充满热情", "被辩论所激发", "精力充沛"], v),
+                _ => pick(&["enthousiasmé par les échanges", "porté par l'élan du débat", "galvanisé par la discussion"], v),
+            },
+            ("enthousiasme", ev) if ev <= 30 => match lang {
+                "en" => pick(&["lacking enthusiasm", "somewhat indifferent", "showing little energy"], v),
+                "zh" => pick(&["缺乏热情", "显得漠不关心", "了无生气"], v),
+                _ => pick(&["peu enthousiaste", "assez indifférent", "sans entrain particulier"], v),
+            },
+            ("engagement", ev) if ev >= 70 => match lang {
+                "en" => pick(&["deeply invested in the debate", "fully engaged", "absorbed in the discussion"], v),
+                "zh" => pick(&["深入参与辩论", "全身心投入", "沉浸在讨论中"], v),
+                _ => pick(&["très investi dans le débat", "pleinement engagé", "absorbé par la discussion"], v),
+            },
+            ("engagement", ev) if ev <= 30 => match lang {
+                "en" => pick(&["detached from the discussion", "somewhat disengaged", "losing interest"], v),
+                "zh" => pick(&["对讨论超然", "有些心不在焉", "渐失兴趣"], v),
+                _ => pick(&["détaché de la discussion", "en retrait du débat", "de plus en plus distant"], v),
+            },
+            ("curiosite", cv) if cv >= 70 => match lang {
+                "en" => pick(&["very curious about the arguments", "intrigued by the ideas", "eager to explore further"], v),
+                "zh" => pick(&["对论点非常好奇", "被各种观点所吸引", "渴望深入探究"], v),
+                _ => pick(&["très curieux des arguments avancés", "intrigué par les idées échangées", "avide de comprendre"], v),
+            },
+            ("curiosite", cv) if cv <= 30 => match lang {
+                "en" => pick(&["showing little curiosity", "unimpressed by the arguments", "not particularly intrigued"], v),
+                "zh" => pick(&["缺乏好奇心", "对论点不以为然", "兴趣索然"], v),
+                _ => pick(&["peu curieux", "pas vraiment intrigué", "indifférent aux arguments"], v),
+            },
+            ("confiance", cv) if cv >= 70 => match lang {
+                "en" => pick(&["confident in their position", "assertive and self-assured", "unwavering in conviction"], v),
+                "zh" => pick(&["对自己的立场充满信心", "态度坚定而自信", "立场坚定不移"], v),
+                _ => pick(&["confiant dans sa position", "assuré et déterminé", "sûr de son fait"], v),
+            },
+            ("confiance", cv) if cv <= 30 => match lang {
+                "en" => pick(&["hesitant and uncertain", "second-guessing their position", "lacking conviction"], v),
+                "zh" => pick(&["犹豫不决", "在质疑自己的立场", "缺乏信念"], v),
+                _ => pick(&["hésitant et incertain", "en proie au doute", "peu sûr de lui"], v),
+            },
+            ("accord", av) if av >= 70 => match lang {
+                "en" => pick(&["in agreement with the others", "finding common ground", "largely aligned with the group"], v),
+                "zh" => pick(&["与他人意见一致", "找到了共识", "基本认同大家的观点"], v),
+                _ => pick(&["en accord avec les autres", "dans un esprit de consensus", "aligné avec le groupe"], v),
+            },
+            ("accord", av) if av <= 30 => match lang {
+                "en" => pick(&["in strong disagreement", "at odds with the group", "firmly opposed"], v),
+                "zh" => pick(&["强烈反对", "与大家意见相左", "立场对立"], v),
+                _ => pick(&["en net désaccord", "en opposition franche", "réfractaire aux idées avancées"], v),
+            },
+            _ => continue,
+        };
+        phrases.push(phrase);
+    }
+
+    // Neutral fallback
+    if phrases.is_empty() {
+        return match lang {
+            "en" => pick(&["Appears composed and attentive.", "Seems calm and focused.", "Looks measured and collected."], seed),
+            "zh" => pick(&["表现冷静而专注。", "显得沉着冷静。", "看起来从容不迫。"], seed),
+            _ => pick(&["Semble posé et attentif.", "Paraît calme et concentré.", "Se montre mesuré et à l'écoute."], seed),
+        }.to_string();
+    }
+
+    // Varied sentence starters
+    let starters_fr = ["Semble", "Paraît", "Se montre", "A l'air"];
+    let starters_en = ["Seems", "Appears", "Feels", "Looks"];
+    let starters_zh = ["看起来", "显得", "表现得"];
+
+    let starter = match lang {
+        "en" => pick(&starters_en, seed),
+        "zh" => pick(&starters_zh, seed),
+        _ => pick(&starters_fr, seed),
+    };
+
+    let body = if phrases.len() == 1 {
+        phrases[0].to_string()
+    } else {
+        match lang {
+            "zh" => format!("{}，{}", phrases[0], phrases[1]),
+            _ => format!("{}, {}", phrases[0], phrases[1]),
+        }
+    };
+
+    match lang {
+        "zh" => format!("{}{}。", starter, body),
+        _ => format!("{} {}.", starter, body),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_summarize_emotional_state_neutral() {
+        let emo = EmotionalProfile::default();
+        let result = summarize_emotional_state(&emo, "fr");
+        // Default emotions: engagement=50, accord=50, confiance=50, frustration=10, curiosite=50, enthousiasme=50
+        // frustration=10 is far from 50, so it should pick up a calm/serene variant
+        let has_calm = result.contains("serein") || result.contains("détendu") || result.contains("posé");
+        assert!(has_calm, "Expected a calm phrase variant, got: {result}");
+        assert!(result.ends_with('.'), "Expected sentence ending with '.', got: {result}");
+    }
+
+    #[test]
+    fn test_summarize_emotional_state_frustrated() {
+        let emo = EmotionalProfile { frustration: 90, ..Default::default() };
+        let result = summarize_emotional_state(&emo, "en");
+        let has_frustrated = result.contains("tense") || result.contains("frustrated") || result.contains("edge");
+        assert!(has_frustrated, "Expected a frustrated phrase variant, got: {result}");
+        assert!(result.ends_with('.'), "Expected sentence ending with '.', got: {result}");
+    }
+
+    #[test]
+    fn test_summarize_emotional_state_multiple() {
+        let emo = EmotionalProfile { frustration: 90, engagement: 10, ..Default::default() };
+        let result = summarize_emotional_state(&emo, "fr");
+        let has_frustrated = result.contains("tendu") || result.contains("irrité") || result.contains("exaspération");
+        let has_detached = result.contains("détaché") || result.contains("retrait") || result.contains("distant");
+        assert!(has_frustrated, "Expected a frustrated phrase variant, got: {result}");
+        assert!(has_detached, "Expected a detached phrase variant, got: {result}");
+        assert!(result.ends_with('.'), "Expected sentence ending with '.', got: {result}");
+    }
+
+    #[test]
+    fn test_summarize_emotional_state_variety() {
+        // Different emotion values should produce different starters/phrases
+        let emo1 = EmotionalProfile { frustration: 80, engagement: 75, ..Default::default() };
+        let emo2 = EmotionalProfile { frustration: 80, engagement: 80, ..Default::default() };
+        let r1 = summarize_emotional_state(&emo1, "fr");
+        let r2 = summarize_emotional_state(&emo2, "fr");
+        // Both should be valid sentences but may differ
+        assert!(r1.ends_with('.'));
+        assert!(r2.ends_with('.'));
+    }
 
     #[test]
     fn test_build_datetime_context_fr() {

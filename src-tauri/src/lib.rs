@@ -90,6 +90,7 @@ pub fn run() {
             commands::discussion::user_wants_to_intervene,
             commands::discussion::submit_user_message,
             commands::discussion::skip_user_turn,
+            commands::discussion::adjust_emotion,
             // Ollama commands
             commands::ollama::check_ollama_connection,
             commands::ollama::list_ollama_models,

@@ -61,6 +61,8 @@
     "tavilyUsageCount": "Credits used",
     "tavilyHistory": "Usage history",
     "tavilyNoHistory": "No history",
+    "tavilyFree": "free",
+    "tavilyCurrentPeriod": "Current period (since {{start}}) — {{count}} credit(s)",
     "tavilyPeriodEntry": "From {{start}} to {{end}} — {{count}} credit(s)"
   },
   "setup": {
@@ -99,7 +101,7 @@
     "repeatPenalty": "Repeat penalty",
     "maxTurns": "Number of turns (optional)",
     "maxTurnsPlaceholder": "Unlimited",
-    "userTimeout": "Intervention timeout (seconds)",
+    "userTimeout": "User intervention timeout (seconds)",
     "summary": "Summary",
     "minGladiateurs": "At least 1 GladIAteur required",
     "emojiAuto": "Auto",
@@ -123,10 +125,13 @@
     "deleteProfile": "Delete this profile",
     "webSearch": "Internet Search",
     "arbitreWebSearchIntro": "1 internet credit for introduction",
-    "webSearchMaxPerGladiateur": "Searches per GladIAteur (entire discussion)",
+    "arbitreWebSearchTitle": "Use internet information for introduction",
+    "webSearchMaxPerGladiateur": "Number of internet searches per GladIAteur (entire discussion)",
     "webSearchMaxPerGladiateurDesc": "Max 1 search per turn, maximum {{max}} for the discussion",
     "webSearchBudget": "Total budget: {{count}} search(es)",
-    "webSearchNoKey": "Configure your Tavily API key in Settings"
+    "webSearchNoKey": "Configure your Tavily API key in Settings",
+    "switchNo": "No",
+    "switchYes": "Yes"
   },
   "arena": {
     "title": "Discussion in progress",
@@ -166,7 +171,10 @@
     "noSynthesis": "(No synthesis available)",
     "tabSynthesis": "Synthesis",
     "tabDiscussion": "Full discussion",
-    "viewHistory": "History"
+    "viewHistory": "History",
+    "model": "Model",
+    "participantsList": "Participants",
+    "date": "Date"
   },
   "history": {
     "title": "Discussion history",
@@ -185,7 +193,28 @@
     "confiance": "Confidence",
     "frustration": "Frustration",
     "curiosite": "Curiosity",
-    "enthousiasme": "Enthusiasm"
+    "enthousiasme": "Enthusiasm",
+    "sidebar": {
+      "title": "Emotional States",
+      "collapse": "Collapse",
+      "expand": "Expand",
+      "disabledNote": "Emotions tracked but do not influence behavior"
+    },
+    "threshold": {
+      "frustrationHigh": "On the verge of exasperation",
+      "engagementLow": "Detached from the debate",
+      "confianceHigh": "Ultra-assertive",
+      "confianceLow": "Plagued by doubt",
+      "curiositeHigh": "Fascinated, exploring tangents",
+      "enthousiasmeHigh": "Exhilarated and energized"
+    },
+    "levels": {
+      "veryLow": "Very low",
+      "low": "Low",
+      "neutral": "Neutral",
+      "high": "High",
+      "veryHigh": "Very high"
+    }
   },
   "errors": {
     "ollamaConnection": "Unable to connect to Ollama",

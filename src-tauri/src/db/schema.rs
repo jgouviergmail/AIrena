@@ -71,6 +71,16 @@ pub async fn initialize(db: &Connection) -> Result<(), tokio_rusqlite::Error> {
                 "ALTER TABLE predefined_profiles ADD COLUMN category TEXT NOT NULL DEFAULT 'autres';"
             )?;
         }
+        // Migration: add initial_emotions column (idempotent)
+        let has_initial_emotions: bool = conn
+            .prepare("PRAGMA table_info(predefined_profiles)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .any(|col| col.as_deref() == Ok("initial_emotions"));
+        if !has_initial_emotions {
+            conn.execute_batch(
+                "ALTER TABLE predefined_profiles ADD COLUMN initial_emotions TEXT;"
+            )?;
+        }
         Ok(())
     })
     .await

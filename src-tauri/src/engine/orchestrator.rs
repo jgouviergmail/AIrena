@@ -11,6 +11,7 @@ use crate::engine::json_parser;
 use crate::engine::memory_manager;
 use crate::engine::prompt_builder;
 use crate::engine::turn_manager;
+use crate::models::emotion::{EmotionSnapshot, EmotionalProfile};
 use crate::models::discussion::{DiscussionConfig, DiscussionStatus, TurnDistribution};
 use crate::models::engine_command::EngineCommand;
 use crate::models::events::ArenaEvent;
@@ -97,7 +98,10 @@ impl DiscussionEngine {
         let gladiateurs = config
             .gladiateurs
             .iter()
-            .map(|g| GladIAteurState::new(g.clone()))
+            .map(|g| {
+                let initial = EmotionalProfile::from_json_opt(g.initial_emotions.as_deref());
+                GladIAteurState::new(g.clone(), Some(initial))
+            })
             .collect();
         let tavily_client = tavily_api_key
             .filter(|k| !k.is_empty())
@@ -205,6 +209,13 @@ impl DiscussionEngine {
         let _ = channel.send(ArenaEvent::DiscussionStarted {
             discussion_id: self.discussion_id.clone(),
         });
+
+        // Emit initial emotions for all participants so the sidebar is populated immediately
+        let lang = self.config.discussion_language.as_str();
+        Self::emit_emotion_updated(&channel, &self.arbitre.config.id, &self.arbitre.emotions, lang);
+        for g in &self.gladiateurs {
+            Self::emit_emotion_updated(&channel, &g.config.id, &g.emotions, lang);
+        }
 
         // --- INTRODUCTION ---
         // Optional web search for IArbitre (1 credit, forced on topic)
@@ -512,6 +523,9 @@ impl DiscussionEngine {
                 // C.6 MODERATION
                 if let Some(text) = &content {
                     self.process_moderation(glad_idx, text, &channel).await;
+                    // Update arbitre emotions based on moderation outcome
+                    let ban_issued = self.gladiateurs[glad_idx].ban_issued_this_turn;
+                    self.update_arbitre_emotions(ban_issued, &channel);
                 }
 
                 // C.7 MID-TURN OPPORTUNISTIC USER INTERVENTION
@@ -534,7 +548,19 @@ impl DiscussionEngine {
                 self.handle_user_intervention(&mut cmd_rx, &channel).await;
             }
 
-            // E. END OF TURN — memory update
+            // E. END OF TURN — emotion analysis + contagion + history + memory update
+            // All sequential because they mutate &mut self
+
+            // E.1 LLM emotion analysis (1 call for ALL participants)
+            self.analyze_emotions_llm(&channel).await;
+
+            // E.2 Emotional contagion (order-independent)
+            self.apply_emotional_contagion(&channel);
+
+            // E.3 Snapshot history + emit EmotionHistoryUpdate
+            self.record_emotion_history(&channel);
+
+            // E.4 Memory update (existing)
             self.update_memory_all().await;
 
             // Decrement bans
@@ -613,6 +639,9 @@ impl DiscussionEngine {
                 }
                 EngineCommand::UserWantsToIntervene => {
                     self.user_intervention_pending = true;
+                }
+                EngineCommand::AdjustEmotion { speaker_id, axis, value } => {
+                    self.handle_adjust_emotion(&speaker_id, &axis, value, channel);
                 }
                 _ => {} // SubmitUserMessage/SkipUserTurn handled elsewhere
             }
@@ -1162,13 +1191,29 @@ impl DiscussionEngine {
             is_discussion_stagnating: self.current_turn > 3,
         };
 
-        let new_emo = emotion_engine::update_emotions(&self.gladiateurs[glad_idx].emotions, &ctx);
+        // Clone before update for threshold detection
+        let prev = self.gladiateurs[glad_idx].emotions.clone();
+        let new_emo = emotion_engine::update_emotions(&prev, &ctx);
         self.gladiateurs[glad_idx].emotions = new_emo.clone();
 
-        let _ = channel.send(ArenaEvent::EmotionUpdated {
-            speaker_id: sid,
-            emotions: new_emo,
-        });
+        Self::emit_threshold_events(channel, &sid, &prev, &new_emo);
+        Self::emit_emotion_updated(channel, &sid, &new_emo, &self.config.discussion_language);
+    }
+
+    /// Rule-based emotion update for IArbitre (limited: bans + stagnation only)
+    fn update_arbitre_emotions(&mut self, ban_issued: bool, channel: &Channel<ArenaEvent>) {
+        let prev = self.arbitre.emotions.clone();
+
+        if ban_issued {
+            self.arbitre.emotions.frustration = emotion_engine::add_clamped(self.arbitre.emotions.frustration, 5);
+            self.arbitre.emotions.confiance = emotion_engine::add_clamped(self.arbitre.emotions.confiance, 5);
+        }
+        if self.current_turn > 3 {
+            self.arbitre.emotions.engagement = emotion_engine::sub_clamped(self.arbitre.emotions.engagement, 3);
+        }
+
+        Self::emit_threshold_events(channel, &self.arbitre.config.id, &prev, &self.arbitre.emotions);
+        Self::emit_emotion_updated(channel, &self.arbitre.config.id, &self.arbitre.emotions, &self.config.discussion_language);
     }
 
     async fn process_moderation(
@@ -1309,6 +1354,9 @@ impl DiscussionEngine {
                         Some(EngineCommand::Stop) => {
                             self.status = DiscussionStatus::StopRequested;
                             return;
+                        }
+                        Some(EngineCommand::AdjustEmotion { speaker_id, axis, value }) => {
+                            self.handle_adjust_emotion(&speaker_id, &axis, value, channel);
                         }
                         Some(_) => {}
                         None => return,
@@ -1569,6 +1617,251 @@ impl DiscussionEngine {
             Some(prompt_builder::build_search_results_context(&all_results, lang)),
             executed_count,
         )
+    }
+
+    // ── Emotion analysis, contagion, history ──────────────────────────
+
+    /// LLM-based emotion analysis: 1 call for ALL participants.
+    /// Graceful fallback: if LLM fails, log warning and keep rule-based values.
+    async fn analyze_emotions_llm(&mut self, channel: &Channel<ArenaEvent>) {
+        if self.turn_messages.is_empty() || self.cancel_token.is_cancelled() {
+            return;
+        }
+
+        // Build participants JSON for the prompt
+        let mut participants_info = Vec::new();
+        participants_info.push(format!(
+            "  \"{}\": {{\"role\": \"IArbitre\", \"engagement\": {}, \"accord\": {}, \"confiance\": {}, \"frustration\": {}, \"curiosite\": {}, \"enthousiasme\": {}}}",
+            self.arbitre.config.name,
+            self.arbitre.emotions.engagement, self.arbitre.emotions.accord,
+            self.arbitre.emotions.confiance, self.arbitre.emotions.frustration,
+            self.arbitre.emotions.curiosite, self.arbitre.emotions.enthousiasme,
+        ));
+        for g in &self.gladiateurs {
+            participants_info.push(format!(
+                "  \"{}\": {{\"role\": \"GladIAteur\", \"engagement\": {}, \"accord\": {}, \"confiance\": {}, \"frustration\": {}, \"curiosite\": {}, \"enthousiasme\": {}}}",
+                g.config.name,
+                g.emotions.engagement, g.emotions.accord,
+                g.emotions.confiance, g.emotions.frustration,
+                g.emotions.curiosite, g.emotions.enthousiasme,
+            ));
+        }
+        let participants_json = format!("{{\n{}\n}}", participants_info.join(",\n"));
+
+        // Build recent context from turn messages
+        let recent_context = self.turn_messages.iter()
+            .map(|m| format!("[{}] {}", m.speaker_name, truncate_str(&m.content, 200)))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Build events summary (reactions, bans)
+        let mut events = Vec::new();
+        for (sid, (likes, dislikes)) in &self.turn_reaction_counts {
+            let name = self.gladiateurs.iter()
+                .find(|g| g.config.id == *sid)
+                .map(|g| g.config.name.as_str())
+                .unwrap_or(sid);
+            if *likes > 0 { events.push(format!("{} received {} like(s)", name, likes)); }
+            if *dislikes > 0 { events.push(format!("{} received {} dislike(s)", name, dislikes)); }
+        }
+        for g in &self.gladiateurs {
+            if g.ban_issued_this_turn {
+                events.push(format!("{} was banned this turn", g.config.name));
+            }
+        }
+        let events_summary = if events.is_empty() {
+            "No notable events".to_string()
+        } else {
+            events.join(", ")
+        };
+
+        let prompt = prompt_builder::build_emotion_analysis_prompt(
+            &participants_json,
+            &recent_context,
+            &events_summary,
+            &self.config.discussion_language,
+        );
+
+        let sys_prompt = match self.config.discussion_language.as_str() {
+            "en" => "You are an emotion analyst. Respond only with JSON.",
+            "zh" => "你是情绪分析师。仅用JSON回复。",
+            _ => "Tu es un analyste émotionnel. Réponds uniquement en JSON.",
+        };
+
+        let request = self.ollama_client.build_request(
+            sys_prompt,
+            &prompt,
+            &self.arbitre.config.llm_params,
+            true, // JSON mode
+        );
+
+        let cancel = self.cancel_token.clone();
+        let raw = match self.ollama_client.chat(&request, cancel).await {
+            Ok(raw) => raw,
+            Err(OllamaError::Cancelled) => return,
+            Err(e) => {
+                tracing::warn!(error = %e, "LLM emotion analysis failed — keeping rule-based values");
+                return;
+            }
+        };
+
+        // Parse deltas and apply
+        let known_names: Vec<String> = std::iter::once(self.arbitre.config.name.clone())
+            .chain(self.gladiateurs.iter().map(|g| g.config.name.clone()))
+            .collect();
+
+        let deltas = json_parser::parse_emotion_deltas(&raw, &known_names);
+
+        // Apply to arbitre
+        if let Some(delta) = deltas.get(&self.arbitre.config.name) {
+            let prev = self.arbitre.emotions.clone();
+            self.arbitre.emotions.apply_delta(delta);
+            Self::emit_threshold_events(channel, &self.arbitre.config.id, &prev, &self.arbitre.emotions);
+            Self::emit_emotion_updated(channel, &self.arbitre.config.id, &self.arbitre.emotions, &self.config.discussion_language);
+        }
+
+        // Apply to gladiateurs
+        for g in &mut self.gladiateurs {
+            if let Some(delta) = deltas.get(&g.config.name) {
+                let prev = g.emotions.clone();
+                g.emotions.apply_delta(delta);
+                Self::emit_threshold_events(channel, &g.config.id, &prev, &g.emotions);
+                Self::emit_emotion_updated(channel, &g.config.id, &g.emotions, &self.config.discussion_language);
+            }
+        }
+    }
+
+    /// Apply emotional contagion: compute average, move everyone toward it (order-independent).
+    fn apply_emotional_contagion(&mut self, channel: &Channel<ArenaEvent>) {
+        // Collect all profiles for averaging
+        let mut profiles: Vec<&EmotionalProfile> = Vec::new();
+        profiles.push(&self.arbitre.emotions);
+        for g in &self.gladiateurs {
+            if !g.is_banned() {
+                profiles.push(&g.emotions);
+            }
+        }
+        if profiles.len() < 2 {
+            return; // No contagion with < 2 participants
+        }
+
+        let avg = emotion_engine::compute_average(&profiles);
+
+        // Apply to arbitre
+        emotion_engine::apply_contagion(&avg, &mut self.arbitre.emotions);
+        Self::emit_emotion_updated(channel, &self.arbitre.config.id, &self.arbitre.emotions, &self.config.discussion_language);
+
+        // Apply to non-banned gladiateurs
+        for g in &mut self.gladiateurs {
+            if !g.is_banned() {
+                emotion_engine::apply_contagion(&avg, &mut g.emotions);
+                Self::emit_emotion_updated(channel, &g.config.id, &g.emotions, &self.config.discussion_language);
+            }
+        }
+    }
+
+    /// Record emotion history snapshots and emit EmotionHistoryUpdate events.
+    fn record_emotion_history(&mut self, channel: &Channel<ArenaEvent>) {
+        let turn = self.current_turn;
+        const MAX_HISTORY: usize = 30;
+
+        // Arbitre
+        self.arbitre.emotion_history.push(EmotionSnapshot {
+            turn,
+            emotions: self.arbitre.emotions.clone(),
+        });
+        if self.arbitre.emotion_history.len() > MAX_HISTORY {
+            self.arbitre.emotion_history.remove(0);
+        }
+        let _ = channel.send(ArenaEvent::EmotionHistoryUpdate {
+            speaker_id: self.arbitre.config.id.clone(),
+            history: self.arbitre.emotion_history.clone(),
+        });
+
+        // Gladiateurs
+        for g in &mut self.gladiateurs {
+            g.emotion_history.push(EmotionSnapshot {
+                turn,
+                emotions: g.emotions.clone(),
+            });
+            if g.emotion_history.len() > MAX_HISTORY {
+                g.emotion_history.remove(0);
+            }
+            let _ = channel.send(ArenaEvent::EmotionHistoryUpdate {
+                speaker_id: g.config.id.clone(),
+                history: g.emotion_history.clone(),
+            });
+        }
+    }
+
+    /// Handle manual emotion adjustment from the frontend
+    fn handle_adjust_emotion(
+        &mut self,
+        speaker_id: &str,
+        axis: &str,
+        value: u8,
+        channel: &Channel<ArenaEvent>,
+    ) {
+        let value = value.min(100);
+
+        // Try matching arbitre
+        if speaker_id == self.arbitre.config.id {
+            Self::set_emotion_axis(&mut self.arbitre.emotions, axis, value);
+            Self::emit_emotion_updated(channel, &self.arbitre.config.id, &self.arbitre.emotions, &self.config.discussion_language);
+            return;
+        }
+
+        // Try matching gladiateurs
+        for g in &mut self.gladiateurs {
+            if g.config.id == speaker_id {
+                Self::set_emotion_axis(&mut g.emotions, axis, value);
+                Self::emit_emotion_updated(channel, &g.config.id, &g.emotions, &self.config.discussion_language);
+                return;
+            }
+        }
+    }
+
+    /// Emit threshold-crossing events for axes that newly crossed HIGH or LOW boundaries.
+    fn emit_threshold_events(
+        channel: &Channel<ArenaEvent>,
+        speaker_id: &str,
+        prev: &EmotionalProfile,
+        current: &EmotionalProfile,
+    ) {
+        for (axis, direction, value) in emotion_engine::detect_thresholds(prev, current) {
+            let _ = channel.send(ArenaEvent::EmotionalThresholdCrossed {
+                speaker_id: speaker_id.to_string(),
+                axis,
+                direction,
+                value,
+            });
+        }
+    }
+
+    fn emit_emotion_updated(
+        channel: &Channel<ArenaEvent>,
+        speaker_id: &str,
+        emotions: &EmotionalProfile,
+        lang: &str,
+    ) {
+        let mood = prompt_builder::summarize_emotional_state(emotions, lang);
+        let _ = channel.send(ArenaEvent::EmotionUpdated {
+            speaker_id: speaker_id.to_string(),
+            emotions: emotions.clone(),
+            mood_summary: Some(mood),
+        });
+    }
+
+    fn set_emotion_axis(emotions: &mut EmotionalProfile, axis: &str, value: u8) {
+        match axis {
+            "engagement" => emotions.engagement = value,
+            "accord" => emotions.accord = value,
+            "confiance" => emotions.confiance = value,
+            "frustration" => emotions.frustration = value,
+            "curiosite" => emotions.curiosite = value,
+            "enthousiasme" => emotions.enthousiasme = value,
+            _ => {}
+        }
     }
 
     fn create_message(

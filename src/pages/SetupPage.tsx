@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import {
@@ -8,13 +8,23 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Clock,
+  FileText,
   Globe,
+  GripVertical,
+  Heart,
+  MessageSquare,
   Play,
   Plus,
+  Repeat,
   RotateCcw,
   Save,
-  Search,
+  Shuffle,
+  Sliders,
+  Tag,
   Trash2,
+  UserCircle,
+  Users,
 } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { LlmParamsForm } from "@/components/setup/LlmParamsForm";
@@ -95,6 +105,7 @@ export default function SetupPage() {
       systemPrompt: t(`profiles.${profile.id}.systemPrompt`, { defaultValue: profile.systemPrompt }),
       llmParams: { ...DEFAULT_LLM_PARAMS },
       sourceProfileId: profile.id,
+      initialEmotions: profile.initialEmotions,
     });
   };
 
@@ -213,20 +224,8 @@ function StepTopic() {
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <label className="text-sm font-medium text-foreground">
-          {t("setup.topic")}
-        </label>
-        <textarea
-          value={topic}
-          onChange={(e) => setTopic(e.target.value)}
-          placeholder={t("setup.topicPlaceholder")}
-          rows={4}
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-        />
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-sm font-medium text-foreground">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Globe className="h-4 w-4 text-primary" />
           {t("setup.discussionLanguage")}
         </label>
         <div className="flex gap-2">
@@ -248,36 +247,51 @@ function StepTopic() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium text-foreground">
-            {t("setup.maxTurns")}
-          </label>
-          <input
-            type="number"
-            min={1}
-            max={100}
-            value={maxTurns ?? ""}
-            onChange={(e) =>
-              setMaxTurns(e.target.value ? parseInt(e.target.value) : null)
-            }
-            placeholder={t("setup.maxTurnsPlaceholder")}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium text-foreground">
-            {t("setup.userTimeout")}
-          </label>
-          <input
-            type="number"
-            min={30}
-            max={600}
-            value={userInterventionTimeoutSecs}
-            onChange={(e) => setUserTimeout(parseInt(e.target.value) || 120)}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <MessageSquare className="h-4 w-4 text-primary" />
+          {t("setup.topic")}
+        </label>
+        <textarea
+          value={topic}
+          onChange={(e) => setTopic(e.target.value)}
+          placeholder={t("setup.topicPlaceholder")}
+          rows={4}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Repeat className="h-4 w-4 text-primary" />
+          {t("setup.maxTurns")}
+        </label>
+        <input
+          type="number"
+          min={1}
+          max={100}
+          value={maxTurns ?? ""}
+          onChange={(e) =>
+            setMaxTurns(e.target.value ? parseInt(e.target.value) : null)
+          }
+          placeholder={t("setup.maxTurnsPlaceholder")}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Clock className="h-4 w-4 text-primary" />
+          {t("setup.userTimeout")}
+        </label>
+        <input
+          type="number"
+          min={30}
+          max={600}
+          value={userInterventionTimeoutSecs}
+          onChange={(e) => setUserTimeout(parseInt(e.target.value) || 120)}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        />
       </div>
     </div>
   );
@@ -342,7 +356,8 @@ function StepArbitre() {
     <div className="space-y-4">
       {/* Profile selector */}
       <div className="space-y-2">
-        <label className="text-sm font-medium text-foreground">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <UserCircle className="h-4 w-4 text-primary" />
           {t("setup.arbitreProfile")}
         </label>
         <div className="flex gap-2">
@@ -373,7 +388,8 @@ function StepArbitre() {
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm font-medium text-foreground">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Tag className="h-4 w-4 text-primary" />
           {t("setup.arbitreName")}
         </label>
         <input
@@ -385,7 +401,8 @@ function StepArbitre() {
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm font-medium text-foreground">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <FileText className="h-4 w-4 text-primary" />
           {t("setup.arbitrePrompt")}
         </label>
         <textarea
@@ -439,7 +456,8 @@ function StepArbitre() {
       )}
 
       <div className="space-y-2">
-        <label className="text-sm font-medium text-foreground">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Shuffle className="h-4 w-4 text-primary" />
           {t("setup.turnDistribution")}
         </label>
         <div className="grid grid-cols-2 gap-2">
@@ -467,41 +485,49 @@ function StepArbitre() {
 
       {/* Optional web search for introduction */}
       {hasTavilyKey && (
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={arbitre.webSearchIntro ?? false}
-            onClick={() => updateArbitre({ webSearchIntro: !(arbitre.webSearchIntro ?? false) })}
-            className={cn(
-              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
-              (arbitre.webSearchIntro ?? false) ? "bg-primary" : "bg-muted",
-            )}
-          >
-            <span
+        <div className="space-y-2">
+          <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+            <Globe className="h-4 w-4 text-primary" />
+            {t("setup.arbitreWebSearchTitle")}
+          </label>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={arbitre.webSearchIntro ?? false}
+              onClick={() => updateArbitre({ webSearchIntro: !(arbitre.webSearchIntro ?? false) })}
               className={cn(
-                "pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
-                (arbitre.webSearchIntro ?? false) ? "translate-x-4" : "translate-x-0",
+                "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+                (arbitre.webSearchIntro ?? false) ? "bg-primary" : "bg-muted",
               )}
-            />
-          </button>
-          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <Search className="h-3.5 w-3.5" />
-            {t("setup.arbitreWebSearchIntro")}
+            >
+              <span
+                className={cn(
+                  "pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
+                  (arbitre.webSearchIntro ?? false) ? "translate-x-4" : "translate-x-0",
+                )}
+              />
+            </button>
+            <span className="text-sm text-muted-foreground">
+              {(arbitre.webSearchIntro ?? false) ? t("setup.switchYes") : t("setup.switchNo")}
+            </span>
           </div>
         </div>
       )}
 
       <button
         onClick={() => setShowLlm(!showLlm)}
-        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+        className="flex w-full items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground hover:text-foreground/80"
       >
-        {showLlm ? (
-          <ChevronUp className="h-4 w-4" />
-        ) : (
-          <ChevronDown className="h-4 w-4" />
-        )}
+        <Sliders className="h-4 w-4 text-primary" />
         {t("setup.llmParams")}
+        <span className="ml-auto">
+          {showLlm ? (
+            <ChevronUp className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          )}
+        </span>
       </button>
       {showLlm && (
         <LlmParamsForm
@@ -529,6 +555,7 @@ function StepGladiateurs({
   const removeGladiateur = useSetupStore((s) => s.removeGladiateur);
   const updateGladiateur = useSetupStore((s) => s.updateGladiateur);
   const updateGladiateurLlm = useSetupStore((s) => s.updateGladiateurLlm);
+  const reorderGladiateurs = useSetupStore((s) => s.reorderGladiateurs);
   const maxTurns = useSetupStore((s) => s.maxTurns);
   const webSearchMaxPerGladiateur = useSetupStore((s) => s.webSearchMaxPerGladiateur);
   const setWebSearchMaxPerGladiateur = useSetupStore((s) => s.setWebSearchMaxPerGladiateur);
@@ -542,6 +569,52 @@ function StepGladiateurs({
     () => new Set(CATEGORY_ORDER),
   );
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const dragFrom = useRef<number | null>(null);
+  const dropTo = useRef<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const cardsRef = useRef<HTMLDivElement>(null);
+
+  // Pointer-event-based drag-and-drop (HTML5 drag doesn't work in Tauri WebView)
+  useEffect(() => {
+    if (!isDragging) return;
+    document.body.style.userSelect = "none";
+
+    const onMove = (e: PointerEvent) => {
+      if (dragFrom.current === null || !cardsRef.current) return;
+      const y = e.clientY;
+      const cards = Array.from(cardsRef.current.children) as HTMLElement[];
+      let target: number | null = null;
+      for (let i = 0; i < cards.length; i++) {
+        const rect = cards[i].getBoundingClientRect();
+        if (y >= rect.top && y <= rect.bottom) {
+          target = i;
+          break;
+        }
+      }
+      const idx = target !== null && target !== dragFrom.current ? target : null;
+      dropTo.current = idx;
+      setDragOverIdx(idx);
+    };
+
+    const onUp = () => {
+      if (dragFrom.current !== null && dropTo.current !== null) {
+        reorderGladiateurs(dragFrom.current, dropTo.current);
+      }
+      dragFrom.current = null;
+      dropTo.current = null;
+      setDragOverIdx(null);
+      setIsDragging(false);
+    };
+
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    return () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.body.style.userSelect = "";
+    };
+  }, [isDragging, reorderGladiateurs]);
 
   // Group profiles by category
   const grouped = CATEGORY_ORDER.map((cat) => ({
@@ -601,7 +674,8 @@ function StepGladiateurs({
     <div className="space-y-6">
       {/* Emotion-driven behavior toggle */}
       <div className="space-y-3">
-        <label className="text-sm font-medium text-foreground">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Heart className="h-4 w-4 text-primary" />
           {t("settings.emotionDriven")}
         </label>
         <div className="flex items-center gap-3">
@@ -628,8 +702,8 @@ function StepGladiateurs({
       {/* Global web search config */}
       {hasTavilyKey && (
         <div className="space-y-2">
-          <label className="text-sm font-medium text-foreground">
-            <Search className="mr-1.5 inline h-3.5 w-3.5" />
+          <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+            <Globe className="h-4 w-4 text-primary" />
             {t("setup.webSearchMaxPerGladiateur")}
           </label>
           <div className="flex items-center gap-3">
@@ -660,14 +734,15 @@ function StepGladiateurs({
       )}
       {!hasTavilyKey && (
         <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-          <Search className="h-3.5 w-3.5" />
+          <Globe className="h-3.5 w-3.5" />
           {t("setup.webSearchNoKey")}
         </div>
       )}
 
       {/* Profile picker grouped by category */}
       <div className="space-y-3">
-        <label className="text-sm font-medium text-foreground">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Users className="h-4 w-4 text-primary" />
           {t("setup.selectProfile")}
         </label>
         {grouped.map((group) => {
@@ -738,14 +813,25 @@ function StepGladiateurs({
       )}
 
       {/* Gladiateur cards */}
-      <div className="space-y-3">
+      <div className="space-y-3" ref={cardsRef}>
         {gladiateurs.map((g, idx) => (
           <div
             key={g.id}
-            className="rounded-lg border border-border bg-card p-4"
+            className={cn(
+              "rounded-lg border bg-card p-4 transition-colors",
+              dragOverIdx === idx ? "border-primary bg-primary/5" : "border-border",
+            )}
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
+                <GripVertical
+                  className="h-4 w-4 shrink-0 cursor-grab text-muted-foreground active:cursor-grabbing"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    dragFrom.current = idx;
+                    setIsDragging(true);
+                  }}
+                />
                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">
                   {idx + 1}
                 </span>
@@ -774,6 +860,18 @@ function StepGladiateurs({
                     <RotateCcw className="h-4 w-4" />
                   </button>
                 )}
+                <button
+                  onClick={() =>
+                    setExpandedId(expandedId === g.id ? null : g.id)
+                  }
+                  className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  {expandedId === g.id ? (
+                    <ChevronUp className="h-4 w-4" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4" />
+                  )}
+                </button>
                 {g.name.trim() && g.systemPrompt.trim() && (
                   <button
                     onClick={() => handleSaveGladiateur(g)}
@@ -792,18 +890,6 @@ function StepGladiateurs({
                     )}
                   </button>
                 )}
-                <button
-                  onClick={() =>
-                    setExpandedId(expandedId === g.id ? null : g.id)
-                  }
-                  className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  {expandedId === g.id ? (
-                    <ChevronUp className="h-4 w-4" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4" />
-                  )}
-                </button>
                 <button
                   onClick={() => removeGladiateur(g.id)}
                   className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
@@ -885,10 +971,21 @@ function StepSummary() {
             value="1"
           />
         )}
-        <SummaryRow
-          label={t("setup.gladiateurs")}
-          value={gladiateurs.map((g) => g.name).join(", ") || "-"}
-        />
+        <div className="flex justify-between">
+          <span className="text-sm text-muted-foreground">{t("setup.gladiateurs")}</span>
+          {gladiateurs.length === 0 ? (
+            <span className="text-sm font-medium text-foreground">-</span>
+          ) : (
+            <div className="space-y-1 text-right">
+              {gladiateurs.map((g) => (
+                <div key={g.id} className="flex items-center justify-end gap-2 text-sm text-foreground">
+                  <span>{g.emoji ?? getProfileEmoji(g.name, g.systemPrompt)}</span>
+                  <span className="font-medium">{g.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         {webSearchMaxPerGladiateur > 0 && (
           <SummaryRow
             label={t("setup.webSearch")}

@@ -26,6 +26,7 @@ export interface GladIAteurConfig {
   llmParams: LlmParams;
   emoji?: string;
   sourceProfileId?: string;
+  initialEmotions?: string;
 }
 
 export interface IArbitreConfig {
@@ -81,6 +82,11 @@ export interface EmotionalProfile {
   enthousiasme: number;
 }
 
+export interface EmotionSnapshot {
+  turn: number;
+  emotions: EmotionalProfile;
+}
+
 export interface AppSettings {
   username: string;
   language: string;
@@ -108,6 +114,7 @@ export interface PredefinedProfile {
   isBuiltin: boolean;
   profileType: string;
   category: string;
+  initialEmotions?: string;
 }
 
 export interface ModelInfo {
@@ -183,7 +190,15 @@ export type ArenaEvent =
   | { type: "speakerActive"; data: { speakerId: string } }
   | {
       type: "emotionUpdated";
-      data: { speakerId: string; emotions: EmotionalProfile };
+      data: { speakerId: string; emotions: EmotionalProfile; moodSummary?: string };
+    }
+  | {
+      type: "emotionHistoryUpdate";
+      data: { speakerId: string; history: EmotionSnapshot[] };
+    }
+  | {
+      type: "emotionalThresholdCrossed";
+      data: { speakerId: string; axis: string; direction: string; value: number };
     }
   | {
       type: "banIssued";

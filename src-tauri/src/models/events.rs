@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::emotion::EmotionalProfile;
+use super::emotion::{EmotionSnapshot, EmotionalProfile};
 use super::message::{Message, Reaction};
 
 /// Events sent from the backend to the frontend via Channel<ArenaEvent>
@@ -50,6 +50,7 @@ pub enum ArenaEvent {
     EmotionUpdated {
         speaker_id: String,
         emotions: EmotionalProfile,
+        mood_summary: Option<String>,
     },
     /// Ban issued by the IArbitre
     #[serde(rename_all = "camelCase")]
@@ -85,6 +86,20 @@ pub enum ArenaEvent {
         queries: Vec<String>,
         results_count: u32,
         searches_used_discussion: u32,
+    },
+    /// Full emotion history for a participant (emitted end of each turn)
+    #[serde(rename_all = "camelCase")]
+    EmotionHistoryUpdate {
+        speaker_id: String,
+        history: Vec<EmotionSnapshot>,
+    },
+    /// A critical emotional threshold was crossed
+    #[serde(rename_all = "camelCase")]
+    EmotionalThresholdCrossed {
+        speaker_id: String,
+        axis: String,
+        direction: String,
+        value: u8,
     },
     /// Discussion ended
     DiscussionEnded,

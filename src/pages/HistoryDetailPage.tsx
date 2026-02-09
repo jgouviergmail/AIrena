@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, Bot, Calendar, Repeat, Trash2, Users } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { ReadOnlyFeed } from "@/components/discussion/ReadOnlyFeed";
+import { SimpleMd } from "@/components/shared/SimpleMd";
 import { getDiscussionHistory, deleteDiscussionHistory } from "@/lib/tauri-api";
 import { cn } from "@/lib/utils";
 import type { DiscussionDetail } from "@/lib/types";
@@ -65,20 +66,44 @@ export default function HistoryDetailPage() {
       <TopBar title={detail.topic} />
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-2xl space-y-6">
+          {/* Topic */}
+          <div className="rounded-xl border border-border bg-card p-4">
+            <p className="text-xs text-muted-foreground">{t("summary.topic")}</p>
+            <p className="mt-1 text-base font-semibold text-foreground">{detail.topic}</p>
+          </div>
+
           {/* Stats */}
-          <div className="grid grid-cols-3 gap-4">
-            <div className="rounded-lg border border-border bg-card p-3 text-center">
-              <p className="text-xs text-muted-foreground">{t("summary.turns")}</p>
+          <div className="grid grid-cols-4 gap-3">
+            <div className="rounded-xl border border-border bg-card p-3 text-center">
+              <div className="flex items-center justify-center gap-1">
+                <Repeat className="h-3.5 w-3.5 text-muted-foreground" />
+                <p className="text-xs text-muted-foreground">{t("summary.turns")}</p>
+              </div>
               <p className="mt-1 text-sm font-semibold text-foreground">{detail.totalTurns}</p>
             </div>
-            <div className="rounded-lg border border-border bg-card p-3 text-center">
-              <p className="text-xs text-muted-foreground">{t("summary.participants")}</p>
+            <div className="rounded-xl border border-border bg-card p-3 text-center">
+              <div className="flex items-center justify-center gap-1">
+                <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                <p className="text-xs text-muted-foreground">{t("summary.participantsList")}</p>
+              </div>
               <p className="mt-1 text-sm font-semibold text-foreground">
                 {detail.participants.filter((p) => p.role !== "user").length}
               </p>
             </div>
-            <div className="rounded-lg border border-border bg-card p-3 text-center">
-              <p className="text-xs text-muted-foreground">{t("summary.topic")}</p>
+            <div className="rounded-xl border border-border bg-card p-3 text-center">
+              <div className="flex items-center justify-center gap-1">
+                <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+                <p className="text-xs text-muted-foreground">{t("summary.model")}</p>
+              </div>
+              <p className="mt-1 truncate text-sm font-semibold text-foreground" title={detail.modelName}>
+                {detail.modelName || "-"}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border bg-card p-3 text-center">
+              <div className="flex items-center justify-center gap-1">
+                <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                <p className="text-xs text-muted-foreground">{t("summary.date")}</p>
+              </div>
               <p className="mt-1 truncate text-sm font-semibold text-foreground" title={formatDate(detail.createdAt)}>
                 {formatDate(detail.createdAt)}
               </p>
@@ -115,15 +140,15 @@ export default function HistoryDetailPage() {
           {tab === "discussion" ? (
             <ReadOnlyFeed messages={detail.messages} participants={detail.participants} />
           ) : (
-            <div className="rounded-lg border border-border bg-card p-6">
+            <div className="rounded-xl border border-border bg-card p-6">
               <h2 className="mb-4 text-lg font-semibold text-foreground">
                 {t("summary.tabSynthesis")}
               </h2>
-              <div className="prose prose-sm max-w-none text-sm text-foreground">
-                <p className="whitespace-pre-wrap">
-                  {detail.synthesis || t("summary.noSynthesis")}
-                </p>
-              </div>
+              {detail.synthesis ? (
+                <SimpleMd text={detail.synthesis} />
+              ) : (
+                <p className="text-sm text-muted-foreground">{t("summary.noSynthesis")}</p>
+              )}
             </div>
           )}
 

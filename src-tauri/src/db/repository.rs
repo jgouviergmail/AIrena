@@ -75,7 +75,7 @@ pub async fn save_settings(
 }
 
 /// Column list for predefined_profiles queries
-const PROFILE_COLUMNS: &str = "id, name, personality, system_prompt, is_builtin, profile_type, category";
+const PROFILE_COLUMNS: &str = "id, name, personality, system_prompt, is_builtin, profile_type, category, initial_emotions";
 
 /// Map a database row to PredefinedProfile
 fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<PredefinedProfile> {
@@ -87,6 +87,7 @@ fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<PredefinedProfile
         is_builtin: row.get::<_, i32>(4)? != 0,
         profile_type: row.get(5)?,
         category: row.get(6)?,
+        initial_emotions: row.get(7)?,
     })
 }
 
@@ -143,9 +144,9 @@ pub async fn save_profile(
     let profile = profile.clone();
     db.call(move |conn| {
         conn.execute(
-            "INSERT INTO predefined_profiles (id, name, personality, system_prompt, is_builtin, profile_type, category)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(id) DO UPDATE SET name = ?2, personality = ?3, system_prompt = ?4, is_builtin = ?5, profile_type = ?6, category = ?7",
+            "INSERT INTO predefined_profiles (id, name, personality, system_prompt, is_builtin, profile_type, category, initial_emotions)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id) DO UPDATE SET name = ?2, personality = ?3, system_prompt = ?4, is_builtin = ?5, profile_type = ?6, category = ?7, initial_emotions = ?8",
             rusqlite::params![
                 profile.id,
                 profile.name,
@@ -154,6 +155,7 @@ pub async fn save_profile(
                 profile.is_builtin as i32,
                 profile.profile_type,
                 profile.category,
+                profile.initial_emotions,
             ],
         )?;
         Ok(())

@@ -158,3 +158,19 @@ pub async fn skip_user_turn(state: State<'_, AppState>) -> Result<(), CommandErr
         .send_engine_command(EngineCommand::SkipUserTurn)
         .await
 }
+
+#[tauri::command]
+pub async fn adjust_emotion(
+    speaker_id: String,
+    axis: String,
+    value: u8,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    state
+        .send_engine_command(EngineCommand::AdjustEmotion {
+            speaker_id,
+            axis,
+            value,
+        })
+        .await
+}

@@ -71,12 +71,12 @@ pub fn update_emotions(current: &EmotionalProfile, ctx: &EmotionContext) -> Emot
 }
 
 /// Saturating addition clamped to 100
-fn add_clamped(val: u8, delta: u8) -> u8 {
+pub fn add_clamped(val: u8, delta: u8) -> u8 {
     val.saturating_add(delta).min(100)
 }
 
 /// Saturating subtraction (floors at 0)
-fn sub_clamped(val: u8, delta: u8) -> u8 {
+pub fn sub_clamped(val: u8, delta: u8) -> u8 {
     val.saturating_sub(delta)
 }
 
@@ -88,6 +88,67 @@ fn decay_toward(val: u8, target: u8, rate: u8) -> u8 {
         val.saturating_add(rate).min(100)
     } else {
         val
+    }
+}
+
+pub const HIGH_THRESHOLD: u8 = 85;
+pub const LOW_THRESHOLD: u8 = 15;
+
+/// Detect thresholds that were **newly** crossed between prev and current.
+/// Returns `[(axis_name, "high"|"low", value)]`.
+pub fn detect_thresholds(
+    prev: &EmotionalProfile,
+    current: &EmotionalProfile,
+) -> Vec<(String, String, u8)> {
+    let mut crossed = Vec::new();
+    let axes: [(&str, u8, u8); 6] = [
+        ("engagement", prev.engagement, current.engagement),
+        ("accord", prev.accord, current.accord),
+        ("confiance", prev.confiance, current.confiance),
+        ("frustration", prev.frustration, current.frustration),
+        ("curiosite", prev.curiosite, current.curiosite),
+        ("enthousiasme", prev.enthousiasme, current.enthousiasme),
+    ];
+    for (name, p, c) in axes {
+        if p < HIGH_THRESHOLD && c >= HIGH_THRESHOLD {
+            crossed.push((name.to_string(), "high".to_string(), c));
+        }
+        if p > LOW_THRESHOLD && c <= LOW_THRESHOLD {
+            crossed.push((name.to_string(), "low".to_string(), c));
+        }
+    }
+    crossed
+}
+
+/// Apply emotional contagion: move target toward the group average.
+/// The contagion is weak (±3 max per axis, 5% of distance).
+pub fn apply_contagion(avg: &EmotionalProfile, target: &mut EmotionalProfile) {
+    use super::apply_i8_clamped;
+    fn contagion_delta(avg_val: u8, current_val: u8) -> i8 {
+        let diff = avg_val as f32 - current_val as f32;
+        (diff * 0.05).round().clamp(-3.0, 3.0) as i8
+    }
+    target.engagement = apply_i8_clamped(target.engagement, contagion_delta(avg.engagement, target.engagement));
+    target.accord = apply_i8_clamped(target.accord, contagion_delta(avg.accord, target.accord));
+    target.confiance = apply_i8_clamped(target.confiance, contagion_delta(avg.confiance, target.confiance));
+    target.frustration = apply_i8_clamped(target.frustration, contagion_delta(avg.frustration, target.frustration));
+    target.curiosite = apply_i8_clamped(target.curiosite, contagion_delta(avg.curiosite, target.curiosite));
+    target.enthousiasme = apply_i8_clamped(target.enthousiasme, contagion_delta(avg.enthousiasme, target.enthousiasme));
+}
+
+/// Compute the average emotional profile from a slice of profiles
+pub fn compute_average(profiles: &[&EmotionalProfile]) -> EmotionalProfile {
+    if profiles.is_empty() {
+        return EmotionalProfile::default();
+    }
+    let n = profiles.len() as u32;
+    EmotionalProfile {
+        engagement: (profiles.iter().map(|p| p.engagement as u32).sum::<u32>() / n) as u8,
+        accord: (profiles.iter().map(|p| p.accord as u32).sum::<u32>() / n) as u8,
+        confiance: (profiles.iter().map(|p| p.confiance as u32).sum::<u32>() / n) as u8,
+        frustration: (profiles.iter().map(|p| p.frustration as u32).sum::<u32>() / n) as u8,
+        curiosite: (profiles.iter().map(|p| p.curiosite as u32).sum::<u32>() / n) as u8,
+        enthousiasme: (profiles.iter().map(|p| p.enthousiasme as u32).sum::<u32>() / n) as u8,
     }
 }
 
@@ -171,5 +232,66 @@ mod tests {
         let result = update_emotions(&profile, &ctx);
         assert!(result.confiance <= 100);
         assert!(result.engagement <= 100);
+    }
+
+    #[test]
+    fn test_detect_thresholds_high() {
+        let prev = EmotionalProfile { frustration: 80, ..Default::default() };
+        let curr = EmotionalProfile { frustration: 90, ..Default::default() };
+        let thresholds = detect_thresholds(&prev, &curr);
+        assert_eq!(thresholds.len(), 1);
+        assert_eq!(thresholds[0].0, "frustration");
+        assert_eq!(thresholds[0].1, "high");
+        assert_eq!(thresholds[0].2, 90);
+    }
+
+    #[test]
+    fn test_detect_thresholds_low() {
+        let prev = EmotionalProfile { engagement: 20, ..Default::default() };
+        let curr = EmotionalProfile { engagement: 10, ..Default::default() };
+        let thresholds = detect_thresholds(&prev, &curr);
+        assert_eq!(thresholds.len(), 1);
+        assert_eq!(thresholds[0].0, "engagement");
+        assert_eq!(thresholds[0].1, "low");
+    }
+
+    #[test]
+    fn test_detect_thresholds_already_above() {
+        // Already above threshold → no new crossing
+        let prev = EmotionalProfile { frustration: 90, ..Default::default() };
+        let curr = EmotionalProfile { frustration: 95, ..Default::default() };
+        let thresholds = detect_thresholds(&prev, &curr);
+        assert!(thresholds.is_empty());
+    }
+
+    #[test]
+    fn test_contagion_moves_toward_average() {
+        let avg = EmotionalProfile { engagement: 80, ..Default::default() };
+        let mut target = EmotionalProfile { engagement: 40, ..Default::default() };
+        apply_contagion(&avg, &mut target);
+        // engagement: diff = 40, * 0.05 = 2.0, so target goes 40 → 42
+        assert_eq!(target.engagement, 42);
+    }
+
+    #[test]
+    fn test_contagion_capped_at_3() {
+        let avg = EmotionalProfile { engagement: 100, ..Default::default() };
+        let mut target = EmotionalProfile { engagement: 0, ..Default::default() };
+        apply_contagion(&avg, &mut target);
+        // diff = 100 * 0.05 = 5.0, clamped to 3
+        assert_eq!(target.engagement, 3);
+    }
+
+    #[test]
+    fn test_compute_average() {
+        let a = EmotionalProfile { engagement: 80, accord: 60, confiance: 40, frustration: 20, curiosite: 90, enthousiasme: 50 };
+        let b = EmotionalProfile { engagement: 40, accord: 80, confiance: 60, frustration: 40, curiosite: 30, enthousiasme: 70 };
+        let avg = compute_average(&[&a, &b]);
+        assert_eq!(avg.engagement, 60);
+        assert_eq!(avg.accord, 70);
+        assert_eq!(avg.confiance, 50);
+        assert_eq!(avg.frustration, 30);
+        assert_eq!(avg.curiosite, 60);
+        assert_eq!(avg.enthousiasme, 60);
     }
 }

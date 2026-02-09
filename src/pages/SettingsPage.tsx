@@ -9,10 +9,13 @@ import {
   Loader2,
   Moon,
   Search,
+  Server,
+  Settings as SettingsIcon,
   Sun,
   Wifi,
   WifiOff,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useTheme } from "@/providers/ThemeProvider";
@@ -109,7 +112,7 @@ export default function SettingsPage() {
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-2xl space-y-8">
           {/* General */}
-          <Section title={t("settings.general")}>
+          <Section title={t("settings.general")} icon={SettingsIcon}>
             <Field label={t("settings.username")}>
               <input
                 type="text"
@@ -202,7 +205,7 @@ export default function SettingsPage() {
           </Section>
 
           {/* Ollama */}
-          <Section title={t("settings.ollama")}>
+          <Section title={t("settings.ollama")} icon={Server}>
             <Field label={t("settings.ollamaUrl")}>
               <div className="flex gap-2">
                 <input
@@ -320,7 +323,7 @@ export default function SettingsPage() {
           </Section>
 
           {/* Tavily / Web Search */}
-          <Section title={t("settings.tavily")}>
+          <Section title={t("settings.tavily")} icon={Globe}>
             <Field label={t("settings.tavilyApiKey")}>
               <div className="flex gap-2">
                 <div className="relative flex-1">
@@ -392,7 +395,7 @@ export default function SettingsPage() {
                         className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                       />
                       <span className="text-sm text-muted-foreground">
-                        / 1000
+                        / 1000 ({t("settings.tavilyFree")})
                       </span>
                     </div>
                     <div className="h-2 w-full rounded-full bg-muted">
@@ -423,7 +426,8 @@ export default function SettingsPage() {
                     } catch {
                       /* ignore */
                     }
-                    if (history.length === 0) {
+                    const hasCurrentPeriod = settings.tavilyPeriodStart && settings.tavilyUsageCount > 0;
+                    if (history.length === 0 && !hasCurrentPeriod) {
                       return (
                         <p className="text-sm text-muted-foreground">
                           {t("settings.tavilyNoHistory")}
@@ -432,6 +436,15 @@ export default function SettingsPage() {
                     }
                     return (
                       <div className="max-h-48 overflow-y-auto space-y-1 rounded-md border border-border p-2">
+                        {hasCurrentPeriod && (
+                          <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+                            <Search className="h-3 w-3 shrink-0 text-primary" />
+                            {t("settings.tavilyCurrentPeriod", {
+                              start: settings.tavilyPeriodStart,
+                              count: settings.tavilyUsageCount,
+                            })}
+                          </div>
+                        )}
                         {history.map((entry, i) => (
                           <div
                             key={i}
@@ -460,14 +473,19 @@ export default function SettingsPage() {
 
 function Section({
   title,
+  icon: Icon,
   children,
 }: {
   title: string;
+  icon?: LucideIcon;
   children: React.ReactNode;
 }) {
   return (
-    <section>
-      <h2 className="mb-4 text-lg font-semibold text-foreground">{title}</h2>
+    <section className="rounded-xl border border-border bg-card/50 p-5">
+      <h2 className="mb-3 flex items-center gap-2 border-b border-border pb-3 text-lg font-semibold text-foreground">
+        {Icon && <Icon className="h-5 w-5 text-primary" />}
+        {title}
+      </h2>
       <div className="space-y-4">{children}</div>
     </section>
   );

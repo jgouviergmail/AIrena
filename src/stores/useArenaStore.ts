@@ -7,6 +7,7 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import type {
   ArenaEvent,
   EmotionalProfile,
+  EmotionSnapshot,
   Message,
   ParticipantInfo,
   SpeakerRole,
@@ -27,6 +28,8 @@ interface ArenaState {
   activeSpeakerId: string | null;
   messages: Message[];
   emotions: Map<string, EmotionalProfile>;
+  emotionHistory: Map<string, EmotionSnapshot[]>;
+  moodSummary: Map<string, string>;
   synthesis: string;
   synthesisStreaming: string;
   userTurnActive: boolean;
@@ -51,6 +54,8 @@ const initialState = {
   activeSpeakerId: null as string | null,
   messages: [] as Message[],
   emotions: new Map<string, EmotionalProfile>(),
+  emotionHistory: new Map<string, EmotionSnapshot[]>(),
+  moodSummary: new Map<string, string>(),
   synthesis: "",
   synthesisStreaming: "",
   userTurnActive: false,
@@ -209,8 +214,23 @@ export const useArenaStore = create<ArenaState>((set) => ({
         set((s) => {
           const em = new Map(s.emotions);
           em.set(event.data.speakerId, event.data.emotions);
-          return { emotions: em };
+          const ms = event.data.moodSummary
+            ? new Map(s.moodSummary).set(event.data.speakerId, event.data.moodSummary)
+            : s.moodSummary;
+          return { emotions: em, moodSummary: ms };
         });
+        break;
+
+      case "emotionHistoryUpdate":
+        set((s) => {
+          const eh = new Map(s.emotionHistory);
+          eh.set(event.data.speakerId, event.data.history);
+          return { emotionHistory: eh };
+        });
+        break;
+
+      case "emotionalThresholdCrossed":
+        // No state update — handled by EmotionSidebar via CSS animations
         break;
 
       case "banIssued":
@@ -318,6 +338,8 @@ export const useArenaStore = create<ArenaState>((set) => ({
     set({
       ...initialState,
       emotions: new Map<string, EmotionalProfile>(),
+      emotionHistory: new Map<string, EmotionSnapshot[]>(),
+      moodSummary: new Map<string, string>(),
     });
   },
 }));

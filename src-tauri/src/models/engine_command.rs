@@ -11,4 +11,10 @@ pub enum EngineCommand {
     SubmitUserMessage { content: String },
     /// User cancels their intervention
     SkipUserTurn,
+    /// Manually adjust a participant's emotion axis
+    AdjustEmotion {
+        speaker_id: String,
+        axis: String,
+        value: u8,
+    },
 }

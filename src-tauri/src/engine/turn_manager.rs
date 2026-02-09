@@ -362,7 +362,8 @@ mod tests {
             system_prompt: String::new(),
             llm_params: LlmParams::default(),
             emoji: None,
-        });
+            initial_emotions: None,
+        }, None);
         state.ban_remaining_turns = banned;
         state
     }

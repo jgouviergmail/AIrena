@@ -12,6 +12,9 @@ pub struct PredefinedProfile {
     pub profile_type: String,
     #[serde(default = "default_category")]
     pub category: String,
+    /// JSON string of initial EmotionalProfile (personality-specific starting emotions)
+    #[serde(default)]
+    pub initial_emotions: Option<String>,
 }
 
 fn default_profile_type() -> String {
