@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Brain } from "lucide-react";
+import { Brain, Globe } from "lucide-react";
 import { SpeakerBadge } from "./SpeakerBadge";
 import { cn } from "@/lib/utils";
 import type { Message, SpeakerRole } from "@/lib/types";
@@ -71,6 +71,7 @@ export function MessageBubble({
   streaming,
   isActive,
   emoji,
+  searchCount,
   participantNames = [],
   emojiMap,
 }: {
@@ -78,6 +79,7 @@ export function MessageBubble({
   streaming?: string;
   isActive?: boolean;
   emoji?: string;
+  searchCount?: number;
   participantNames?: string[];
   emojiMap?: Map<string, string>;
 }) {
@@ -108,12 +110,19 @@ export function MessageBubble({
       )}
     >
       <div className="mb-2 flex items-center justify-between">
-        <SpeakerBadge
-          name={message.speakerName}
-          role={message.role}
-          active={isActive}
-          emoji={emoji}
-        />
+        <div className="flex items-center gap-2">
+          <SpeakerBadge
+            name={message.speakerName}
+            role={message.role}
+            active={isActive}
+            emoji={emoji}
+          />
+          {(searchCount ?? 0) > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-500" title={`${searchCount} web search(es)`}>
+              <Globe className="h-3 w-3" />
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {message.innerThought && (
             <button

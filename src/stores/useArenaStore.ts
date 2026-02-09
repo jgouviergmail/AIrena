@@ -32,6 +32,9 @@ interface ArenaState {
   userTurnActive: boolean;
   interventionRequested: boolean;
   determiningOrder: boolean;
+  webSearchCount: number;
+  _pendingSearchCount: number;
+  webSearchesPerMessage: Record<string, number>;
   error: string | null;
 
   handleEvent: (event: ArenaEvent) => void;
@@ -53,6 +56,9 @@ const initialState = {
   userTurnActive: false,
   interventionRequested: false,
   determiningOrder: false,
+  webSearchCount: 0,
+  _pendingSearchCount: 0,
+  webSearchesPerMessage: {} as Record<string, number>,
   error: null as string | null,
 };
 
@@ -132,8 +138,13 @@ export const useArenaStore = create<ArenaState>((set) => ({
               ? event.data.message.reactions
               : [],
           };
+          const wsPerMsg = s._pendingSearchCount > 0
+            ? { ...s.webSearchesPerMessage, [msg.id]: s._pendingSearchCount }
+            : s.webSearchesPerMessage;
           return {
             messages: [...s.messages, msg],
+            webSearchesPerMessage: wsPerMsg,
+            _pendingSearchCount: 0,
           };
         });
         break;
@@ -183,7 +194,15 @@ export const useArenaStore = create<ArenaState>((set) => ({
         streamBuffer?.clearAll();
         set({
           activeSpeakerId: event.data.speakerId,
+          _pendingSearchCount: 0,
         });
+        break;
+
+      case "webSearchPerformed":
+        set((s) => ({
+          webSearchCount: s.webSearchCount + event.data.queries.length,
+          _pendingSearchCount: s._pendingSearchCount + event.data.queries.length,
+        }));
         break;
 
       case "emotionUpdated":

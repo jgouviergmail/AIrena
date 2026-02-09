@@ -5,6 +5,7 @@ use tauri::ipc::Channel;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::db::repository;
 use crate::engine::emotion_engine::{self, EmotionContext};
 use crate::engine::json_parser;
 use crate::engine::memory_manager;
@@ -16,14 +17,20 @@ use crate::models::events::ArenaEvent;
 use crate::models::gladiateur::GladIAteurState;
 use crate::models::iarbitre::IArbitreState;
 use crate::models::message::{Message, Reaction, ReactionType, SpeakerRole};
+use crate::models::settings::LlmParams;
 use crate::ollama::client::OllamaClient;
 use crate::ollama::error::OllamaError;
+use crate::tavily::client::TavilyClient;
+use crate::tavily::error::TavilyError;
 
 use super::truncate_str;
 
 /// Maximum length for a text to be considered a potential model refusal.
 /// Real substantive responses are longer than this threshold.
 const MAX_REFUSAL_LENGTH: usize = 300;
+
+/// Tavily free tier monthly quota (credits).
+const TAVILY_FREE_MONTHLY_QUOTA: u32 = 1000;
 
 /// Detect model safety refusals (e.g. "I'm sorry, but I can't help with that.")
 fn is_model_refusal(text: &str) -> bool {
@@ -70,6 +77,10 @@ pub struct DiscussionEngine {
     cancel_token: CancellationToken,
     /// Whether emotions should influence AI prompts (behavior variation)
     emotion_driven: bool,
+    /// Tavily web search client (None if no API key configured)
+    tavily_client: Option<TavilyClient>,
+    /// Database connection for Tavily usage tracking (Arc-internal, cheap clone)
+    db: tokio_rusqlite::Connection,
 }
 
 impl DiscussionEngine {
@@ -78,6 +89,8 @@ impl DiscussionEngine {
         discussion_id: String,
         ollama_url: &str,
         ollama_model: &str,
+        tavily_api_key: Option<&str>,
+        db: tokio_rusqlite::Connection,
     ) -> Self {
         let ollama_client = OllamaClient::new(ollama_url, ollama_model);
         let arbitre = IArbitreState::new(config.arbitre.clone());
@@ -86,6 +99,9 @@ impl DiscussionEngine {
             .iter()
             .map(|g| GladIAteurState::new(g.clone()))
             .collect();
+        let tavily_client = tavily_api_key
+            .filter(|k| !k.is_empty())
+            .map(TavilyClient::new);
 
         Self {
             discussion_id,
@@ -102,6 +118,8 @@ impl DiscussionEngine {
             user_intervention_handled: false,
             cancel_token: CancellationToken::new(),
             emotion_driven: false,
+            tavily_client,
+            db,
         }
     }
 
@@ -189,6 +207,32 @@ impl DiscussionEngine {
         });
 
         // --- INTRODUCTION ---
+        // Optional web search for IArbitre (1 credit, forced on topic)
+        let intro_web_search: Option<String> = if self.config.arbitre.web_search_intro
+            && self.tavily_client.is_some()
+        {
+            let global_usage = repository::get_tavily_usage(&self.db).await.unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to read Tavily usage count — assuming 0");
+                0
+            });
+            if global_usage < TAVILY_FREE_MONTHLY_QUOTA {
+                let topic_query = truncate_str(&self.config.topic, 200).to_string();
+                let (ctx, _count) = self.process_web_search(
+                    &self.arbitre.config.system_prompt,
+                    &self.arbitre.config.id,
+                    &self.arbitre.config.name,
+                    1,
+                    "",
+                    "",
+                    Some(vec![topic_query]),
+                    &self.arbitre.config.llm_params,
+                    0,
+                    &channel,
+                ).await;
+                ctx
+            } else { None }
+        } else { None };
+
         let participant_names: Vec<String> = self
             .gladiateurs
             .iter()
@@ -198,6 +242,7 @@ impl DiscussionEngine {
             &self.config.topic,
             &participant_names,
             &self.config.discussion_language,
+            intro_web_search.as_deref(),
         );
         let intro_request = self.ollama_client.build_request(
             &self.config.arbitre.system_prompt,
@@ -373,6 +418,46 @@ impl DiscussionEngine {
                     self.process_reactions(glad_idx, &channel).await;
                 }
 
+                // C.2.5 WEB SEARCH (if enabled + quotas OK)
+                // First intervention: mandatory search on topic (skip LLM decision)
+                // Subsequent turns: LLM decides whether to search
+                let web_search_context: Option<String> = {
+                    let global_usage = repository::get_tavily_usage(&self.db).await.unwrap_or_else(|e| {
+                        tracing::warn!(error = %e, "Failed to read Tavily usage count — assuming 0");
+                        0
+                    });
+                    let (can, max_q) = self.can_search_gladiateur(glad_idx, global_usage);
+                    if can {
+                        let is_first_search = self.gladiateurs[glad_idx].web_searches_used_discussion == 0;
+                        let forced_queries = if is_first_search {
+                            Some(vec![truncate_str(&self.config.topic, 200).to_string()])
+                        } else {
+                            None
+                        };
+                        let directive = prompt_builder::default_search_directive(
+                            &self.config.discussion_language,
+                        );
+                        let recent = truncate_str(
+                            &self.build_recent_exchanges(glad_idx), 500
+                        ).to_string();
+                        let used_so_far = self.gladiateurs[glad_idx].web_searches_used_discussion;
+                        let (ctx, count) = self.process_web_search(
+                            &self.gladiateurs[glad_idx].config.system_prompt,
+                            &speaker_id,
+                            &speaker_name,
+                            max_q,
+                            directive,
+                            &recent,
+                            forced_queries,
+                            &self.gladiateurs[glad_idx].config.llm_params,
+                            used_so_far,
+                            &channel,
+                        ).await;
+                        self.gladiateurs[glad_idx].web_searches_used_discussion += count;
+                        ctx
+                    } else { None }
+                };
+
                 // C.3 INNER THOUGHT + C.4 PUBLIC INTERVENTION
                 // When think mode is enabled, the model reasons internally (replaces separate thought phase)
                 let use_think = self.should_enable_think(glad_idx);
@@ -382,7 +467,7 @@ impl DiscussionEngine {
                         turn = self.current_turn,
                         "Using think mode for intervention"
                     );
-                    let (t, c) = self.process_intervention_think(glad_idx, &channel).await;
+                    let (t, c) = self.process_intervention_think(glad_idx, web_search_context.as_deref(), &channel).await;
                     // If think mode failed (HTTP 400 = model doesn't support it),
                     // fall back to the normal thought + intervention path
                     if c.is_none() {
@@ -390,18 +475,18 @@ impl DiscussionEngine {
                             speaker = %speaker_name,
                             "Think mode produced no content, falling back to normal intervention"
                         );
-                        let thought = self.process_thought(glad_idx, &channel).await;
+                        let thought = self.process_thought(glad_idx, web_search_context.as_deref(), &channel).await;
                         let content = self
-                            .process_intervention(glad_idx, thought.as_deref(), &channel)
+                            .process_intervention(glad_idx, thought.as_deref(), web_search_context.as_deref(), &channel)
                             .await;
                         (thought, content)
                     } else {
                         (t, c)
                     }
                 } else {
-                    let thought = self.process_thought(glad_idx, &channel).await;
+                    let thought = self.process_thought(glad_idx, web_search_context.as_deref(), &channel).await;
                     let content = self
-                        .process_intervention(glad_idx, thought.as_deref(), &channel)
+                        .process_intervention(glad_idx, thought.as_deref(), web_search_context.as_deref(), &channel)
                         .await;
                     (thought, content)
                 };
@@ -474,7 +559,8 @@ impl DiscussionEngine {
                 turns_completed = self.current_turn,
                 "Starting synthesis generation"
             );
-            self.generate_synthesis(&channel).await;
+
+            self.generate_synthesis(None, &channel).await;
             tracing::info!(discussion_id = %self.discussion_id, "Synthesis generation complete");
         } else {
             tracing::info!(
@@ -715,6 +801,7 @@ impl DiscussionEngine {
     async fn process_thought(
         &self,
         glad_idx: usize,
+        web_search_results: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> Option<String> {
         let has_prior_context = !self.turn_messages.is_empty()
@@ -728,6 +815,7 @@ impl DiscussionEngine {
             self.emotion_driven,
             self.current_turn,
             self.config.max_turns,
+            web_search_results,
         );
         let request = self.ollama_client.build_request(
             &self.gladiateurs[glad_idx].config.system_prompt,
@@ -769,6 +857,7 @@ impl DiscussionEngine {
         &self,
         glad_idx: usize,
         thought: Option<&str>,
+        web_search_results: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> Option<String> {
         let (sys, usr) = prompt_builder::build_intervention_prompt(
@@ -783,6 +872,7 @@ impl DiscussionEngine {
             self.emotion_driven,
             self.current_turn,
             self.config.max_turns,
+            web_search_results,
         );
 
         let request = self.ollama_client.build_request(
@@ -953,6 +1043,7 @@ impl DiscussionEngine {
     async fn process_intervention_think(
         &self,
         glad_idx: usize,
+        web_search_results: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> (Option<String>, Option<String>) {
         let (sys, usr) = prompt_builder::build_intervention_prompt(
@@ -967,6 +1058,7 @@ impl DiscussionEngine {
             self.emotion_driven,
             self.current_turn,
             self.config.max_turns,
+            web_search_results,
         );
 
         let mut request = self.ollama_client.build_request(
@@ -1301,11 +1393,12 @@ impl DiscussionEngine {
         }
     }
 
-    async fn generate_synthesis(&self, channel: &Channel<ArenaEvent>) {
+    async fn generate_synthesis(&self, web_search_results: Option<&str>, channel: &Channel<ArenaEvent>) {
         let prompt = prompt_builder::build_synthesis_prompt(
             &self.config.topic,
             &self.arbitre.memory,
             &self.config.discussion_language,
+            web_search_results,
         );
         let request = self.ollama_client.build_request(
             &self.arbitre.config.system_prompt,
@@ -1341,6 +1434,143 @@ impl DiscussionEngine {
         }
     }
 
+    // ===== Web Search =====
+
+    /// Check if a gladiateur can search this turn.
+    /// Returns (can_search, max_queries_this_turn).
+    /// Uses global `web_search_max_per_gladiateur` from config (max 1 per turn).
+    fn can_search_gladiateur(&self, glad_idx: usize, global_usage: u32) -> (bool, u32) {
+        let max_per_disc = self.config.web_search_max_per_gladiateur;
+        if max_per_disc == 0 || self.tavily_client.is_none() {
+            return (false, 0);
+        }
+        let remaining_disc = max_per_disc
+            .saturating_sub(self.gladiateurs[glad_idx].web_searches_used_discussion);
+        // Max 1 search per gladiateur per turn
+        let max_queries = remaining_disc.min(1);
+        let global_remaining = TAVILY_FREE_MONTHLY_QUOTA.saturating_sub(global_usage);
+        let max_queries = max_queries.min(global_remaining);
+        (max_queries > 0, max_queries)
+    }
+
+    /// Execute web search for a speaker. Returns (formatted_context, queries_executed_count).
+    /// Uses `&self` — no fields mutated; counter increment happens at call site.
+    #[allow(clippy::too_many_arguments)]
+    async fn process_web_search(
+        &self,
+        system_prompt: &str,
+        speaker_id: &str,
+        speaker_name: &str,
+        max_queries: u32,
+        search_directive: &str,
+        recent_context: &str,
+        forced_queries: Option<Vec<String>>,
+        llm_params: &LlmParams,
+        searches_used_so_far: u32,
+        channel: &Channel<ArenaEvent>,
+    ) -> (Option<String>, u32) {
+        // 1. Determine queries
+        let queries: Vec<String> = if let Some(forced) = forced_queries {
+            forced.into_iter().take(max_queries as usize).collect()
+        } else {
+            // LLM decision (non-streaming, JSON)
+            let mut decision_params = llm_params.clone();
+            decision_params.temperature = 0.3;
+            decision_params.num_predict = 100;
+
+            let prompt = prompt_builder::build_web_search_decision_prompt(
+                &self.config.topic,
+                recent_context,
+                search_directive,
+                max_queries,
+                &self.config.discussion_language,
+            );
+            let request = self.ollama_client.build_request(
+                system_prompt,
+                &prompt,
+                &decision_params,
+                true, // json_mode
+            );
+            let raw = match self.ollama_client.chat(&request, self.cancel_token.clone()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Web search decision LLM call failed — skipping search");
+                    return (None, 0);
+                }
+            };
+            let decision = json_parser::parse_json_response::<json_parser::SearchDecisionResponse>(&raw)
+                .unwrap_or_default();
+
+            if !decision.needs_search || decision.queries.is_empty() {
+                return (None, 0);
+            }
+            decision.queries.into_iter().take(max_queries as usize).collect()
+        };
+
+        if queries.is_empty() {
+            return (None, 0);
+        }
+
+        // 2. Execute each search
+        let tavily = match self.tavily_client.as_ref() {
+            Some(c) => c,
+            None => return (None, 0),
+        };
+        let mut all_results: Vec<(String, crate::tavily::TavilySearchResponse)> = Vec::new();
+        let mut executed_count = 0u32;
+
+        for query in &queries {
+            if self.cancel_token.is_cancelled() {
+                break;
+            }
+
+            match tavily.search(query, self.cancel_token.clone()).await {
+                Ok(response) => {
+                    all_results.push((query.clone(), response));
+                    executed_count += 1;
+                    if let Err(e) = repository::increment_tavily_usage(&self.db).await {
+                        tracing::warn!(error = %e, "Failed to increment Tavily usage counter");
+                    }
+                }
+                Err(TavilyError::QuotaExceeded) => {
+                    tracing::warn!("Tavily quota exceeded — stopping all searches");
+                    break;
+                }
+                Err(TavilyError::InvalidKey) => {
+                    tracing::error!("Tavily API key invalid — stopping all searches");
+                    break;
+                }
+                Err(TavilyError::Cancelled) => break,
+                Err(e) => {
+                    tracing::warn!(query = %query, error = %e, "Tavily search failed — skipping");
+                    continue;
+                }
+            }
+        }
+
+        if executed_count == 0 {
+            return (None, 0);
+        }
+
+        // 3. Emit batched event
+        let executed_queries: Vec<String> = all_results.iter().map(|(q, _)| q.clone()).collect();
+        let total_results: u32 = all_results.iter().map(|(_, r)| r.results.len() as u32).sum();
+        let _ = channel.send(ArenaEvent::WebSearchPerformed {
+            speaker_id: speaker_id.to_string(),
+            speaker_name: speaker_name.to_string(),
+            queries: executed_queries,
+            results_count: total_results,
+            searches_used_discussion: searches_used_so_far + executed_count,
+        });
+
+        // 4. Format for prompt injection
+        let lang = &self.config.discussion_language;
+        (
+            Some(prompt_builder::build_search_results_context(&all_results, lang)),
+            executed_count,
+        )
+    }
+
     fn create_message(
         &self,
         speaker_id: &str,
@@ -1361,5 +1591,71 @@ impl DiscussionEngine {
             is_ban_notification: false,
             timestamp: chrono::Utc::now(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TAVILY_FREE_MONTHLY_QUOTA;
+
+    /// Test the quota logic directly (same as can_search_gladiateur body)
+    fn check_quota(max_per_disc: u32, used: u32, global_usage: u32, has_tavily: bool) -> (bool, u32) {
+        if max_per_disc == 0 || !has_tavily {
+            return (false, 0);
+        }
+        let remaining_disc = max_per_disc.saturating_sub(used);
+        let max_queries = remaining_disc.min(1); // max 1 per turn
+        let global_remaining = TAVILY_FREE_MONTHLY_QUOTA.saturating_sub(global_usage);
+        let max_queries = max_queries.min(global_remaining);
+        (max_queries > 0, max_queries)
+    }
+
+    #[test]
+    fn test_quota_disabled() {
+        let (can, max) = check_quota(0, 0, 0, true);
+        assert!(!can);
+        assert_eq!(max, 0);
+    }
+
+    #[test]
+    fn test_quota_no_tavily() {
+        let (can, max) = check_quota(5, 0, 0, false);
+        assert!(!can);
+        assert_eq!(max, 0);
+    }
+
+    #[test]
+    fn test_quota_fresh() {
+        let (can, max) = check_quota(5, 0, 0, true);
+        assert!(can);
+        assert_eq!(max, 1); // max 1 per turn
+    }
+
+    #[test]
+    fn test_quota_discussion_limit() {
+        let (can, max) = check_quota(5, 4, 0, true);
+        assert!(can);
+        assert_eq!(max, 1); // min(5-4, 1) = 1
+    }
+
+    #[test]
+    fn test_quota_exhausted() {
+        let (can, max) = check_quota(5, 5, 0, true);
+        assert!(!can);
+        assert_eq!(max, 0); // 5-5 = 0
+    }
+
+    #[test]
+    fn test_quota_global_limit() {
+        let (can, max) = check_quota(10, 0, 999, true);
+        assert!(can);
+        assert_eq!(max, 1); // min(10, 1, 1000-999) = 1
+    }
+
+    #[test]
+    fn test_quota_global_exhausted() {
+        let (can, max) = check_quota(10, 0, 1000, true);
+        assert!(!can);
+        assert_eq!(max, 0); // 1000-1000 = 0
     }
 }

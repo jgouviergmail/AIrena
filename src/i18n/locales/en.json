@@ -52,7 +52,16 @@
     "modelPreloadError": "Failed to load model",
     "usernameRequired": "Username is required",
     "emotionDriven": "Emotion-driven behavior",
-    "emotionDrivenDesc": "Emotions influence the AI argumentation style"
+    "emotionDrivenDesc": "Emotions influence the AI argumentation style",
+    "tavily": "Internet Search (Tavily)",
+    "tavilyApiKey": "Tavily API Key",
+    "tavilyLink": "Get a key at tavily.com",
+    "tavilyFreeCredits": "1,000 free credits per month",
+    "tavilyPeriodStart": "Period start",
+    "tavilyUsageCount": "Credits used",
+    "tavilyHistory": "Usage history",
+    "tavilyNoHistory": "No history",
+    "tavilyPeriodEntry": "From {{start}} to {{end}} — {{count}} credit(s)"
   },
   "setup": {
     "title": "Discussion setup",
@@ -111,7 +120,13 @@
     "saveGladiateur": "Save this profile",
     "gladiateurSaved": "Profile saved",
     "resetGladiateur": "Reset to original profile",
-    "deleteProfile": "Delete this profile"
+    "deleteProfile": "Delete this profile",
+    "webSearch": "Internet Search",
+    "arbitreWebSearchIntro": "1 internet credit for introduction",
+    "webSearchMaxPerGladiateur": "Searches per GladIAteur (entire discussion)",
+    "webSearchMaxPerGladiateurDesc": "Max 1 search per turn, maximum {{max}} for the discussion",
+    "webSearchBudget": "Total budget: {{count}} search(es)",
+    "webSearchNoKey": "Configure your Tavily API key in Settings"
   },
   "arena": {
     "title": "Discussion in progress",
@@ -138,7 +153,8 @@
     "turnSkipped": "Turn skipped: {{reason}}",
     "synthesizing": "Synthesizing...",
     "like": "Agree",
-    "dislike": "Disagree"
+    "dislike": "Disagree",
+    "webSearchPerformed": "{{name}} performed {{count}} search(es)"
   },
   "summary": {
     "title": "Discussion summary",

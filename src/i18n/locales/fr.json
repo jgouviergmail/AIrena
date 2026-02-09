@@ -52,7 +52,16 @@
     "modelPreloadError": "Échec du chargement du modèle",
     "usernameRequired": "Le nom d'utilisateur est requis",
     "emotionDriven": "Comportement émotionnel",
-    "emotionDrivenDesc": "Les émotions influencent le style d'argumentation des IA"
+    "emotionDrivenDesc": "Les émotions influencent le style d'argumentation des IA",
+    "tavily": "Recherche Internet (Tavily)",
+    "tavilyApiKey": "Clé API Tavily",
+    "tavilyLink": "Obtenir une clé sur tavily.com",
+    "tavilyFreeCredits": "1 000 crédits gratuits par mois",
+    "tavilyPeriodStart": "Début de la période",
+    "tavilyUsageCount": "Crédits utilisés",
+    "tavilyHistory": "Historique d'utilisation",
+    "tavilyNoHistory": "Aucun historique",
+    "tavilyPeriodEntry": "Du {{start}} au {{end}} — {{count}} crédit(s)"
   },
   "setup": {
     "title": "Configuration de la discussion",
@@ -111,7 +120,13 @@
     "saveGladiateur": "Sauvegarder ce profil",
     "gladiateurSaved": "Profil sauvegardé",
     "resetGladiateur": "Réinitialiser au profil d'origine",
-    "deleteProfile": "Supprimer ce profil"
+    "deleteProfile": "Supprimer ce profil",
+    "webSearch": "Recherche Internet",
+    "arbitreWebSearchIntro": "1 crédit internet pour l'introduction",
+    "webSearchMaxPerGladiateur": "Recherches par GladIAteur (discussion entière)",
+    "webSearchMaxPerGladiateurDesc": "Max 1 recherche par tour, maximum {{max}} pour la discussion",
+    "webSearchBudget": "Budget total : {{count}} recherche(s)",
+    "webSearchNoKey": "Configurez votre clé API Tavily dans les paramètres"
   },
   "arena": {
     "title": "Discussion en cours",
@@ -138,7 +153,8 @@
     "turnSkipped": "Tour sauté : {{reason}}",
     "synthesizing": "Synthèse en cours...",
     "like": "D'accord",
-    "dislike": "Pas d'accord"
+    "dislike": "Pas d'accord",
+    "webSearchPerformed": "{{name}} a effectué {{count}} recherche(s)"
   },
   "summary": {
     "title": "Synthèse de la discussion",

@@ -8,6 +8,7 @@ import { getProfileEmoji, ROLE_EMOJIS } from "@/lib/profile-emoji";
 export function DiscussionFeed() {
   const messages = useArenaStore((s) => s.messages);
   const activeSpeakerId = useArenaStore((s) => s.activeSpeakerId);
+  const webSearchesPerMessage = useArenaStore((s) => s.webSearchesPerMessage);
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
   const arbitre = useSetupStore((s) => s.arbitre);
 
@@ -68,6 +69,7 @@ export function DiscussionFeed() {
           message={msg}
           isActive={msg.speakerId === activeSpeakerId}
           emoji={emojiMap.get(msg.speakerId)}
+          searchCount={webSearchesPerMessage[msg.id]}
           participantNames={participantNames}
           emojiMap={emojiMap}
         />

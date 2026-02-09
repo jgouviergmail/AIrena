@@ -5,6 +5,7 @@ mod error;
 mod models;
 mod ollama;
 mod state;
+mod tavily;
 
 use std::sync::{Arc, Mutex};
 

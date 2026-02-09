@@ -34,6 +34,7 @@ export interface IArbitreConfig {
   systemPrompt: string;
   turnDistribution: "sequential" | "random" | "democratic" | "authoritarian";
   llmParams: LlmParams;
+  webSearchIntro?: boolean;
 }
 
 export interface DiscussionConfig {
@@ -44,6 +45,7 @@ export interface DiscussionConfig {
   maxTurns: number | null;
   userName: string;
   userInterventionTimeoutSecs: number;
+  webSearchMaxPerGladiateur: number;
 }
 
 export type SpeakerRole = "IArbitre" | "GladIAteur" | "user";
@@ -86,6 +88,16 @@ export interface AppSettings {
   ollamaUrl: string;
   ollamaModel: string;
   emotionDriven: boolean;
+  tavilyApiKey: string;
+  tavilyPeriodStart: string;
+  tavilyUsageCount: number;
+  tavilyUsageHistory: string;
+}
+
+export interface TavilyPeriodHistory {
+  periodStart: string;
+  periodEnd: string;
+  usageCount: number;
 }
 
 export interface PredefinedProfile {
@@ -192,5 +204,15 @@ export type ArenaEvent =
   | { type: "resumeConfirmed"; data: null }
   | { type: "synthesisChunk"; data: { chunk: string } }
   | { type: "synthesisComplete"; data: { summary: string } }
+  | {
+      type: "webSearchPerformed";
+      data: {
+        speakerId: string;
+        speakerName: string;
+        queries: string[];
+        resultsCount: number;
+        searchesUsedDiscussion: number;
+      };
+    }
   | { type: "discussionEnded"; data: null }
   | { type: "error"; data: { message: string } };

@@ -1,13 +1,16 @@
 import { useTranslation } from "react-i18next";
+import { Search } from "lucide-react";
 
 export function TurnIndicator({
   turn,
   status,
   determiningOrder,
+  webSearchCount,
 }: {
   turn: number;
   status: string;
   determiningOrder: boolean;
+  webSearchCount?: number;
 }) {
   const { t } = useTranslation();
 
@@ -16,6 +19,12 @@ export function TurnIndicator({
       {turn > 0 && (
         <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
           {t("arena.turn", { number: turn })}
+        </span>
+      )}
+      {(webSearchCount ?? 0) > 0 && (
+        <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2.5 py-0.5 text-xs font-medium text-blue-500">
+          <Search className="h-3 w-3" />
+          {webSearchCount}
         </span>
       )}
       {status === "paused" && (

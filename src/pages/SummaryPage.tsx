@@ -60,20 +60,21 @@ export default function SummaryPage() {
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-2xl space-y-6">
           {/* Stats */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className="space-y-3">
             <StatCard
               label={t("summary.topic")}
               value={topic || "-"}
-              truncate
             />
-            <StatCard
-              label={t("summary.turns")}
-              value={String(turnsCompleted)}
-            />
-            <StatCard
-              label={t("summary.participants")}
-              value={String(gladiateurs.length)}
-            />
+            <div className="grid grid-cols-2 gap-3">
+              <StatCard
+                label={t("summary.turns")}
+                value={String(turnsCompleted)}
+              />
+              <StatCard
+                label={t("summary.participants")}
+                value={String(gladiateurs.length)}
+              />
+            </div>
           </div>
 
           {/* Tab toggle */}

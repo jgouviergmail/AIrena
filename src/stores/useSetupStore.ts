@@ -16,6 +16,7 @@ interface SetupState {
   gladiateurs: GladIAteurConfig[];
   maxTurns: number | null;
   userInterventionTimeoutSecs: number;
+  webSearchMaxPerGladiateur: number;
 
   setStep: (step: number) => void;
   setTopic: (topic: string) => void;
@@ -28,6 +29,7 @@ interface SetupState {
   updateGladiateurLlm: (id: string, patch: Partial<LlmParams>) => void;
   setMaxTurns: (val: number | null) => void;
   setUserTimeout: (val: number) => void;
+  setWebSearchMaxPerGladiateur: (val: number) => void;
   buildConfig: (userName: string) => DiscussionConfig;
   reset: () => void;
 }
@@ -48,6 +50,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   gladiateurs: [],
   maxTurns: null,
   userInterventionTimeoutSecs: 120,
+  webSearchMaxPerGladiateur: 0,
 
   setStep: (step) => set({ step }),
   setTopic: (topic) => set({ topic }),
@@ -79,8 +82,20 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       ),
     })),
 
-  setMaxTurns: (val) => set({ maxTurns: val }),
+  setMaxTurns: (val) =>
+    set((s) => ({
+      maxTurns: val,
+      // Auto-clamp web search max if turns decreased below it
+      webSearchMaxPerGladiateur:
+        val !== null && s.webSearchMaxPerGladiateur > val
+          ? val
+          : s.webSearchMaxPerGladiateur,
+    })),
   setUserTimeout: (val) => set({ userInterventionTimeoutSecs: val }),
+  setWebSearchMaxPerGladiateur: (val) =>
+    set((s) => ({
+      webSearchMaxPerGladiateur: Math.min(val, s.maxTurns ?? Infinity),
+    })),
 
   buildConfig: (userName) => {
     const s = get();
@@ -95,6 +110,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       maxTurns: s.maxTurns,
       userName,
       userInterventionTimeoutSecs: s.userInterventionTimeoutSecs,
+      webSearchMaxPerGladiateur: s.webSearchMaxPerGladiateur,
     };
   },
 
@@ -107,5 +123,6 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       gladiateurs: [],
       maxTurns: null,
       userInterventionTimeoutSecs: 120,
+      webSearchMaxPerGladiateur: 0,
     }),
 }));

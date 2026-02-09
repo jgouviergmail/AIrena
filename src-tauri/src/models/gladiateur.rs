@@ -25,6 +25,7 @@ pub struct GladIAteurState {
     pub ban_issued_this_turn: bool,
     pub memory: ParticipantMemory,
     pub emotions: EmotionalProfile,
+    pub web_searches_used_discussion: u32,
 }
 
 impl GladIAteurState {
@@ -35,6 +36,7 @@ impl GladIAteurState {
             ban_issued_this_turn: false,
             memory: ParticipantMemory::default(),
             emotions: EmotionalProfile::default(),
+            web_searches_used_discussion: 0,
         }
     }
 

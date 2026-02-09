@@ -75,6 +75,15 @@ struct AuthoritarianOrderResponse {
     order: Vec<String>,
 }
 
+/// Response from LLM deciding whether to search the web
+#[derive(Debug, Default, serde::Deserialize)]
+pub(crate) struct SearchDecisionResponse {
+    #[serde(default)]
+    pub needs_search: bool,
+    #[serde(default)]
+    pub queries: Vec<String>,
+}
+
 /// Parse a democratic vote response, returning a ranked list of names.
 /// Falls back to empty Vec on parse failure.
 pub fn parse_vote(raw: &str) -> Vec<String> {
@@ -819,5 +828,50 @@ mod tests {
     fn test_parse_authoritarian_order_invalid() {
         let result = parse_authoritarian_order("garbage");
         assert!(result.is_empty());
+    }
+
+    // ── SearchDecisionResponse tests ──
+
+    #[test]
+    fn test_parse_search_decision_valid() {
+        let raw = r#"{"needs_search": true, "queries": ["climate change 2026", "CO2 levels"]}"#;
+        let decision: SearchDecisionResponse = parse_json_response(raw).unwrap();
+        assert!(decision.needs_search);
+        assert_eq!(decision.queries.len(), 2);
+        assert_eq!(decision.queries[0], "climate change 2026");
+    }
+
+    #[test]
+    fn test_parse_search_decision_no_search() {
+        let raw = r#"{"needs_search": false, "queries": []}"#;
+        let decision: SearchDecisionResponse = parse_json_response(raw).unwrap();
+        assert!(!decision.needs_search);
+        assert!(decision.queries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_search_decision_missing_fields() {
+        // Missing queries field — serde(default) should provide empty Vec
+        let raw = r#"{"needs_search": true}"#;
+        let decision: SearchDecisionResponse = parse_json_response(raw).unwrap();
+        assert!(decision.needs_search);
+        assert!(decision.queries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_search_decision_garbage_defaults() {
+        let raw = "This is not JSON at all";
+        let decision: SearchDecisionResponse =
+            parse_json_response(raw).unwrap_or_default();
+        assert!(!decision.needs_search);
+        assert!(decision.queries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_search_decision_markdown_wrapped() {
+        let raw = "Here:\n```json\n{\"needs_search\": true, \"queries\": [\"test\"]}\n```\n";
+        let decision: SearchDecisionResponse = parse_json_response(raw).unwrap();
+        assert!(decision.needs_search);
+        assert_eq!(decision.queries, vec!["test"]);
     }
 }

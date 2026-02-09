@@ -33,6 +33,10 @@ pub struct AppSettings {
     pub ollama_url: String,
     pub ollama_model: String,
     pub emotion_driven: bool,
+    pub tavily_api_key: String,
+    pub tavily_period_start: String,
+    pub tavily_usage_count: u32,
+    pub tavily_usage_history: String,
 }
 
 impl Default for AppSettings {
@@ -44,6 +48,10 @@ impl Default for AppSettings {
             ollama_url: "http://localhost:11434".to_string(),
             ollama_model: String::new(),
             emotion_driven: false,
+            tavily_api_key: String::new(),
+            tavily_period_start: String::new(),
+            tavily_usage_count: 0,
+            tavily_usage_history: "[]".to_string(),
         }
     }
 }

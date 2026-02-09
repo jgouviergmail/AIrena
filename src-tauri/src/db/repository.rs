@@ -1,4 +1,4 @@
-use chrono::DateTime;
+use chrono::{DateTime, Datelike, NaiveDate};
 use tokio_rusqlite::Connection;
 
 use crate::models::history::{
@@ -24,6 +24,10 @@ pub async fn get_settings(db: &Connection) -> Result<AppSettings, tokio_rusqlite
                 "ollama_url" => settings.ollama_url = value,
                 "ollama_model" => settings.ollama_model = value,
                 "emotion_driven" => settings.emotion_driven = value == "true",
+                "tavily_api_key" => settings.tavily_api_key = value,
+                "tavily_period_start" => settings.tavily_period_start = value,
+                "tavily_usage_count" => settings.tavily_usage_count = value.parse().unwrap_or(0),
+                "tavily_usage_history" => settings.tavily_usage_history = value,
                 _ => {}
             }
         }
@@ -36,7 +40,13 @@ pub async fn save_settings(
     db: &Connection,
     settings: &AppSettings,
 ) -> Result<(), tokio_rusqlite::Error> {
-    let settings = settings.clone();
+    let mut settings = settings.clone();
+
+    // Auto-set period_start if key is present but period is empty
+    if !settings.tavily_api_key.is_empty() && settings.tavily_period_start.is_empty() {
+        settings.tavily_period_start = chrono::Local::now().format("%Y-%m-%d").to_string();
+    }
+
     db.call(move |conn| {
         let tx = conn.transaction()?;
         let pairs: Vec<(&str, String)> = vec![
@@ -46,6 +56,10 @@ pub async fn save_settings(
             ("ollama_url", settings.ollama_url.clone()),
             ("ollama_model", settings.ollama_model.clone()),
             ("emotion_driven", settings.emotion_driven.to_string()),
+            ("tavily_api_key", settings.tavily_api_key.clone()),
+            ("tavily_period_start", settings.tavily_period_start.clone()),
+            ("tavily_usage_count", settings.tavily_usage_count.to_string()),
+            ("tavily_usage_history", settings.tavily_usage_history.clone()),
         ];
         for (key, value) in &pairs {
             tx.execute(
@@ -362,4 +376,109 @@ pub async fn delete_all_discussions(db: &Connection) -> Result<(), tokio_rusqlit
         Ok(())
     })
     .await
+}
+
+// ── Tavily usage tracking ───────────────────────────────────────────
+
+pub async fn get_tavily_usage(db: &Connection) -> Result<u32, tokio_rusqlite::Error> {
+    db.call(|conn| {
+        let count: u32 = conn
+            .query_row(
+                "SELECT COALESCE(CAST(value AS INTEGER), 0) FROM settings WHERE key = 'tavily_usage_count'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(count)
+    })
+    .await
+}
+
+pub async fn increment_tavily_usage(db: &Connection) -> Result<u32, tokio_rusqlite::Error> {
+    db.call(|conn| {
+        conn.execute(
+            "UPDATE settings SET value = CAST(value AS INTEGER) + 1 WHERE key = 'tavily_usage_count'",
+            [],
+        )?;
+        let count: u32 = conn.query_row(
+            "SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'tavily_usage_count'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    })
+    .await
+}
+
+pub async fn check_and_reset_tavily_period(db: &Connection) -> Result<(), tokio_rusqlite::Error> {
+    let settings = get_settings(db).await?;
+
+    if settings.tavily_api_key.is_empty() || settings.tavily_period_start.is_empty() {
+        return Ok(());
+    }
+
+    let period_start = match NaiveDate::parse_from_str(&settings.tavily_period_start, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => return Ok(()),
+    };
+
+    let today = chrono::Local::now().date_naive();
+    let period_end = add_one_month(period_start);
+
+    if today < period_end {
+        return Ok(()); // still within current period
+    }
+
+    // Archive the expired period
+    let mut history: Vec<serde_json::Value> =
+        serde_json::from_str(&settings.tavily_usage_history).unwrap_or_default();
+    history.push(serde_json::json!({
+        "periodStart": settings.tavily_period_start,
+        "periodEnd": period_end.format("%Y-%m-%d").to_string(),
+        "usageCount": settings.tavily_usage_count,
+    }));
+
+    // Advance period_start by N months to land in the current month
+    let mut new_start = period_end;
+    while add_one_month(new_start) <= today {
+        new_start = add_one_month(new_start);
+    }
+
+    let new_settings = AppSettings {
+        tavily_period_start: new_start.format("%Y-%m-%d").to_string(),
+        tavily_usage_count: 0,
+        tavily_usage_history: serde_json::to_string(&history).unwrap_or_else(|_| "[]".to_string()),
+        ..settings
+    };
+
+    save_settings(db, &new_settings).await
+}
+
+/// Add one calendar month to a NaiveDate, clamping to the last day of the target month.
+fn add_one_month(date: NaiveDate) -> NaiveDate {
+    let (year, month) = if date.month() == 12 {
+        (date.year() + 1, 1)
+    } else {
+        (date.year(), date.month() + 1)
+    };
+    // Clamp day to max days in target month
+    NaiveDate::from_ymd_opt(year, month, date.day())
+        .unwrap_or_else(|| {
+            // Day overflows (e.g., Jan 31 → Feb 28)
+            let last_day = last_day_of_month(year, month);
+            NaiveDate::from_ymd_opt(year, month, last_day).unwrap()
+        })
+}
+
+fn last_day_of_month(year: i32, month: u32) -> u32 {
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    NaiveDate::from_ymd_opt(next_year, next_month, 1)
+        .unwrap()
+        .pred_opt()
+        .unwrap()
+        .day()
 }

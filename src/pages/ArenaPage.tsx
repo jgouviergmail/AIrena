@@ -18,6 +18,7 @@ export default function ArenaPage() {
   const userTurnActive = useArenaStore((s) => s.userTurnActive);
   const emotions = useArenaStore((s) => s.emotions);
   const determiningOrder = useArenaStore((s) => s.determiningOrder);
+  const webSearchCount = useArenaStore((s) => s.webSearchCount);
   const error = useArenaStore((s) => s.error);
   const synthesisStreaming = useArenaStore((s) => s.synthesisStreaming);
   const userTimeout = useSetupStore((s) => s.userInterventionTimeoutSecs);
@@ -49,7 +50,7 @@ export default function ArenaPage() {
         {/* Status bar — outside overflow-hidden so tooltips are visible */}
         <div className="relative z-10 flex items-center justify-between border-b border-border px-4 py-2">
           <div className="flex items-center gap-3">
-            <TurnIndicator turn={currentTurn} status={status} determiningOrder={determiningOrder} />
+            <TurnIndicator turn={currentTurn} status={status} determiningOrder={determiningOrder} webSearchCount={webSearchCount} />
             {/* Emotion dots for gladiateurs */}
             <div className="flex items-center gap-1.5">
               {gladiateurs.map((g) => {

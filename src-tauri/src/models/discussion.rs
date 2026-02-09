@@ -30,4 +30,8 @@ pub struct DiscussionConfig {
     pub max_turns: Option<u32>,
     pub user_name: String,
     pub user_intervention_timeout_secs: u64,
+    /// Max web searches per gladiateur for the entire discussion (0 = disabled).
+    /// Bounded by max_turns (max 1 search per gladiateur per turn).
+    #[serde(default)]
+    pub web_search_max_per_gladiateur: u32,
 }

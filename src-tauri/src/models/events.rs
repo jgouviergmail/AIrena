@@ -77,6 +77,15 @@ pub enum ArenaEvent {
     SynthesisChunk { chunk: String },
     /// Final synthesis complete
     SynthesisComplete { summary: String },
+    /// Web search performed by a speaker (batched, one event per speaker per turn)
+    #[serde(rename_all = "camelCase")]
+    WebSearchPerformed {
+        speaker_id: String,
+        speaker_name: String,
+        queries: Vec<String>,
+        results_count: u32,
+        searches_used_discussion: u32,
+    },
     /// Discussion ended
     DiscussionEnded,
     /// Non-fatal error (displayed in feed)

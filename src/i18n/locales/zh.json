@@ -52,7 +52,16 @@
     "modelPreloadError": "模型加载失败",
     "usernameRequired": "用户名为必填项",
     "emotionDriven": "情绪驱动行为",
-    "emotionDrivenDesc": "情绪影响AI的论述风格"
+    "emotionDrivenDesc": "情绪影响AI的论述风格",
+    "tavily": "互联网搜索 (Tavily)",
+    "tavilyApiKey": "Tavily API 密钥",
+    "tavilyLink": "在 tavily.com 获取密钥",
+    "tavilyFreeCredits": "每月 1,000 个免费额度",
+    "tavilyPeriodStart": "计费周期开始",
+    "tavilyUsageCount": "已用额度",
+    "tavilyHistory": "使用历史",
+    "tavilyNoHistory": "暂无历史",
+    "tavilyPeriodEntry": "从 {{start}} 到 {{end}} — {{count}} 个额度"
   },
   "setup": {
     "title": "讨论配置",
@@ -111,7 +120,13 @@
     "saveGladiateur": "保存此角色",
     "gladiateurSaved": "角色已保存",
     "resetGladiateur": "重置为原始角色",
-    "deleteProfile": "删除此角色"
+    "deleteProfile": "删除此角色",
+    "webSearch": "互联网搜索",
+    "arbitreWebSearchIntro": "1个互联网积分用于介绍",
+    "webSearchMaxPerGladiateur": "每位 GladIAteur 搜索次数（整场讨论）",
+    "webSearchMaxPerGladiateurDesc": "每回合最多1次搜索，讨论最多 {{max}} 次",
+    "webSearchBudget": "总预算：{{count}} 次搜索",
+    "webSearchNoKey": "请在设置中配置 Tavily API 密钥"
   },
   "arena": {
     "title": "讨论进行中",
@@ -138,7 +153,8 @@
     "turnSkipped": "回合跳过：{{reason}}",
     "synthesizing": "正在生成总结...",
     "like": "同意",
-    "dislike": "不同意"
+    "dislike": "不同意",
+    "webSearchPerformed": "{{name}} 执行了 {{count}} 次搜索"
   },
   "summary": {
     "title": "讨论总结",

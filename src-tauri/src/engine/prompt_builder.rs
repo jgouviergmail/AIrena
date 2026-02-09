@@ -1,37 +1,46 @@
 use crate::models::emotion::EmotionalProfile;
 use crate::models::memory::ParticipantMemory;
 use crate::models::message::{Message, SpeakerRole};
+use crate::tavily::TavilySearchResponse;
 
 use super::truncate_str as truncate;
+
+/// Maximum character length for web search context injected into prompts.
+const MAX_SEARCH_CONTEXT_LEN: usize = 2000;
 
 /// Build the introduction prompt for the IArbitre
 pub fn build_introduction_prompt(
     topic: &str,
     participant_names: &[String],
     discussion_language: &str,
+    web_search_results: Option<&str>,
 ) -> String {
     let participants = participant_names.join(", ");
+    let datetime = build_datetime_context(discussion_language);
+    let web_block = web_search_results
+        .map(|r| format!("\n\n{}", r))
+        .unwrap_or_default();
     match discussion_language {
         "en" => format!(
-            "You are the moderator of a debate. The topic is: \"{}\"\n\
-             The participants are: {}\n\n\
+            "{}\n\nYou are the moderator of a debate. The topic is: \"{}\"\n\
+             The participants are: {}{}\n\n\
              Introduce the topic briefly (2-3 sentences) and invite the first participant to speak.\n\
              Respond in English.",
-            topic, participants
+            datetime, topic, participants, web_block
         ),
         "zh" => format!(
-            "你是一场辩论的主持人。主题是：\"{}\"\n\
-             参与者有：{}\n\n\
+            "{}\n\n你是一场辩论的主持人。主题是：\"{}\"\n\
+             参与者有：{}{}\n\n\
              简要介绍主题（2-3句话），并邀请第一位参与者发言。\n\
              请用中文回答。",
-            topic, participants
+            datetime, topic, participants, web_block
         ),
         _ => format!(
-            "Tu es le modérateur d'un débat. Le sujet est : \"{}\"\n\
-             Les participants sont : {}\n\n\
+            "{}\n\nTu es le modérateur d'un débat. Le sujet est : \"{}\"\n\
+             Les participants sont : {}{}\n\n\
              Présente brièvement le sujet (2-3 phrases) et invite le premier participant à prendre la parole.\n\
              Réponds en français.",
-            topic, participants
+            datetime, topic, participants, web_block
         ),
     }
 }
@@ -100,6 +109,7 @@ pub fn build_reaction_prompt(
 }
 
 /// Build the inner thought prompt
+#[allow(clippy::too_many_arguments)]
 pub fn build_thought_prompt(
     recent_exchanges: &str,
     emotions: &EmotionalProfile,
@@ -108,6 +118,7 @@ pub fn build_thought_prompt(
     emotion_driven: bool,
     current_turn: u32,
     max_turns: Option<u32>,
+    web_search_results: Option<&str>,
 ) -> String {
     let emotion_suffix = if emotion_driven {
         let desc = describe_emotions(emotions, discussion_language);
@@ -119,6 +130,10 @@ pub fn build_thought_prompt(
     } else {
         String::new()
     };
+
+    let web_block = web_search_results
+        .map(|r| format!("\n\n{}", r))
+        .unwrap_or_default();
 
     let end_thought = build_end_awareness_thought(current_turn, max_turns, discussion_language);
 
@@ -148,8 +163,8 @@ pub fn build_thought_prompt(
                  Reflect briefly (2-4 sentences, stay in character):\n\
                  1. Which argument from the exchanges above struck you most and why?\n\
                  2. What angle will you take in your intervention?\n\
-                 3. Is there a weak point in your position you need to anticipate?{}{}",
-                context_block, preamble, end_thought, emotion_suffix
+                 3. Is there a weak point in your position you need to anticipate?{}{}{}",
+                context_block, preamble, end_thought, emotion_suffix, web_block
             ),
             "zh" => format!(
                 "{}{}\
@@ -157,8 +172,8 @@ pub fn build_thought_prompt(
                  简要思考（2-4句话，保持角色）：\n\
                  1. 上面的交流中哪个论点最让你印象深刻，为什么？\n\
                  2. 你的发言将采取什么角度？\n\
-                 3. 你的立场是否有需要预见的弱点？{}{}",
-                context_block, preamble, end_thought, emotion_suffix
+                 3. 你的立场是否有需要预见的弱点？{}{}{}",
+                context_block, preamble, end_thought, emotion_suffix, web_block
             ),
             _ => format!(
                 "{}{}\
@@ -166,8 +181,8 @@ pub fn build_thought_prompt(
                  Réfléchis brièvement (2-4 phrases, reste dans ton personnage) :\n\
                  1. Quel argument des échanges ci-dessus t'a le plus marqué et pourquoi ?\n\
                  2. Quel angle vas-tu prendre dans ton intervention ?\n\
-                 3. Y a-t-il un point faible dans ta position que tu dois anticiper ?{}{}",
-                context_block, preamble, end_thought, emotion_suffix
+                 3. Y a-t-il un point faible dans ta position que tu dois anticiper ?{}{}{}",
+                context_block, preamble, end_thought, emotion_suffix, web_block
             ),
         }
     } else {
@@ -178,8 +193,8 @@ pub fn build_thought_prompt(
                  You are the first to speak on this topic. Reflect in 2-4 sentences:\n\
                  1. What is your initial position on this topic?\n\
                  2. What angle will you take to open the debate?\n\
-                 3. What key argument will you lead with?{}",
-                context_block, preamble, emotion_suffix
+                 3. What key argument will you lead with?{}{}",
+                context_block, preamble, emotion_suffix, web_block
             ),
             "zh" => format!(
                 "{}{}\
@@ -187,8 +202,8 @@ pub fn build_thought_prompt(
                  你是第一个就此话题发言的人。用2-4句话思考：\n\
                  1. 你对这个话题的初始立场是什么？\n\
                  2. 你将以什么角度开启辩论？\n\
-                 3. 你将以什么关键论点开始？{}",
-                context_block, preamble, emotion_suffix
+                 3. 你将以什么关键论点开始？{}{}",
+                context_block, preamble, emotion_suffix, web_block
             ),
             _ => format!(
                 "{}{}\
@@ -196,8 +211,8 @@ pub fn build_thought_prompt(
                  Tu es le premier à prendre la parole sur ce sujet. Réfléchis en 2-4 phrases :\n\
                  1. Quelle est ta position initiale sur ce sujet ?\n\
                  2. Quel angle vas-tu prendre pour ouvrir le débat ?\n\
-                 3. Quel argument clé vas-tu avancer en premier ?{}",
-                context_block, preamble, emotion_suffix
+                 3. Quel argument clé vas-tu avancer en premier ?{}{}",
+                context_block, preamble, emotion_suffix, web_block
             ),
         }
     }
@@ -217,6 +232,7 @@ pub fn build_intervention_prompt(
     emotion_driven: bool,
     current_turn: u32,
     max_turns: Option<u32>,
+    web_search_results: Option<&str>,
 ) -> (String, String) {
     // Detect if the user has spoken in this turn
     let user_has_spoken = current_turn_messages
@@ -236,19 +252,22 @@ You are a debate participant — stay fully in character at all times. Never bre
 Speak naturally and spontaneously, like a real person in a heated debate. Vary your sentence length and structure.\n\
 NEVER start with \"I think that...\" or \"As a [role]...\" every time — mix up your openings.\n\
 Avoid formulaic patterns: don't systematically list points, don't always agree-then-disagree, don't repeat the same rhetorical structures.\n\
-Be unpredictable. Sometimes be brief and punchy. Sometimes develop an idea at length. React genuinely to what others say.\n",
+Be unpredictable. Sometimes be brief and punchy. Sometimes develop an idea at length. React genuinely to what others say.\n\
+CRITICAL: NEVER refer to yourself in the third person. You speak in first person (\"I\", \"me\", \"my\"). Never quote or comment on yourself as if you were someone else.\n",
         "zh" => "\
 你是辩论参与者——始终保持角色。永远不要打破角色或称自己为AI。\n\
 自然而即兴地发言，像真正激烈辩论中的真人一样。变化你的句子长度和结构。\n\
 不要每次都以「我认为」或「作为某角色」开头——变换你的开场方式。\n\
 避免公式化模式：不要系统地列举要点，不要总是先同意再反对，不要重复相同的修辞结构。\n\
-要不可预测。有时简短有力，有时深入展开一个想法。真诚地回应别人说的话。\n",
+要不可预测。有时简短有力，有时深入展开一个想法。真诚地回应别人说的话。\n\
+关键：永远不要用第三人称提到自己。你用第一人称（「我」、「我的」）说话。永远不要像谈论别人一样引用或评论自己。\n",
         _ => "\
 Tu es un participant au débat — reste pleinement dans ton personnage en permanence. Ne sors jamais du rôle et ne te présente jamais comme une IA.\n\
 Parle naturellement et spontanément, comme une vraie personne dans un débat animé. Varie la longueur et la structure de tes phrases.\n\
 Ne commence JAMAIS systématiquement par \"Je pense que...\" ou \"En tant que [rôle]...\" — varie tes accroches.\n\
 Évite les patterns répétitifs : ne liste pas systématiquement des points, ne fais pas toujours accord-puis-désaccord, ne répète pas les mêmes structures rhétoriques.\n\
-Sois imprévisible. Parfois sois bref et percutant. Parfois développe une idée en profondeur. Réagis sincèrement à ce que disent les autres.\n",
+Sois imprévisible. Parfois sois bref et percutant. Parfois développe une idée en profondeur. Réagis sincèrement à ce que disent les autres.\n\
+CRITIQUE : Ne te réfère JAMAIS à toi-même à la troisième personne. Tu parles à la première personne (\"je\", \"moi\", \"mon\"). Ne te cite pas et ne te commente pas comme si tu étais quelqu'un d'autre.\n",
     };
 
     // Build system message
@@ -257,6 +276,10 @@ Sois imprévisible. Parfois sois bref et percutant. Parfois développe une idée
     // Build user message with memory context
     let mut user_msg = String::new();
 
+    // Date/time context
+    user_msg.push_str(&build_datetime_context(discussion_language));
+    user_msg.push_str("\n\n");
+
     // Topic (always present — critical for turn 1 when memory is empty)
     let topic_label = match discussion_language {
         "en" => "Debate topic",
@@ -264,6 +287,12 @@ Sois imprévisible. Parfois sois bref et percutant. Parfois développe une idée
         _ => "Sujet du débat",
     };
     user_msg.push_str(&format!("[{}] {}\n\n", topic_label, topic));
+
+    // Web search results (injected before memory context)
+    if let Some(web_results) = web_search_results {
+        user_msg.push_str(web_results);
+        user_msg.push_str("\n\n");
+    }
 
     // Contextual memory (summary)
     if !memory.contextual_summary.is_empty() {
@@ -569,6 +598,7 @@ pub fn build_synthesis_prompt(
     topic: &str,
     memory: &ParticipantMemory,
     discussion_language: &str,
+    web_search_results: Option<&str>,
 ) -> String {
     let positions = memory
         .positional_map
@@ -577,42 +607,47 @@ pub fn build_synthesis_prompt(
         .collect::<Vec<_>>()
         .join("\n");
 
+    let datetime = build_datetime_context(discussion_language);
+    let web_block = web_search_results
+        .map(|r| format!("\n\n{}", r))
+        .unwrap_or_default();
+
     match discussion_language {
         "en" => format!(
-            "The debate on \"{}\" is now over.\n\n\
+            "{}\n\nThe debate on \"{}\" is now over.\n\n\
              Discussion summary:\n{}\n\n\
-             Final positions:\n{}\n\n\
+             Final positions:\n{}{}\n\n\
              As moderator, produce a structured synthesis:\n\
              1. Main points of agreement\n\
              2. Key disagreements\n\
              3. Most notable arguments\n\
              4. Overall conclusion\n\n\
              Be balanced and thorough (8-15 sentences).",
-            topic, memory.contextual_summary, positions
+            datetime, topic, memory.contextual_summary, positions, web_block
         ),
         "zh" => format!(
-            "关于\"{}\"的辩论现在结束了。\n\n\
+            "{}\n\n关于\"{}\"的辩论现在结束了。\n\n\
              讨论摘要：\n{}\n\n\
-             最终立场：\n{}\n\n\
+             最终立场：\n{}{}\n\n\
              作为主持人，请做出结构化总结：\n\
              1. 主要共识点\n\
              2. 关键分歧\n\
              3. 最值得注意的论点\n\
              4. 整体结论\n\n\
              请公正全面（8-15句话）。",
-            topic, memory.contextual_summary, positions
+            datetime, topic, memory.contextual_summary, positions, web_block
         ),
         _ => format!(
-            "Le débat sur \"{}\" est maintenant terminé.\n\n\
+            "{}\n\nLe débat sur \"{}\" est maintenant terminé.\n\n\
              Résumé de la discussion :\n{}\n\n\
-             Positions finales :\n{}\n\n\
+             Positions finales :\n{}{}\n\n\
              En tant que modérateur, produis une synthèse structurée :\n\
              1. Points d'accord principaux\n\
              2. Désaccords majeurs\n\
              3. Arguments les plus marquants\n\
              4. Conclusion générale\n\n\
              Sois équilibré et exhaustif (8-15 phrases).",
-            topic, memory.contextual_summary, positions
+            datetime, topic, memory.contextual_summary, positions, web_block
         ),
     }
 }
@@ -921,5 +956,258 @@ pub fn build_tiebreak_prompt(
              Inclus TOUS les participants à égalité. Réponds UNIQUEMENT avec le JSON, \
              pas de texte avant ou après.",
         ),
+    }
+}
+
+// ── Web Search prompts ──────────────────────────────────────────────
+
+/// Build a prompt asking the LLM whether it needs to search the web.
+pub fn build_web_search_decision_prompt(
+    topic: &str,
+    recent_context: &str,
+    search_directive: &str,
+    searches_remaining: u32,
+    discussion_language: &str,
+) -> String {
+    match discussion_language {
+        "en" => format!(
+            "You have access to internet search. {}\n\
+             Debate topic: \"{}\"\n\
+             Recent context: {}\n\
+             Remaining searches: {}\n\n\
+             Do you need recent or specialized factual information?\n\
+             If yes, provide 1 to 3 short, relevant search queries.\n\
+             Respond ONLY with this JSON:\n\
+             {{\"needs_search\": true, \"queries\": [\"query 1\"]}}\n\
+             or\n\
+             {{\"needs_search\": false, \"queries\": []}}",
+            search_directive, topic, recent_context, searches_remaining
+        ),
+        "zh" => format!(
+            "你可以使用互联网搜索。{}\n\
+             辩论主题：\"{}\"\n\
+             近期背景：{}\n\
+             剩余搜索次数：{}\n\n\
+             你需要最新的或专业的事实信息吗？\n\
+             如果是，提供1到3个简短相关的搜索查询。\n\
+             仅用以下JSON格式回复：\n\
+             {{\"needs_search\": true, \"queries\": [\"查询1\"]}}\n\
+             或\n\
+             {{\"needs_search\": false, \"queries\": []}}",
+            search_directive, topic, recent_context, searches_remaining
+        ),
+        _ => format!(
+            "Tu as accès à la recherche internet. {}\n\
+             Sujet du débat : \"{}\"\n\
+             Contexte récent : {}\n\
+             Recherches restantes : {}\n\n\
+             As-tu besoin d'informations factuelles récentes ou spécialisées ?\n\
+             Si oui, fournis 1 à 3 requêtes de recherche courtes et pertinentes.\n\
+             Réponds UNIQUEMENT avec ce JSON :\n\
+             {{\"needs_search\": true, \"queries\": [\"requête 1\"]}}\n\
+             ou\n\
+             {{\"needs_search\": false, \"queries\": []}}",
+            search_directive, topic, recent_context, searches_remaining
+        ),
+    }
+}
+
+/// Default search directive per language.
+pub fn default_search_directive(lang: &str) -> &'static str {
+    match lang {
+        "en" => "Use internet search to find the latest information on the topic, factual arguments with figures and data, verify claims made by other participants, or deepen your expertise on a subject you are less familiar with.",
+        "zh" => "使用互联网搜索来查找有关主题的最新信息、带有数据和数字的事实论据、验证其他参与者的说法、或加深你不太熟悉的领域的专业知识。",
+        _ => "Utilise la recherche internet pour trouver les dernières informations sur le sujet, des arguments factuels avec des chiffres et données, vérifier les affirmations des autres participants, ou approfondir ton expertise sur un domaine que tu maîtrises moins.",
+    }
+}
+
+/// Format Tavily search results as context to inject into prompts.
+/// Truncates individual results and total output to stay within prompt budget.
+pub fn build_search_results_context(
+    results: &[(String, TavilySearchResponse)],
+    discussion_language: &str,
+) -> String {
+    let header = match discussion_language {
+        "en" => "[Internet search results]",
+        "zh" => "[互联网搜索结果]",
+        _ => "[Résultats de recherche internet]",
+    };
+
+    let query_label = match discussion_language {
+        "en" => "Query",
+        "zh" => "查询",
+        _ => "Requête",
+    };
+
+    let summary_label = match discussion_language {
+        "en" => "Summary",
+        "zh" => "摘要",
+        _ => "Résumé",
+    };
+
+    let sources_label = match discussion_language {
+        "en" => "Sources",
+        "zh" => "来源",
+        _ => "Sources",
+    };
+
+    let mut output = String::from(header);
+    output.push('\n');
+
+    for (query, response) in results {
+        output.push_str(&format!("{}: \"{}\"\n", query_label, query));
+
+        if let Some(answer) = &response.answer {
+            if !answer.is_empty() {
+                output.push_str(&format!("{}: {}\n", summary_label, truncate(answer, 500)));
+            }
+        }
+
+        if !response.results.is_empty() {
+            output.push_str(&format!("{}:\n", sources_label));
+            for (i, result) in response.results.iter().take(5).enumerate() {
+                // Extract domain from URL
+                let domain = result
+                    .url
+                    .split("//")
+                    .nth(1)
+                    .and_then(|s| s.split('/').next())
+                    .unwrap_or(&result.url);
+                output.push_str(&format!(
+                    "{}. \"{}\" ({}) : {}\n",
+                    i + 1,
+                    truncate(&result.title, 100),
+                    domain,
+                    truncate(&result.content, 300)
+                ));
+            }
+        }
+        output.push('\n');
+
+        // Hard limit on total output
+        if output.len() > MAX_SEARCH_CONTEXT_LEN {
+            let boundary = output.floor_char_boundary(MAX_SEARCH_CONTEXT_LEN);
+            output.truncate(boundary);
+            break;
+        }
+    }
+
+    output
+}
+
+/// Build a date/time context string with timezone offset.
+/// Uses `%:z` format (e.g., "+01:00") instead of `%Z` which gives "Romance Standard Time" on Windows.
+pub fn build_datetime_context(discussion_language: &str) -> String {
+    let now = chrono::Local::now();
+    let datetime = now.format("%Y-%m-%d %H:%M:%S %:z").to_string();
+    match discussion_language {
+        "en" => format!("[Current date and time] {}", datetime),
+        "zh" => format!("[当前日期和时间] {}", datetime),
+        _ => format!("[Date et heure actuelles] {}", datetime),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_datetime_context_fr() {
+        let result = build_datetime_context("fr");
+        assert!(result.starts_with("[Date et heure actuelles] "));
+        // Must use +XX:XX format, NOT timezone name like "Romance Standard Time"
+        assert!(
+            result.contains('+') || result.contains('-'),
+            "Expected timezone offset (+/-) in: {result}"
+        );
+        // Should NOT contain alphabetic timezone names
+        assert!(
+            !result.contains("Standard") && !result.contains("Daylight"),
+            "Should use %:z not %Z: {result}"
+        );
+    }
+
+    #[test]
+    fn test_build_datetime_context_en() {
+        let result = build_datetime_context("en");
+        assert!(result.starts_with("[Current date and time] "));
+    }
+
+    #[test]
+    fn test_build_datetime_context_zh() {
+        let result = build_datetime_context("zh");
+        assert!(result.starts_with("[当前日期和时间] "));
+    }
+
+    #[test]
+    fn test_default_search_directive_all_languages() {
+        let fr = default_search_directive("fr");
+        assert!(fr.contains("recherche internet"));
+
+        let en = default_search_directive("en");
+        assert!(en.contains("internet search"));
+
+        let zh = default_search_directive("zh");
+        assert!(zh.contains("互联网搜索"));
+
+        // Unknown language falls back to French
+        let other = default_search_directive("de");
+        assert_eq!(other, fr);
+    }
+
+    #[test]
+    fn test_build_search_results_context_basic() {
+        let results = vec![(
+            "test query".to_string(),
+            TavilySearchResponse {
+                answer: Some("A test answer".to_string()),
+                results: vec![crate::tavily::TavilyResult {
+                    title: "Title".to_string(),
+                    url: "https://example.com/page".to_string(),
+                    content: "Some content".to_string(),
+                    score: 0.9,
+                }],
+            },
+        )];
+        let ctx = build_search_results_context(&results, "fr");
+        assert!(ctx.contains("[Résultats de recherche internet]"));
+        assert!(ctx.contains("test query"));
+        assert!(ctx.contains("A test answer"));
+        assert!(ctx.contains("example.com"));
+    }
+
+    #[test]
+    fn test_build_search_results_context_truncation() {
+        // Create results with lots of content to trigger MAX_SEARCH_CONTEXT_LEN limit
+        let long_content = "x".repeat(500);
+        let results: Vec<(String, TavilySearchResponse)> = (0..10)
+            .map(|i| {
+                (
+                    format!("query {i}"),
+                    TavilySearchResponse {
+                        answer: Some(long_content.clone()),
+                        results: vec![crate::tavily::TavilyResult {
+                            title: format!("Title {i}"),
+                            url: format!("https://example{i}.com/page"),
+                            content: long_content.clone(),
+                            score: 0.5,
+                        }],
+                    },
+                )
+            })
+            .collect();
+        let ctx = build_search_results_context(&results, "en");
+        assert!(
+            ctx.len() <= MAX_SEARCH_CONTEXT_LEN,
+            "Output should be truncated to {} chars, got {}",
+            MAX_SEARCH_CONTEXT_LEN, ctx.len()
+        );
+    }
+
+    #[test]
+    fn test_build_search_results_context_empty() {
+        let results: Vec<(String, TavilySearchResponse)> = vec![];
+        let ctx = build_search_results_context(&results, "en");
+        assert!(ctx.contains("[Internet search results]"));
     }
 }

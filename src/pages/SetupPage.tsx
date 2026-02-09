@@ -13,6 +13,7 @@ import {
   Plus,
   RotateCcw,
   Save,
+  Search,
   Trash2,
 } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
@@ -204,6 +205,10 @@ function StepTopic() {
   const setTopic = useSetupStore((s) => s.setTopic);
   const discussionLanguage = useSetupStore((s) => s.discussionLanguage);
   const setDiscussionLanguage = useSetupStore((s) => s.setDiscussionLanguage);
+  const maxTurns = useSetupStore((s) => s.maxTurns);
+  const setMaxTurns = useSetupStore((s) => s.setMaxTurns);
+  const userInterventionTimeoutSecs = useSetupStore((s) => s.userInterventionTimeoutSecs);
+  const setUserTimeout = useSetupStore((s) => s.setUserTimeout);
 
   return (
     <div className="space-y-6">
@@ -242,6 +247,38 @@ function StepTopic() {
           ))}
         </div>
       </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium text-foreground">
+            {t("setup.maxTurns")}
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={maxTurns ?? ""}
+            onChange={(e) =>
+              setMaxTurns(e.target.value ? parseInt(e.target.value) : null)
+            }
+            placeholder={t("setup.maxTurnsPlaceholder")}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium text-foreground">
+            {t("setup.userTimeout")}
+          </label>
+          <input
+            type="number"
+            min={30}
+            max={600}
+            value={userInterventionTimeoutSecs}
+            onChange={(e) => setUserTimeout(parseInt(e.target.value) || 120)}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -254,6 +291,7 @@ function StepArbitre() {
   const arbitreProfiles = useSettingsStore((s) => s.arbitreProfiles);
   const saveArbitreProfile = useSettingsStore((s) => s.saveArbitreProfile);
   const deleteArbitreProfile = useSettingsStore((s) => s.deleteArbitreProfile);
+  const hasTavilyKey = !!useSettingsStore((s) => s.settings.tavilyApiKey);
   const [showLlm, setShowLlm] = useState(false);
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [savePersonality, setSavePersonality] = useState("");
@@ -297,7 +335,6 @@ function StepArbitre() {
   const handleDeleteProfile = async () => {
     if (!currentProfile || currentProfile.isBuiltin) return;
     await deleteArbitreProfile(currentProfile.id);
-    // Reset to empty custom state
     updateArbitre({ name: "", systemPrompt: "" });
   };
 
@@ -428,6 +465,33 @@ function StepArbitre() {
         </div>
       </div>
 
+      {/* Optional web search for introduction */}
+      {hasTavilyKey && (
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={arbitre.webSearchIntro ?? false}
+            onClick={() => updateArbitre({ webSearchIntro: !(arbitre.webSearchIntro ?? false) })}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+              (arbitre.webSearchIntro ?? false) ? "bg-primary" : "bg-muted",
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
+                (arbitre.webSearchIntro ?? false) ? "translate-x-4" : "translate-x-0",
+              )}
+            />
+          </button>
+          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <Search className="h-3.5 w-3.5" />
+            {t("setup.arbitreWebSearchIntro")}
+          </div>
+        </div>
+      )}
+
       <button
         onClick={() => setShowLlm(!showLlm)}
         className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
@@ -465,6 +529,9 @@ function StepGladiateurs({
   const removeGladiateur = useSetupStore((s) => s.removeGladiateur);
   const updateGladiateur = useSetupStore((s) => s.updateGladiateur);
   const updateGladiateurLlm = useSetupStore((s) => s.updateGladiateurLlm);
+  const maxTurns = useSetupStore((s) => s.maxTurns);
+  const webSearchMaxPerGladiateur = useSetupStore((s) => s.webSearchMaxPerGladiateur);
+  const setWebSearchMaxPerGladiateur = useSetupStore((s) => s.setWebSearchMaxPerGladiateur);
   const settings = useSettingsStore((s) => s.settings);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const saveSettings = useSettingsStore((s) => s.saveSettings);
@@ -491,7 +558,6 @@ function StepGladiateurs({
     g.sourceProfileId ? profiles.find((p) => p.id === g.sourceProfileId) : undefined;
 
   const handleSaveGladiateur = async (g: GladIAteurConfig) => {
-    // If sourced from a non-builtin (personal) profile, update in place
     const source = getSourceProfile(g);
     const id = source && !source.isBuiltin ? source.id : `glad-custom-${Date.now()}`;
     await saveProfile({
@@ -528,6 +594,9 @@ function StepGladiateurs({
     });
   };
 
+  const hasTavilyKey = !!settings.tavilyApiKey.trim();
+  const maxSearchBound = maxTurns ?? 100;
+
   return (
     <div className="space-y-6">
       {/* Emotion-driven behavior toggle */}
@@ -555,6 +624,46 @@ function StepGladiateurs({
           </span>
         </div>
       </div>
+
+      {/* Global web search config */}
+      {hasTavilyKey && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium text-foreground">
+            <Search className="mr-1.5 inline h-3.5 w-3.5" />
+            {t("setup.webSearchMaxPerGladiateur")}
+          </label>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={0}
+              max={maxSearchBound}
+              value={webSearchMaxPerGladiateur}
+              onChange={(e) =>
+                setWebSearchMaxPerGladiateur(
+                  Math.max(0, Math.min(maxSearchBound, parseInt(e.target.value) || 0)),
+                )
+              }
+              className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <span className="text-sm text-muted-foreground">
+              {t("setup.webSearchMaxPerGladiateurDesc", { max: maxSearchBound })}
+            </span>
+          </div>
+          {webSearchMaxPerGladiateur > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {t("setup.webSearchBudget", {
+                count: webSearchMaxPerGladiateur * gladiateurs.length,
+              })}
+            </p>
+          )}
+        </div>
+      )}
+      {!hasTavilyKey && (
+        <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+          <Search className="h-3.5 w-3.5" />
+          {t("setup.webSearchNoKey")}
+        </div>
+      )}
 
       {/* Profile picker grouped by category */}
       <div className="space-y-3">
@@ -746,9 +855,8 @@ function StepSummary() {
   const arbitre = useSetupStore((s) => s.arbitre);
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
   const maxTurns = useSetupStore((s) => s.maxTurns);
-  const setMaxTurns = useSetupStore((s) => s.setMaxTurns);
   const userInterventionTimeoutSecs = useSetupStore((s) => s.userInterventionTimeoutSecs);
-  const setUserTimeout = useSetupStore((s) => s.setUserTimeout);
+  const webSearchMaxPerGladiateur = useSetupStore((s) => s.webSearchMaxPerGladiateur);
 
   return (
     <div className="space-y-6">
@@ -758,47 +866,37 @@ function StepSummary() {
           label={t("setup.discussionLanguage")}
           value={t(`languages.${discussionLanguage}`)}
         />
+        <SummaryRow
+          label={t("setup.maxTurns")}
+          value={maxTurns != null ? String(maxTurns) : t("setup.maxTurnsPlaceholder")}
+        />
+        <SummaryRow
+          label={t("setup.userTimeout")}
+          value={`${userInterventionTimeoutSecs}s`}
+        />
         <SummaryRow label={t("setup.arbitreName")} value={arbitre.name} />
         <SummaryRow
           label={t("setup.turnDistribution")}
           value={t(`setup.${arbitre.turnDistribution}`)}
         />
+        {(arbitre.webSearchIntro ?? false) && (
+          <SummaryRow
+            label={t("setup.arbitreWebSearchIntro")}
+            value="1"
+          />
+        )}
         <SummaryRow
           label={t("setup.gladiateurs")}
           value={gladiateurs.map((g) => g.name).join(", ") || "-"}
         />
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium text-foreground">
-            {t("setup.maxTurns")}
-          </label>
-          <input
-            type="number"
-            min={1}
-            max={100}
-            value={maxTurns ?? ""}
-            onChange={(e) =>
-              setMaxTurns(e.target.value ? parseInt(e.target.value) : null)
-            }
-            placeholder={t("setup.maxTurnsPlaceholder")}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        {webSearchMaxPerGladiateur > 0 && (
+          <SummaryRow
+            label={t("setup.webSearch")}
+            value={t("setup.webSearchBudget", {
+              count: webSearchMaxPerGladiateur * gladiateurs.length + ((arbitre.webSearchIntro ?? false) ? 1 : 0),
+            })}
           />
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium text-foreground">
-            {t("setup.userTimeout")}
-          </label>
-          <input
-            type="number"
-            min={30}
-            max={600}
-            value={userInterventionTimeoutSecs}
-            onChange={(e) => setUserTimeout(parseInt(e.target.value) || 120)}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
+        )}
       </div>
     </div>
   );

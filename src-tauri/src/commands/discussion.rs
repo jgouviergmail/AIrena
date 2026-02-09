@@ -4,6 +4,7 @@ use tauri::State;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::db::repository;
 use crate::engine::orchestrator::DiscussionEngine;
 use crate::error::CommandError;
 use crate::models::discussion::DiscussionConfig;
@@ -68,16 +69,31 @@ pub async fn start_discussion(
         return Err(CommandError::Ollama(e.to_string()));
     }
 
+    // Check/reset Tavily period if API key is configured
+    if !settings.tavily_api_key.is_empty() {
+        if let Err(e) = repository::check_and_reset_tavily_period(&state.db).await {
+            tracing::warn!(error = %e, "Failed to check/reset Tavily billing period — continuing with current counts");
+        }
+    }
+
     // Spawn the engine on the Tauri async runtime (non-blocking)
     let discussion_id = uuid::Uuid::new_v4().to_string();
     let id_clone = discussion_id.clone();
     let ollama_url = settings.ollama_url.clone();
     let ollama_model = settings.ollama_model.clone();
     let emotion_driven = settings.emotion_driven;
+    let tavily_key = if settings.tavily_api_key.is_empty() {
+        None
+    } else {
+        Some(settings.tavily_api_key.clone())
+    };
+    let db_clone = state.db.clone();
 
     tauri::async_runtime::spawn(async move {
-        let mut engine =
-            DiscussionEngine::new(config, id_clone, &ollama_url, &ollama_model);
+        let mut engine = DiscussionEngine::new(
+            config, id_clone, &ollama_url, &ollama_model,
+            tavily_key.as_deref(), db_clone,
+        );
         engine.set_cancel_token(engine_cancel);
         engine.set_emotion_driven(emotion_driven);
         engine.run(cmd_rx, on_event).await;

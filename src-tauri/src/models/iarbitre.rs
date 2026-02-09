@@ -12,6 +12,9 @@ pub struct IArbitreConfig {
     pub system_prompt: String,
     pub turn_distribution: TurnDistribution,
     pub llm_params: LlmParams,
+    /// If true, the IArbitre does 1 mandatory web search on the topic before introduction
+    #[serde(default)]
+    pub web_search_intro: bool,
 }
 
 #[derive(Debug, Clone)]
