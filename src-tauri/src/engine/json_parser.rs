@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::de::DeserializeOwned;
 
@@ -292,16 +292,23 @@ pub fn parse_emotion_deltas(
 }
 
 fn validate_reactions(raw: Vec<RawReaction>, known_speakers: &[String]) -> Vec<ParsedReaction> {
+    let mut seen = HashSet::new();
     raw.into_iter()
         .filter_map(|r| {
             let speaker = match_speaker_name(&r.speaker, known_speakers)?;
 
-            // Normalize the reaction value
+            // Normalize the reaction value FIRST (before dedup)
+            // so that "none" reactions don't consume a dedup slot
             let reaction_type = match r.reaction.to_lowercase().as_str() {
                 "like" | "agree" | "d'accord" | "👍" | "positive" | "positif" => Some(ReactionType::Like),
                 "dislike" | "disagree" | "pas d'accord" | "👎" | "negative" | "négatif" | "negatif" => Some(ReactionType::Dislike),
                 _ => None,
             }?;
+
+            // Deduplicate: keep only the first valid reaction per target speaker
+            if !seen.insert(speaker.clone()) {
+                return None;
+            }
 
             Some(ParsedReaction {
                 speaker_name: speaker.clone(),
@@ -667,6 +674,30 @@ mod tests {
         assert_eq!(reactions[1].reaction_type, ReactionType::Dislike);
         assert_eq!(reactions[2].speaker_name, "Le Pragmatique");
         assert_eq!(reactions[2].reaction_type, ReactionType::Like);
+    }
+
+    #[test]
+    fn test_parse_reactions_deduplicates_same_speaker() {
+        // LLM outputs duplicate reactions for the same speaker — only the first should be kept
+        let raw = r#"[{"speaker":"Alice","reaction":"like"},{"speaker":"Alice","reaction":"dislike"},{"speaker":"Bob","reaction":"like"}]"#;
+        let known = vec!["Alice".to_string(), "Bob".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 2, "Expected 2 reactions (dedup Alice), got {}", reactions.len());
+        assert_eq!(reactions[0].speaker_name, "Alice");
+        assert_eq!(reactions[0].reaction_type, ReactionType::Like); // first wins
+        assert_eq!(reactions[1].speaker_name, "Bob");
+    }
+
+    #[test]
+    fn test_parse_reactions_none_then_valid_same_speaker() {
+        // "none" reaction should NOT consume the dedup slot — a subsequent valid reaction should pass
+        let raw = r#"[{"speaker":"Alice","reaction":"none"},{"speaker":"Alice","reaction":"like"},{"speaker":"Bob","reaction":"dislike"}]"#;
+        let known = vec!["Alice".to_string(), "Bob".to_string()];
+        let reactions = parse_reactions(raw, &known);
+        assert_eq!(reactions.len(), 2, "Expected 2 reactions (none filtered, like kept), got {}", reactions.len());
+        assert_eq!(reactions[0].speaker_name, "Alice");
+        assert_eq!(reactions[0].reaction_type, ReactionType::Like);
+        assert_eq!(reactions[1].speaker_name, "Bob");
     }
 
     #[test]

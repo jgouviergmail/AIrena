@@ -6,6 +6,8 @@ import { useSetupStore } from "@/stores/useSetupStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import type {
   ArenaEvent,
+  BanInfo,
+  DirectiveData,
   EmotionalProfile,
   EmotionSnapshot,
   Message,
@@ -38,6 +40,8 @@ interface ArenaState {
   webSearchCount: number;
   _pendingSearchCount: number;
   webSearchesPerMessage: Record<string, number>;
+  directives: Map<string, DirectiveData>;
+  bans: Map<string, BanInfo>;
   error: string | null;
 
   handleEvent: (event: ArenaEvent) => void;
@@ -64,6 +68,8 @@ const initialState = {
   webSearchCount: 0,
   _pendingSearchCount: 0,
   webSearchesPerMessage: {} as Record<string, number>,
+  directives: new Map<string, DirectiveData>(),
+  bans: new Map<string, BanInfo>(),
   error: null as string | null,
 };
 
@@ -178,11 +184,25 @@ export const useArenaStore = create<ArenaState>((set) => ({
         break;
 
       case "turnStarted":
-        set({
-          currentTurn: event.data.turnNumber,
-          speakerOrder: event.data.speakerOrder,
-          interventionRequested: false,
-          determiningOrder: false,
+        set((s) => {
+          // Decrement ban counters
+          const bans = new Map(s.bans);
+          for (const [id, info] of bans) {
+            if (info.remaining > 0) {
+              if (info.justIssued) {
+                bans.set(id, { ...info, justIssued: false });
+              } else {
+                bans.set(id, { ...info, remaining: info.remaining - 1 });
+              }
+            }
+          }
+          return {
+            currentTurn: event.data.turnNumber,
+            speakerOrder: event.data.speakerOrder,
+            interventionRequested: false,
+            determiningOrder: false,
+            bans,
+          };
         });
         break;
 
@@ -233,13 +253,43 @@ export const useArenaStore = create<ArenaState>((set) => ({
         // No state update — handled by EmotionSidebar via CSS animations
         break;
 
-      case "banIssued":
-        // Display handled by backend MessageComplete with is_ban_notification=true
+      case "directiveGenerated":
+        set((s) => {
+          const d = new Map(s.directives);
+          d.set(event.data.speakerId, {
+            speechAct: event.data.speechAct,
+            emotionBehavior: event.data.emotionBehavior ?? null,
+            relationshipSummary: event.data.relationshipSummary,
+          });
+          return { directives: d };
+        });
         break;
 
-      case "banLifted":
-        // Display handled by backend MessageComplete with is_ban_notification=true
+      case "banIssued": {
+        set((s) => {
+          const bans = new Map(s.bans);
+          const prev = bans.get(event.data.bannedId);
+          bans.set(event.data.bannedId, {
+            remaining: event.data.duration,
+            totalBans: (prev?.totalBans ?? 0) + 1,
+            justIssued: true,
+          });
+          return { bans };
+        });
         break;
+      }
+
+      case "banLifted": {
+        set((s) => {
+          const bans = new Map(s.bans);
+          const prev = bans.get(event.data.speakerId);
+          if (prev) {
+            bans.set(event.data.speakerId, { remaining: 0, totalBans: prev.totalBans, justIssued: false });
+          }
+          return { bans };
+        });
+        break;
+      }
 
       case "userTurnReady":
         set({ userTurnActive: true, interventionRequested: false });
@@ -340,6 +390,8 @@ export const useArenaStore = create<ArenaState>((set) => ({
       emotions: new Map<string, EmotionalProfile>(),
       emotionHistory: new Map<string, EmotionSnapshot[]>(),
       moodSummary: new Map<string, string>(),
+      directives: new Map<string, DirectiveData>(),
+      bans: new Map<string, BanInfo>(),
     });
   },
 }));

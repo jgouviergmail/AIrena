@@ -60,6 +60,63 @@ const PROFILE_EMOJIS: Record<string, string> = {
   "L'Agent du Chaos": "🌀",
   "Le Directeur Scientifique": "🔬",
   "La Grand-mère": "🧶",
+  // New experts
+  "Le Géopoliticien": "🌐",
+  "Le Hackeur White Hat": "🛡️",
+  "Le Hackeur Red Hat": "☠️",
+  "L'Expert IA": "🧠",
+  "Le Dirigeant": "👔",
+  // New imaginaires
+  "Bouddha": "🧘",
+  "Krishna": "🪈",
+  // New métiers
+  "Le Psychologue": "🛋️",
+  "Le Fiscaliste": "📑",
+  "Le DEV Frontend": "🖥️",
+  "Le DEV Backend": "⚙️",
+  "Le DEV Architecte": "🏗️",
+  "La Data Analyste": "📊",
+  "Le DEV UX/UI": "🎯",
+  "Le Marketing Digital": "📲",
+  "Le Policier": "👮",
+  "Le Gendarme": "🎖️",
+  // Philosophes
+  "Platon": "🏺",
+  "Aristote": "📚",
+  "Descartes": "💭",
+  "Kant": "⭐",
+  "Simone de Beauvoir": "✊",
+  // Scientifiques
+  "Marie Curie": "☢️",
+  "Nikola Tesla": "⚡",
+  "Galilée": "🔭",
+  "Isaac Newton": "🍎",
+  "Léonard de Vinci": "🖼️",
+  // Poètes et écrivains
+  "Victor Hugo": "📖",
+  "Shakespeare": "🎭",
+  "Baudelaire": "🥀",
+  "Dostoïevski": "⛓️",
+  "Oscar Wilde": "🌹",
+  // Créateurs de mode
+  "Coco Chanel": "👗",
+  "Yves Saint Laurent": "🪡",
+  "Karl Lagerfeld": "🕶️",
+  "Alexander McQueen": "🖤",
+  "Vivienne Westwood": "🧷",
+  // Autres
+  "Le Mafieux": "🤵",
+  "La Starlette de Télé-réalité": "💅",
+  "Le Psycho-rigide": "📏",
+  "Le Naïf": "🌸",
+  "Le Mec de Gauche": "🔴",
+  "Le Mec de Droite": "🔵",
+  "L'Anarchiste": "🏴",
+  "Le Fasciste": "⬛",
+  "Le Mec d'Extrême Droite": "🗡️",
+  "Le Startuper": "🚀",
+  "La Fashion-Victim": "👠",
+  "Le Techno-Addict": "🔌",
 };
 
 // Keyword → emoji mapping for custom profiles (checked against name + systemPrompt)

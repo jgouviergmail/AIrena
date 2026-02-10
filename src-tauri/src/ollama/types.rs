@@ -39,6 +39,10 @@ pub struct ChatOptions {
 pub struct ChatResponse {
     pub message: ChatResponseMessage,
     pub done: bool,
+    /// Ollama sets this to "length" when the model hit num_predict token limit,
+    /// or "stop" for normal EOS completion.
+    #[serde(default)]
+    pub done_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

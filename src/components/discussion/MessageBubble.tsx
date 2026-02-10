@@ -5,24 +5,27 @@ import { SpeakerBadge } from "./SpeakerBadge";
 import { cn } from "@/lib/utils";
 import type { Message, SpeakerRole } from "@/lib/types";
 
+/** Stable empty array to avoid re-creating [] on every render (breaks useMemo deps). */
+const EMPTY_NAMES: string[] = [];
+
 /** Extract short forms from names for better matching.
  *  "Le Scientifique" → ["Scientifique"]
  *  "Napoléon Bonaparte" → ["Napoléon", "Bonaparte"]
  *  "L'Avocat du Diable" → ["Avocat du Diable"] */
 function extractShortForms(name: string): string[] {
   const shorts: string[] = [];
-  // Remove leading French articles: "Le ", "La ", "L'", "Les "
-  const articleMatch = name.match(/^(?:Le |La |L'|Les )/i);
+  // Remove leading French/English articles: "Le ", "La ", "L'", "Les ", "The ", "A ", "An "
+  const articleMatch = name.match(/^(?:Le |La |L'|Les |The |An? )/i);
   if (articleMatch) {
     const base = name.slice(articleMatch[0].length);
-    if (base.length >= 4) {
+    if (base.length >= 3) {
       shorts.push(base);
     }
   }
-  // Split multi-word names into individual parts (min 4 chars, skip articles/prepositions)
-  const stopWords = new Set(["le", "la", "les", "l'", "du", "de", "des", "the", "of"]);
+  // Split multi-word names into individual parts (min 3 chars, skip articles/prepositions)
+  const stopWords = new Set(["le", "la", "les", "l'", "du", "de", "des", "the", "of", "a", "an"]);
   const parts = name.split(/\s+/).filter(
-    (p) => p.length >= 4 && !stopWords.has(p.toLowerCase()),
+    (p) => p.length >= 3 && !stopWords.has(p.toLowerCase()),
   );
   if (parts.length > 1) {
     for (const part of parts) {
@@ -72,7 +75,7 @@ export function MessageBubble({
   isActive,
   emoji,
   searchCount,
-  participantNames = [],
+  participantNames = EMPTY_NAMES,
   emojiMap,
 }: {
   message: Message;
@@ -184,7 +187,7 @@ export function StreamingBubble({
   role,
   content,
   emoji,
-  participantNames = [],
+  participantNames = EMPTY_NAMES,
 }: {
   speakerName: string;
   role: SpeakerRole;

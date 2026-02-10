@@ -6,6 +6,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::db::repository;
+use crate::engine::directive_builder::{self, SpeakerTurnContext, SpeechAct};
+use crate::engine::dynamics_parser::{self, ParsedDynamics};
 use crate::engine::emotion_engine::{self, EmotionContext};
 use crate::engine::json_parser;
 use crate::engine::memory_manager;
@@ -82,6 +84,14 @@ pub struct DiscussionEngine {
     tavily_client: Option<TavilyClient>,
     /// Database connection for Tavily usage tracking (Arc-internal, cheap clone)
     db: tokio_rusqlite::Connection,
+    /// Cumulative reactions: (speaker_id, target_speaker_id) -> (likes, dislikes)
+    cumulative_reactions: HashMap<(String, String), (u32, u32)>,
+    /// Speaker's own messages for self-memory: speaker_id -> Vec<String> (last 2)
+    speaker_own_messages: HashMap<String, Vec<String>>,
+    /// Parsed dynamics cache: speaker_id -> ParsedDynamics
+    dynamics_cache: HashMap<String, ParsedDynamics>,
+    /// Last speech act per speaker: speaker_id -> SpeechAct
+    last_speech_acts: HashMap<String, SpeechAct>,
 }
 
 impl DiscussionEngine {
@@ -124,6 +134,10 @@ impl DiscussionEngine {
             emotion_driven: false,
             tavily_client,
             db,
+            cumulative_reactions: HashMap::new(),
+            speaker_own_messages: HashMap::new(),
+            dynamics_cache: HashMap::new(),
+            last_speech_acts: HashMap::new(),
         }
     }
 
@@ -215,6 +229,17 @@ impl DiscussionEngine {
         Self::emit_emotion_updated(&channel, &self.arbitre.config.id, &self.arbitre.emotions, lang);
         for g in &self.gladiateurs {
             Self::emit_emotion_updated(&channel, &g.config.id, &g.emotions, lang);
+        }
+
+        // Parse dynamics from system prompts and cache them
+        for g in &self.gladiateurs {
+            if let Some(dynamics) = dynamics_parser::parse_dynamics(&g.config.system_prompt) {
+                tracing::debug!(speaker = %g.config.name, "Parsed dynamics from system prompt");
+                self.dynamics_cache.insert(g.config.id.clone(), dynamics);
+            }
+        }
+        if let Some(dynamics) = dynamics_parser::parse_dynamics(&self.arbitre.config.system_prompt) {
+            self.dynamics_cache.insert(self.arbitre.config.id.clone(), dynamics);
         }
 
         // --- INTRODUCTION ---
@@ -426,7 +451,12 @@ impl DiscussionEngine {
 
                 // C.2 REACTIONS (turn > 1)
                 if self.current_turn > 1 {
+                    // Snapshot reaction counts before this speaker's reactions
+                    let reaction_snapshot: HashMap<String, (u32, u32)> =
+                        self.turn_reaction_counts.clone();
                     self.process_reactions(glad_idx, &channel).await;
+                    // Update cumulative reactions using only the DELTA (this speaker's reactions)
+                    self.update_cumulative_reactions(&speaker_id, &reaction_snapshot);
                 }
 
                 // C.2.5 WEB SEARCH (if enabled + quotas OK)
@@ -469,6 +499,27 @@ impl DiscussionEngine {
                     } else { None }
                 };
 
+                // C.2.8 DYNAMIC DIRECTIVE (emotion_driven only)
+                let dynamic_directive: Option<String> = if self.emotion_driven {
+                    let directive_output = self.build_directive_for_speaker(glad_idx);
+                    tracing::info!(
+                        speaker = %speaker_name,
+                        turn = self.current_turn,
+                        speech_act = %directive_output.speech_act,
+                        "Dynamic directive generated"
+                    );
+                    let _ = channel.send(ArenaEvent::DirectiveGenerated {
+                        speaker_id: speaker_id.clone(),
+                        speaker_name: speaker_name.clone(),
+                        speech_act: directive_output.speech_act.clone(),
+                        emotion_behavior: directive_output.emotion_behavior.clone(),
+                        relationship_summary: directive_output.relationship_summary.clone(),
+                    });
+                    Some(directive_output.directive_text)
+                } else {
+                    None
+                };
+
                 // C.3 INNER THOUGHT + C.4 PUBLIC INTERVENTION
                 // When think mode is enabled, the model reasons internally (replaces separate thought phase)
                 let use_think = self.should_enable_think(glad_idx);
@@ -478,7 +529,7 @@ impl DiscussionEngine {
                         turn = self.current_turn,
                         "Using think mode for intervention"
                     );
-                    let (t, c) = self.process_intervention_think(glad_idx, web_search_context.as_deref(), &channel).await;
+                    let (t, c) = self.process_intervention_think(glad_idx, web_search_context.as_deref(), dynamic_directive.as_deref(), &channel).await;
                     // If think mode failed (HTTP 400 = model doesn't support it),
                     // fall back to the normal thought + intervention path
                     if c.is_none() {
@@ -488,7 +539,7 @@ impl DiscussionEngine {
                         );
                         let thought = self.process_thought(glad_idx, web_search_context.as_deref(), &channel).await;
                         let content = self
-                            .process_intervention(glad_idx, thought.as_deref(), web_search_context.as_deref(), &channel)
+                            .process_intervention(glad_idx, thought.as_deref(), web_search_context.as_deref(), dynamic_directive.as_deref(), &channel)
                             .await;
                         (thought, content)
                     } else {
@@ -497,7 +548,7 @@ impl DiscussionEngine {
                 } else {
                     let thought = self.process_thought(glad_idx, web_search_context.as_deref(), &channel).await;
                     let content = self
-                        .process_intervention(glad_idx, thought.as_deref(), web_search_context.as_deref(), &channel)
+                        .process_intervention(glad_idx, thought.as_deref(), web_search_context.as_deref(), dynamic_directive.as_deref(), &channel)
                         .await;
                     (thought, content)
                 };
@@ -515,6 +566,15 @@ impl DiscussionEngine {
                     });
                     self.turn_messages.push(msg.clone());
                     self.messages_history.push(msg);
+
+                    // Update self-memory for anti-repetition (keep last 2 messages)
+                    let own_msgs = self.speaker_own_messages
+                        .entry(speaker_id.clone())
+                        .or_default();
+                    own_msgs.push(text.clone());
+                    if own_msgs.len() > 2 {
+                        own_msgs.remove(0);
+                    }
                 }
 
                 // C.5 EMOTION UPDATE (rule-based, instant)
@@ -577,23 +637,20 @@ impl DiscussionEngine {
             self.user_intervention_handled = false;
         }
 
-        // --- SYNTHESIS (unless force-stopped) ---
-        if self.status != DiscussionStatus::ForceStopRequested {
-            tracing::info!(
-                discussion_id = %self.discussion_id,
-                status = ?self.status,
-                turns_completed = self.current_turn,
-                "Starting synthesis generation"
-            );
-
-            self.generate_synthesis(None, &channel).await;
-            tracing::info!(discussion_id = %self.discussion_id, "Synthesis generation complete");
-        } else {
-            tracing::info!(
-                discussion_id = %self.discussion_id,
-                "Skipping synthesis (force-stopped)"
-            );
+        // --- SYNTHESIS (always, even on force-stop) ---
+        // If the cancel token was triggered (force-stop), create a fresh one
+        // so the synthesis LLM call can proceed without immediate cancellation.
+        if self.cancel_token.is_cancelled() {
+            self.cancel_token = CancellationToken::new();
         }
+        tracing::info!(
+            discussion_id = %self.discussion_id,
+            status = ?self.status,
+            turns_completed = self.current_turn,
+            "Starting synthesis generation"
+        );
+        self.generate_synthesis(None, &channel).await;
+        tracing::info!(discussion_id = %self.discussion_id, "Synthesis generation complete");
 
         let _ = channel.send(ArenaEvent::DiscussionEnded);
         tracing::info!("Discussion engine ended: {}", self.discussion_id);
@@ -795,6 +852,116 @@ impl DiscussionEngine {
         }
     }
 
+    /// Update cumulative reactions from only the DELTA added by the current speaker.
+    /// `before` is a snapshot of `turn_reaction_counts` taken before `process_reactions()`.
+    fn update_cumulative_reactions(
+        &mut self,
+        speaker_id: &str,
+        before: &HashMap<String, (u32, u32)>,
+    ) {
+        for (target_id, &(total_likes, total_dislikes)) in &self.turn_reaction_counts {
+            let (prev_likes, prev_dislikes) =
+                before.get(target_id).copied().unwrap_or((0, 0));
+            let new_likes = total_likes.saturating_sub(prev_likes);
+            let new_dislikes = total_dislikes.saturating_sub(prev_dislikes);
+            if new_likes > 0 || new_dislikes > 0 {
+                let entry = self
+                    .cumulative_reactions
+                    .entry((speaker_id.to_string(), target_id.clone()))
+                    .or_insert((0, 0));
+                entry.0 += new_likes;
+                entry.1 += new_dislikes;
+            }
+        }
+    }
+
+    /// Build the full directive for a specific speaker using the directive builder.
+    fn build_directive_for_speaker(&mut self, glad_idx: usize) -> directive_builder::DirectiveOutput {
+        let speaker_id = &self.gladiateurs[glad_idx].config.id;
+        let speaker_name = &self.gladiateurs[glad_idx].config.name;
+
+        // Build relationships from cumulative reactions
+        let reactions_from_me: Vec<(String, String, u32, u32)> = self.gladiateurs
+            .iter()
+            .filter(|g| g.config.id != *speaker_id)
+            .filter_map(|g| {
+                let key = (speaker_id.clone(), g.config.id.clone());
+                self.cumulative_reactions.get(&key).map(|(l, d)| {
+                    (g.config.id.clone(), g.config.name.clone(), *l, *d)
+                })
+            })
+            .collect();
+
+        let reactions_to_me: Vec<(String, String, u32, u32)> = self.gladiateurs
+            .iter()
+            .filter(|g| g.config.id != *speaker_id)
+            .filter_map(|g| {
+                let key = (g.config.id.clone(), speaker_id.clone());
+                self.cumulative_reactions.get(&key).map(|(l, d)| {
+                    (g.config.id.clone(), g.config.name.clone(), *l, *d)
+                })
+            })
+            .collect();
+
+        let relationships = directive_builder::build_relationships(&reactions_from_me, &reactions_to_me);
+
+        // Compute group averages
+        let active: Vec<&EmotionalProfile> = self.gladiateurs
+            .iter()
+            .filter(|g| !g.is_banned())
+            .map(|g| &g.emotions)
+            .collect();
+        let (avg_frustration, avg_engagement) = if active.is_empty() {
+            (50, 50)
+        } else {
+            let sum_f: u32 = active.iter().map(|e| e.frustration as u32).sum();
+            let sum_e: u32 = active.iter().map(|e| e.engagement as u32).sum();
+            let n = active.len() as u32;
+            ((sum_f / n) as u8, (sum_e / n) as u8)
+        };
+
+        // Speakers who have already spoken this turn
+        let speakers_this_turn: Vec<String> = self.turn_messages
+            .iter()
+            .filter(|m| m.role == SpeakerRole::Gladiateur)
+            .map(|m| m.speaker_name.clone())
+            .collect();
+
+        let ctx = SpeakerTurnContext {
+            emotions: self.gladiateurs[glad_idx].emotions.clone(),
+            relationships,
+            own_previous_messages: self.speaker_own_messages
+                .get(speaker_id)
+                .cloned()
+                .unwrap_or_default(),
+            dynamics: self.dynamics_cache.get(speaker_id).cloned(),
+            ocean: prompt_builder::parse_ocean_values(&self.gladiateurs[glad_idx].config.system_prompt),
+            turn_number: self.current_turn,
+            speakers_this_turn,
+            is_first_speaker_this_turn: self.turn_messages.is_empty(),
+            was_recently_banned: self.gladiateurs[glad_idx].ban_remaining_turns == 0
+                && self.current_turn > 1
+                && self.messages_history.iter().any(|m| {
+                    m.is_ban_notification && m.content.contains(speaker_name)
+                    && m.turn_number >= self.current_turn.saturating_sub(2)
+                }),
+            group_avg_frustration: avg_frustration,
+            group_avg_engagement: avg_engagement,
+            discussion_language: self.config.discussion_language.clone(),
+            user_name: self.config.user_name.clone(),
+        };
+
+        let last_act = self.last_speech_acts.get(speaker_id);
+        let output = directive_builder::build_dynamic_directive(&ctx, last_act);
+
+        // Store last speech act for anti-repetition
+        if let Some(act) = SpeechAct::from_name(&output.speech_act) {
+            self.last_speech_acts.insert(speaker_id.clone(), act);
+        }
+
+        output
+    }
+
     /// Build a string with recent exchanges for the thought prompt context
     fn build_recent_exchanges(&self, glad_idx: usize) -> String {
         let mut recent = String::new();
@@ -887,8 +1054,10 @@ impl DiscussionEngine {
         glad_idx: usize,
         thought: Option<&str>,
         web_search_results: Option<&str>,
+        dynamic_directive: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> Option<String> {
+        let all_names: Vec<String> = self.gladiateurs.iter().map(|g| g.config.name.clone()).collect();
         let (sys, usr) = prompt_builder::build_intervention_prompt(
             &self.gladiateurs[glad_idx].config.system_prompt,
             &self.config.topic,
@@ -902,6 +1071,8 @@ impl DiscussionEngine {
             self.current_turn,
             self.config.max_turns,
             web_search_results,
+            &all_names,
+            dynamic_directive,
         );
 
         let request = self.ollama_client.build_request(
@@ -1073,8 +1244,10 @@ impl DiscussionEngine {
         &self,
         glad_idx: usize,
         web_search_results: Option<&str>,
+        dynamic_directive: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> (Option<String>, Option<String>) {
+        let all_names: Vec<String> = self.gladiateurs.iter().map(|g| g.config.name.clone()).collect();
         let (sys, usr) = prompt_builder::build_intervention_prompt(
             &self.gladiateurs[glad_idx].config.system_prompt,
             &self.config.topic,
@@ -1088,6 +1261,8 @@ impl DiscussionEngine {
             self.current_turn,
             self.config.max_turns,
             web_search_results,
+            &all_names,
+            dynamic_directive,
         );
 
         let mut request = self.ollama_client.build_request(

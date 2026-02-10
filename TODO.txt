@@ -355,10 +355,10 @@ Pour les personnalités historiques tu peux te servir d'internet si besoin d'obt
 -------------------------------------------------------------------
 
 - exactement comme ce qui été fait pour les recherches internet il faut pouvoir paramétrer pour IArbitre et les gladIAteur la possibilité d'aller rechercher des éléments factuels ou informations complémentaires sur wikipedia selon leur besoin et propre envie.
-Il n'y a par contre pas besoin de configuration dans les paramètres.
+Il n'y a par contre pas besoin de configuration dans les paramètres et il y' a pas besoin de compter des crédits ou tokens : c'est gratuit.
 Il doit être possible d'activer les recherches internet et wikipedia en même temp ou indépendamment
 Le paramétrage wikipedia est identique à celui du paramétrage internet : maximum une fois par tour par gladIAteur.
-Pour l'IArbitre toujours utilisé pour introduire de manière plus instruite la discussion, sans plus.
+Pour l'IArbitre même principe que pour internet, toujours utilisé pour s'assurer d'introduire de manière plus instruite la discussion, sans plus.
 https://www.mediawiki.org/wiki/API:Action_API
 https://www.mediawiki.org/wiki/API:Lists
 https://www.mediawiki.org/wiki/API:Meta
@@ -369,3 +369,37 @@ https://www.mediawiki.org/wiki/API:Data_formats
 https://www.mediawiki.org/wiki/API:Query
 https://www.mediawiki.org/wiki/API:Properties
 https://www.mediawiki.org/wiki/API:Data_formats
+
+Valide la faisabilité en visitant chaque lien fourni pour l'intégration technique (CURL si tu n'y arrives pas directement).
+Puis réfléchis à la manière la plus pertinente d'intégrer et utiliser cette nouvelle possibilité pour l'IArbitre et les gladIAteur.
+
+----------------------------------------------------------------
+
+Souvent le débat se focalise sur les argument du premier intervenant et cela rend la discussion un peu étroite.
+Le premier tour doit être un tour pendant lequel chaque intervenant expose sa première opinion.
+C'est à partir du deuxième tour que commencent les débats d'idées.
+
+Tant pour l'utilisateur que pour les gladIAteurs, me modérateur doit systématiquement rappeler cette règle lors de l'introduction de la discussion.
+
+-----------------------------------------------------------------
+
+selon les nouveaux templates de personnalité, ajoute les personnalités suivantes :
+
+- EXPERTS : le Géopolique, le Hackeur (white hat), le Hackeur (red hat), l'Expert IA, le Dirigeant
+- IMAGINAIRES : Bouddha, Krishna
+- PERSONNALITES : ajoute 5 grands philosophes, 5 grands scientifiques, ajoute 5 grands poètes et écrivains, , ajoute 5 grands créateurs de mode => pour ces 20 profils utilise internet pour documenter précisément leur personnalité et traits de caractères
+- METIERS : le Psychologue, le Fiscaliste, le DEV Frontend, le DEV Backend, le DEV Architecte , la Data Analyste, le DEV UX/UI, le Marketind Digital, le Marketing, le Policier, le Gendarme
+- AUTRES : le Mafieux, la Starlette de télé-réalité, le Psycho-rigide, le Naïf, le Mec de Gauche, le Mec de Droite, l'Anarchiste, le Fasciste, le Mec d'Extrême Droite, le Startuper, la Fashion-Victim, le Techno-Addict
+
+-------------------------------------------------------------------
+
+la discussion pourra également consister à produire et co-rédiger un document écrit sur lequel chaque IA pour intervenir en tant que rédacteur, en plus de leurs échanges dans la discussion : ajouter du texte, modifier du texte, supprimer du texte, réagencer le texte.
+pour activer cette fonctionnalité, au-delà de la demande formulée dans le sujet de la discussion, l'utilisateur devra définir, sous le sujet de la discussion, le type de document : 
+- aucune (par défaut, aucun document ne sera rédigé)
+- .txt (format libre)
+- .md (format markdown)
+- .csv (format csv avec ';' comme séparateur)
+
+Les gladIAteurs devront impérativement respecter le format.
+Ce document sera affiché en temps réel dans une barre latérale redimensionnable et repliable entre la discussion et les émotions.
+Le document sera téléchargeable dans la synthèse de la discussion.

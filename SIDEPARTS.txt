@@ -1,0 +1,23 @@
+Avantages / Inconvénients des données OCEAN structurées
+
+Option A : Texte seul (OCEAN dans le system_prompt uniquement)
+Avantages	Inconvénients
+Zéro changement de code Rust	Pas d'accès programmatique aux traits
+Zéro migration de schéma DB	Le moteur d'émotions ne peut pas utiliser OCEAN
+Fonctionne immédiatement	Pas de validation (OCEAN invalide = pas d'erreur)
+Simple à maintenir	Si on veut exploiter OCEAN dans le code plus tard, il faudra parser le prompt
+Pas de donnée dupliquée	
+
+Option B : Données structurées (champ JSON en DB)
+Avantages	Inconvénients
+Le moteur d'émotions peut moduler les deltas selon OCEAN	Migration de schéma (ALTER TABLE + nouvelle colonne)
+Ex: Neuroticism élevé → frustration monte 2x plus vite	Changement des modèles Rust (nouveau champ)
+Ex: Agreeableness bas → moins de decay de frustration	Changement du seed (JSON pour chaque profil)
+Validation possible (vérifier que les valeurs sont 1-10)	Données dupliquées (OCEAN dans le prompt ET en JSON)
+Future-proof pour des features avancées	Migration des profils custom existants
+Le turn manager pourrait utiliser les traits	Plus de code = plus de bugs potentiels
+
+Mon avis
+L'Option A est suffisante pour obtenir 90% de la valeur — les LLMs lisent le template et modulent naturellement leur comportement selon les traits OCEAN. L'Option B donnerait les 10% restants (modulation codée des émotions) mais triple la complexité. On peut toujours ajouter B plus tard sans casser A.
+
+-------------------------------------------------------------------------------

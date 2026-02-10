@@ -1,3 +1,5 @@
+pub mod directive_builder;
+pub mod dynamics_parser;
 pub mod emotion_engine;
 pub mod json_parser;
 pub mod memory_manager;

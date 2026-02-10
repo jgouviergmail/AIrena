@@ -101,6 +101,15 @@ pub enum ArenaEvent {
         direction: String,
         value: u8,
     },
+    /// Dynamic behavioral directive generated for a speaker (for UI visualization)
+    #[serde(rename_all = "camelCase")]
+    DirectiveGenerated {
+        speaker_id: String,
+        speaker_name: String,
+        speech_act: String,
+        emotion_behavior: Option<String>,
+        relationship_summary: String,
+    },
     /// Discussion ended
     DiscussionEnded,
     /// Non-fatal error (displayed in feed)

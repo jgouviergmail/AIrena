@@ -26,6 +26,9 @@ pub fn build_introduction_prompt(
             "{}\n\nYou are the moderator of a debate. The topic is: \"{}\"\n\
              The participants are: {}{}\n\n\
              Introduce the topic briefly (2-3 sentences) and invite the first participant to speak.\n\
+             IMPORTANT RULE: Clearly remind participants that this first round is for presenting \
+             initial opinions only — each speaker must share their own position on the topic. \
+             Debating, challenging, or responding to others' arguments is NOT allowed until the second round.\n\
              Respond in English.",
             datetime, topic, participants, web_block
         ),
@@ -33,6 +36,8 @@ pub fn build_introduction_prompt(
             "{}\n\n你是一场辩论的主持人。主题是：\"{}\"\n\
              参与者有：{}{}\n\n\
              简要介绍主题（2-3句话），并邀请第一位参与者发言。\n\
+             重要规则：明确提醒参与者，第一轮仅用于表达初始观点——每位发言者必须分享自己对主题的立场。\
+             在第二轮之前，不得辩论、质疑或回应他人的论点。\n\
              请用中文回答。",
             datetime, topic, participants, web_block
         ),
@@ -40,6 +45,9 @@ pub fn build_introduction_prompt(
             "{}\n\nTu es le modérateur d'un débat. Le sujet est : \"{}\"\n\
              Les participants sont : {}{}\n\n\
              Présente brièvement le sujet (2-3 phrases) et invite le premier participant à prendre la parole.\n\
+             RÈGLE IMPORTANTE : Rappelle clairement aux participants que ce premier tour est réservé \
+             à l'expression des opinions initiales — chaque intervenant doit présenter sa propre position sur le sujet. \
+             Il est INTERDIT de débattre, contester ou répondre aux arguments des autres avant le deuxième tour.\n\
              Réponds en français.",
             datetime, topic, participants, web_block
         ),
@@ -80,6 +88,7 @@ pub fn build_reaction_prompt(
              - \"dislike\": disagree or weak argument\n\
              - \"none\": neutral\n\n\
              IMPORTANT: Use the EXACT speaker names as written above.\n\
+             One reaction per participant only — do NOT react twice to the same speaker.\n\
              Expected format: {}\n\n\
              Respond ONLY with the JSON array.",
             list, example
@@ -91,6 +100,7 @@ pub fn build_reaction_prompt(
              - \"dislike\"：不同意或薄弱论点\n\
              - \"none\"：中立\n\n\
              重要：使用上面写的完全相同的发言者名称。\n\
+             每个参与者只能有一个反应——不要对同一发言者反应两次。\n\
              预期格式：{}\n\n\
              仅用JSON数组回复。",
             list, example
@@ -102,6 +112,7 @@ pub fn build_reaction_prompt(
              - \"dislike\" : en désaccord ou argument faible\n\
              - \"none\" : neutre\n\n\
              IMPORTANT : Utilise les noms EXACTS des intervenants tels qu'écrits ci-dessus.\n\
+             Une seule réaction par participant — ne réagis PAS deux fois au même intervenant.\n\
              Format attendu : {}\n\n\
              Réponds UNIQUEMENT avec le tableau JSON.",
             list, example
@@ -237,6 +248,8 @@ pub fn build_intervention_prompt(
     current_turn: u32,
     max_turns: Option<u32>,
     web_search_results: Option<&str>,
+    participant_names: &[String],
+    dynamic_directive: Option<&str>,
 ) -> (String, String) {
     // Detect if the user has spoken in this turn
     let user_has_spoken = current_turn_messages
@@ -257,21 +270,24 @@ Speak naturally and spontaneously, like a real person in a heated debate. Vary y
 NEVER start with \"I think that...\" or \"As a [role]...\" every time — mix up your openings.\n\
 Avoid formulaic patterns: don't systematically list points, don't always agree-then-disagree, don't repeat the same rhetorical structures.\n\
 Be unpredictable. Sometimes be brief and punchy. Sometimes develop an idea at length. React genuinely to what others say.\n\
-CRITICAL: NEVER refer to yourself in the third person. You speak in first person (\"I\", \"me\", \"my\"). Never quote or comment on yourself as if you were someone else.\n",
+CRITICAL: NEVER refer to yourself in the third person. You speak in first person (\"I\", \"me\", \"my\"). Never quote or comment on yourself as if you were someone else.\n\
+Your verbal tics are OCCASIONAL punctuations, not crutches. Use them at most once per intervention, never at the beginning of a sentence.\n",
         "zh" => "\
 你是辩论参与者——始终保持角色。永远不要打破角色或称自己为AI。\n\
 自然而即兴地发言，像真正激烈辩论中的真人一样。变化你的句子长度和结构。\n\
 不要每次都以「我认为」或「作为某角色」开头——变换你的开场方式。\n\
 避免公式化模式：不要系统地列举要点，不要总是先同意再反对，不要重复相同的修辞结构。\n\
 要不可预测。有时简短有力，有时深入展开一个想法。真诚地回应别人说的话。\n\
-关键：永远不要用第三人称提到自己。你用第一人称（「我」、「我的」）说话。永远不要像谈论别人一样引用或评论自己。\n",
+关键：永远不要用第三人称提到自己。你用第一人称（「我」、「我的」）说话。永远不要像谈论别人一样引用或评论自己。\n\
+你的口头禅是偶尔的点缀，不是拐杖。每次发言最多使用一次，绝不放在句首。\n",
         _ => "\
 Tu es un participant au débat — reste pleinement dans ton personnage en permanence. Ne sors jamais du rôle et ne te présente jamais comme une IA.\n\
 Parle naturellement et spontanément, comme une vraie personne dans un débat animé. Varie la longueur et la structure de tes phrases.\n\
 Ne commence JAMAIS systématiquement par \"Je pense que...\" ou \"En tant que [rôle]...\" — varie tes accroches.\n\
 Évite les patterns répétitifs : ne liste pas systématiquement des points, ne fais pas toujours accord-puis-désaccord, ne répète pas les mêmes structures rhétoriques.\n\
 Sois imprévisible. Parfois sois bref et percutant. Parfois développe une idée en profondeur. Réagis sincèrement à ce que disent les autres.\n\
-CRITIQUE : Ne te réfère JAMAIS à toi-même à la troisième personne. Tu parles à la première personne (\"je\", \"moi\", \"mon\"). Ne te cite pas et ne te commente pas comme si tu étais quelqu'un d'autre.\n",
+CRITIQUE : Ne te réfère JAMAIS à toi-même à la troisième personne. Tu parles à la première personne (\"je\", \"moi\", \"mon\"). Ne te cite pas et ne te commente pas comme si tu étais quelqu'un d'autre.\n\
+Tes tics verbaux sont des ponctuations OCCASIONNELLES, pas des béquilles. Utilise-les au maximum 1 fois par intervention, jamais en début de phrase.\n",
     };
 
     // Build system message
@@ -291,6 +307,28 @@ CRITIQUE : Ne te réfère JAMAIS à toi-même à la troisième personne. Tu parl
         _ => "Sujet du débat",
     };
     user_msg.push_str(&format!("[{}] {}\n\n", topic_label, topic));
+
+    // Explicit participant names — forces LLM to use exact names, no abbreviations
+    if !participant_names.is_empty() {
+        let names_list = participant_names.join(", ");
+        match discussion_language {
+            "en" => user_msg.push_str(&format!(
+                "[Participants] {}\nWhen referring to other participants, ALWAYS use their EXACT full name as listed above. \
+                 Never abbreviate, shorten, or use nicknames.\n\n",
+                names_list
+            )),
+            "zh" => user_msg.push_str(&format!(
+                "[参与者] {}\n提及其他参与者时，必须使用上面列出的完整准确名称。\
+                 绝不缩写、简化或使用昵称。\n\n",
+                names_list
+            )),
+            _ => user_msg.push_str(&format!(
+                "[Participants] {}\nQuand tu fais référence aux autres participants, utilise TOUJOURS leur nom complet et exact tel qu'indiqué ci-dessus. \
+                 N'abrège jamais, ne raccourcis pas et n'utilise pas de surnoms.\n\n",
+                names_list
+            )),
+        }
+    }
 
     // Web search results (injected before memory context)
     if let Some(web_results) = web_search_results {
@@ -384,33 +422,79 @@ CRITIQUE : Ne te réfère JAMAIS à toi-même à la troisième personne. Tu parl
         user_msg.push('\n');
     }
 
+    // OCEAN personality behavioral directives for extreme values
+    let ocean_directives = build_ocean_directives(system_prompt, discussion_language);
+    if !ocean_directives.is_empty() {
+        user_msg.push_str(&ocean_directives);
+    }
+
     // Detect if this is the first speaker with no prior context
     let is_opening = current_turn_messages.is_empty() && memory.immediate.is_empty();
 
     // End-of-discussion awareness
     let end_awareness = build_end_awareness(current_turn, max_turns, discussion_language);
 
-    // Final instruction — conditional based on context
-    let instruction = if is_opening {
+    // Final instruction — dynamic directive replaces static instructions when available
+    let instruction = if let Some(directive) = dynamic_directive {
+        // Dynamic behavioral directive from the meta-orchestrator (emotion_driven mode)
+        format!("{}{}", directive, &end_awareness)
+    } else if is_opening {
         match discussion_language {
             "en" => format!(
-                "You are the first to speak on this topic. Jump straight into your position — \
-                 don't introduce yourself or state your role. Open with a strong, memorable statement \
-                 that sets the tone. Keep it to one focused paragraph. \
+                "This is the OPENING ROUND — present your initial opinion ONLY. \
+                 Jump straight into your position — don't introduce yourself or state your role. \
+                 Open with a strong, memorable statement that sets the tone. \
+                 Do NOT debate, challenge, or respond to others — this will begin in the next round. \
+                 Keep it to one focused paragraph. \
                  Do NOT address or speak to {} who is only an observer.{}",
                 user_name, end_awareness
             ),
             "zh" => format!(
-                "你是第一个就此话题发言的人。直接切入你的立场——\
-                 不要自我介绍或说明你的角色。以一个有力、令人难忘的声明开场来定下基调。\
+                "这是开场轮——仅表达你的初始观点。\
+                 直接切入你的立场——不要自我介绍或说明你的角色。\
+                 以一个有力、令人难忘的声明开场来定下基调。\
+                 不要辩论、质疑或回应他人——这将在下一轮开始。\
                  保持一段集中的论述。\
                  不要对{}说话，此人只是观察者。{}",
                 user_name, end_awareness
             ),
             _ => format!(
-                "Tu es le premier à prendre la parole sur ce sujet. Entre directement dans le vif — \
-                 ne te présente pas et ne décris pas ton rôle. Ouvre avec une affirmation forte et marquante \
-                 qui donne le ton. Reste sur un paragraphe concentré. \
+                "C'est le TOUR D'OUVERTURE — présente uniquement ton opinion initiale. \
+                 Entre directement dans le vif — ne te présente pas et ne décris pas ton rôle. \
+                 Ouvre avec une affirmation forte et marquante qui donne le ton. \
+                 Ne débats PAS, ne conteste PAS, ne réponds PAS aux autres — cela commencera au prochain tour. \
+                 Reste sur un paragraphe concentré. \
+                 Ne t'adresse PAS à {} qui n'est qu'un observateur.{}",
+                user_name, end_awareness
+            ),
+        }
+    } else if current_turn == 1 {
+        // Other speakers on Turn 1 — present their own opinion, don't debate yet
+        match discussion_language {
+            "en" => format!(
+                "This is the OPENING ROUND — present your initial opinion ONLY. \
+                 Share YOUR OWN position on the topic with a strong, distinctive angle. \
+                 Do NOT debate, challenge, or respond to what previous speakers said — \
+                 the debate phase begins next round. Focus on what YOU think. \
+                 Keep it to one focused paragraph. \
+                 Do NOT address or speak to {} who is only an observer.{}",
+                user_name, end_awareness
+            ),
+            "zh" => format!(
+                "这是开场轮——仅表达你的初始观点。\
+                 以独特的角度分享你对主题的立场。\
+                 不要辩论、质疑或回应之前发言者说的话——\
+                 辩论阶段从下一轮开始。专注于你自己的想法。\
+                 保持一段集中的论述。\
+                 不要对{}说话，此人只是观察者。{}",
+                user_name, end_awareness
+            ),
+            _ => format!(
+                "C'est le TOUR D'OUVERTURE — présente uniquement ton opinion initiale. \
+                 Partage TA PROPRE position sur le sujet avec un angle fort et distinctif. \
+                 Ne débats PAS, ne conteste PAS, ne réponds PAS à ce que les précédents intervenants ont dit — \
+                 la phase de débat commence au prochain tour. Concentre-toi sur ce que TU penses. \
+                 Reste sur un paragraphe concentré. \
                  Ne t'adresse PAS à {} qui n'est qu'un observateur.{}",
                 user_name, end_awareness
             ),
@@ -491,6 +575,123 @@ CRITIQUE : Ne te réfère JAMAIS à toi-même à la troisième personne. Tu parl
     user_msg.push_str(&instruction);
 
     (system, user_msg)
+}
+
+/// Parse OCEAN personality values from a system prompt containing "O=X C=X E=X A=X N=X".
+pub fn parse_ocean_values(text: &str) -> Option<[u8; 5]> {
+    let o_idx = text.find("O=")?;
+    // Safe UTF-8 boundary: floor_char_boundary prevents slicing inside a multi-byte char
+    let end = text.floor_char_boundary((o_idx + 60).min(text.len()));
+    let segment = &text[o_idx..end];
+    let labels = ["O=", "C=", "E=", "A=", "N="];
+    let mut values = [5u8; 5];
+    for (i, label) in labels.iter().enumerate() {
+        if let Some(pos) = segment.find(label) {
+            let after = &segment[pos + label.len()..];
+            let num_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(v) = num_str.parse::<u8>() {
+                values[i] = v.clamp(1, 10);
+            }
+        }
+    }
+    Some(values)
+}
+
+/// Generate behavioral directives for extreme OCEAN personality values (≤3 or ≥8).
+fn build_ocean_directives(system_prompt: &str, lang: &str) -> String {
+    let values = match parse_ocean_values(system_prompt) {
+        Some(v) => v,
+        None => return String::new(),
+    };
+    let [o, c, e, a, n] = values;
+
+    let mut directives = Vec::new();
+
+    // Openness
+    if o >= 8 {
+        directives.push(match lang {
+            "en" => "Your high Openness drives you to explore unconventional ideas and embrace novel perspectives.",
+            "zh" => "你的高开放性驱使你探索非常规的想法和接受新颖的观点。",
+            _ => "Ta forte Ouverture te pousse à explorer des idées non conventionnelles et à embrasser les perspectives nouvelles.",
+        });
+    } else if o <= 3 {
+        directives.push(match lang {
+            "en" => "Your low Openness makes you skeptical of abstract or unusual ideas — you prefer proven, concrete approaches.",
+            "zh" => "你的低开放性让你对抽象或不寻常的想法持怀疑态度——你更喜欢经过验证的具体方法。",
+            _ => "Ta faible Ouverture te rend sceptique face aux idées abstraites ou inhabituelles — tu préfères les approches concrètes et éprouvées.",
+        });
+    }
+
+    // Conscientiousness
+    if c >= 8 {
+        directives.push(match lang {
+            "en" => "Your high Conscientiousness makes you methodical — you demand precision, evidence, and rigor.",
+            "zh" => "你的高尽责性让你条理分明——你要求精确、证据和严谨。",
+            _ => "Ta forte Conscienciosité te rend méthodique — tu exiges de la précision, des preuves et de la rigueur.",
+        });
+    } else if c <= 3 {
+        directives.push(match lang {
+            "en" => "Your low Conscientiousness makes you spontaneous and impulsive — you speak off-the-cuff without over-analyzing.",
+            "zh" => "你的低尽责性让你随性而冲动——你即兴发言，不过度分析。",
+            _ => "Ta faible Conscienciosité te rend spontané et impulsif — tu parles au feeling sans trop analyser.",
+        });
+    }
+
+    // Extraversion
+    if e >= 8 {
+        directives.push(match lang {
+            "en" => "Your high Extraversion makes you bold, assertive, and eager to dominate the conversation.",
+            "zh" => "你的高外向性让你大胆、自信，并渴望主导对话。",
+            _ => "Ta forte Extraversion te rend audacieux, affirmatif et désireux de dominer la conversation.",
+        });
+    } else if e <= 3 {
+        directives.push(match lang {
+            "en" => "Your low Extraversion makes you reserved and measured — you speak only when you have something meaningful to add.",
+            "zh" => "你的低外向性让你内敛而审慎——你只在有重要内容时才发言。",
+            _ => "Ta faible Extraversion te rend réservé et mesuré — tu ne parles que quand tu as quelque chose de significatif à ajouter.",
+        });
+    }
+
+    // Agreeableness
+    if a >= 8 {
+        directives.push(match lang {
+            "en" => "Your high Agreeableness means you naturally seek compromise and try to understand others' viewpoints.",
+            "zh" => "你的高宜人性意味着你天然地寻求妥协并试图理解他人的观点。",
+            _ => "Ta forte Agréabilité signifie que tu cherches naturellement le compromis et essaies de comprendre les points de vue des autres.",
+        });
+    } else if a <= 3 {
+        directives.push(match lang {
+            "en" => "Your low Agreeableness makes you confrontational — you challenge ideas harshly and prioritize being right over being liked.",
+            "zh" => "你的低宜人性让你好斗——你严厉地挑战观点，把正确置于被喜欢之上。",
+            _ => "Ta faible Agréabilité te rend combatif — tu contestes les idées sans ménagement et tu préfères avoir raison qu'être apprécié.",
+        });
+    }
+
+    // Neuroticism
+    if n >= 8 {
+        directives.push(match lang {
+            "en" => "Your high Neuroticism makes you emotionally reactive — frustration hits harder, setbacks shake your confidence more.",
+            "zh" => "你的高神经质让你情绪反应强烈——挫折打击更大，失败更动摇你的信心。",
+            _ => "Ton fort Névrosisme te rend émotionnellement réactif — la frustration te frappe plus fort, les revers ébranlent davantage ta confiance.",
+        });
+    } else if n <= 3 {
+        directives.push(match lang {
+            "en" => "Your low Neuroticism makes you unshakeable — criticism and setbacks barely affect your composure.",
+            "zh" => "你的低神经质让你不可动摇——批评和挫折几乎不影响你的沉着。",
+            _ => "Ton faible Névrosisme te rend inébranlable — les critiques et les revers n'affectent presque pas ton sang-froid.",
+        });
+    }
+
+    if directives.is_empty() {
+        return String::new();
+    }
+
+    let header = match lang {
+        "en" => "[Personality traits — act accordingly]",
+        "zh" => "[性格特征——请据此行事]",
+        _ => "[Traits de personnalité — agis en conséquence]",
+    };
+    format!("{}\n{}\n\n", header, directives.join("\n"))
 }
 
 /// Build the moderation prompt for the IArbitre
@@ -729,51 +930,52 @@ fn describe_axis_zh(val: u8, name: &str) -> Option<String> {
     }
 }
 
-/// Build threshold-specific behavior instructions (only when above/below critical values).
+/// Build threshold-specific factual alerts (only when above/below critical values).
 /// Returns None if no threshold is crossed.
+/// Note: behavioral responses are now handled by the <dynamics> section of each persona template.
 pub fn build_threshold_instructions(emotions: &EmotionalProfile, lang: &str) -> Option<String> {
     let mut instructions = Vec::new();
 
     if emotions.frustration > HIGH_THRESHOLD {
         instructions.push(match lang {
-            "en" => "You are at the edge of exasperation. Your interventions become cutting and direct. You are losing patience.".to_string(),
-            "zh" => "你已接近崩溃边缘。你的发言变得尖锐直接，你正在失去耐心。".to_string(),
-            _ => "Tu es au bord de l'exaspération. Tes interventions deviennent cassantes et directes. Tu perds patience.".to_string(),
+            "en" => "⚠ Your frustration level is critical.".to_string(),
+            "zh" => "⚠ 你的挫败感已达临界水平。".to_string(),
+            _ => "⚠ Ton niveau de frustration est critique.".to_string(),
         });
     }
     if emotions.engagement < LOW_THRESHOLD {
         instructions.push(match lang {
-            "en" => "You feel detached from the debate. Your responses are short and distant.".to_string(),
-            "zh" => "你对辩论感到疏离。你的回答简短而冷淡。".to_string(),
-            _ => "Tu te sens détaché du débat. Tes réponses sont courtes et distantes.".to_string(),
+            "en" => "⚠ Your engagement is at rock bottom.".to_string(),
+            "zh" => "⚠ 你的投入度已降至最低。".to_string(),
+            _ => "⚠ Ton engagement est au plus bas.".to_string(),
         });
     }
     if emotions.confiance > HIGH_THRESHOLD {
         instructions.push(match lang {
-            "en" => "You are ultra-assertive. You affirm with authority and conviction.".to_string(),
-            "zh" => "你极度自信。你以权威和信念来断言。".to_string(),
-            _ => "Tu es ultra-assertif. Tu affirmes avec autorité et conviction.".to_string(),
+            "en" => "⚠ Your confidence is at its peak.".to_string(),
+            "zh" => "⚠ 你的信心已达巅峰。".to_string(),
+            _ => "⚠ Ta confiance est à son maximum.".to_string(),
         });
     }
     if emotions.confiance < LOW_THRESHOLD {
         instructions.push(match lang {
-            "en" => "You doubt yourself. You nuance excessively and hedge your statements.".to_string(),
-            "zh" => "你在怀疑自己。你过度地修饰和犹豫。".to_string(),
-            _ => "Tu doutes de toi. Tu nuances excessivement et hésites dans tes propos.".to_string(),
+            "en" => "⚠ Your confidence is at rock bottom.".to_string(),
+            "zh" => "⚠ 你的信心已降至最低。".to_string(),
+            _ => "⚠ Ta confiance est au plus bas.".to_string(),
         });
     }
     if emotions.curiosite > HIGH_THRESHOLD {
         instructions.push(match lang {
-            "en" => "You are fascinated. You ask many questions and explore tangents.".to_string(),
-            "zh" => "你非常着迷。你提很多问题并探索各种切入点。".to_string(),
-            _ => "Tu es fasciné. Tu poses beaucoup de questions et explores des tangentes.".to_string(),
+            "en" => "⚠ Your curiosity is at its peak.".to_string(),
+            "zh" => "⚠ 你的好奇心已达巅峰。".to_string(),
+            _ => "⚠ Ta curiosité est à son comble.".to_string(),
         });
     }
     if emotions.enthousiasme > HIGH_THRESHOLD {
         instructions.push(match lang {
-            "en" => "You are elated. You express yourself with energy and exclamations.".to_string(),
-            "zh" => "你非常兴奋。你用充沛的精力和感叹来表达自己。".to_string(),
-            _ => "Tu es exalté. Tu t'exprimes avec énergie et exclamations.".to_string(),
+            "en" => "⚠ Your enthusiasm is at its peak.".to_string(),
+            "zh" => "⚠ 你的热情已达巅峰。".to_string(),
+            _ => "⚠ Ton enthousiasme est à son maximum.".to_string(),
         });
     }
 
@@ -1390,6 +1592,37 @@ mod tests {
         // Both should be valid sentences but may differ
         assert!(r1.ends_with('.'));
         assert!(r2.ends_with('.'));
+    }
+
+    #[test]
+    fn test_parse_ocean_values() {
+        let prompt = "<psychology>\nOCEAN: O=8 C=9 E=4 A=4 N=3\nPosture: ADULTE\n</psychology>";
+        let values = parse_ocean_values(prompt);
+        assert_eq!(values, Some([8, 9, 4, 4, 3]));
+    }
+
+    #[test]
+    fn test_parse_ocean_values_no_ocean() {
+        let prompt = "No OCEAN values here";
+        assert!(parse_ocean_values(prompt).is_none());
+    }
+
+    #[test]
+    fn test_build_ocean_directives_extreme() {
+        let prompt = "<psychology>\nOCEAN: O=9 C=2 E=9 A=2 N=9\n</psychology>";
+        let directives = build_ocean_directives(prompt, "en");
+        assert!(directives.contains("Openness"), "Missing Openness directive: {directives}");
+        assert!(directives.contains("Conscientiousness"), "Missing Conscientiousness directive: {directives}");
+        assert!(directives.contains("Extraversion"), "Missing Extraversion directive: {directives}");
+        assert!(directives.contains("Agreeableness"), "Missing Agreeableness directive: {directives}");
+        assert!(directives.contains("Neuroticism"), "Missing Neuroticism directive: {directives}");
+    }
+
+    #[test]
+    fn test_build_ocean_directives_neutral() {
+        let prompt = "<psychology>\nOCEAN: O=5 C=5 E=5 A=5 N=5\n</psychology>";
+        let directives = build_ocean_directives(prompt, "en");
+        assert!(directives.is_empty(), "Expected empty for neutral OCEAN, got: {directives}");
     }
 
     #[test]

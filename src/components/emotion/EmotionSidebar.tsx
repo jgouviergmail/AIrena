@@ -32,6 +32,8 @@ export function EmotionSidebar({ width = 280 }: { width?: number }) {
   const emotions = useArenaStore((s) => s.emotions);
   const emotionHistory = useArenaStore((s) => s.emotionHistory);
   const moodSummary = useArenaStore((s) => s.moodSummary);
+  const directives = useArenaStore((s) => s.directives);
+  const bans = useArenaStore((s) => s.bans);
   const currentTurn = useArenaStore((s) => s.currentTurn);
   const arbitre = useSetupStore((s) => s.arbitre);
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
@@ -176,6 +178,8 @@ export function EmotionSidebar({ width = 280 }: { width?: number }) {
             thresholdAxis={thresholdFlash.get(p.id)}
             moodSummary={moodSummary.get(p.id)}
             currentTurn={currentTurn}
+            directive={directives.get(p.id)}
+            banInfo={bans.get(p.id)}
           />
         ))}
       </div>

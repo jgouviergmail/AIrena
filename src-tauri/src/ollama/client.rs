@@ -137,6 +137,12 @@ impl OllamaClient {
                                 if !line.is_empty() {
                                     let resp: ChatResponse = serde_json::from_str(line)?;
                                     if resp.done {
+                                        if resp.done_reason.as_deref() == Some("length") {
+                                            tracing::warn!(
+                                                chars = accumulated_content.len(),
+                                                "Response truncated: model hit num_predict token limit"
+                                            );
+                                        }
                                         return Ok(ChatStreamResult {
                                             content: accumulated_content,
                                             thinking: if accumulated_thinking.is_empty() {
@@ -160,14 +166,35 @@ impl OllamaClient {
                             }
                         }
                         Some(Err(e)) => return Err(OllamaError::RequestFailed(e)),
-                        None => return Ok(ChatStreamResult {
-                            content: accumulated_content,
-                            thinking: if accumulated_thinking.is_empty() {
-                                None
-                            } else {
-                                Some(accumulated_thinking)
-                            },
-                        }),
+                        None => {
+                            // Process any leftover data in buffer (last line without trailing \n)
+                            if !buf.is_empty() {
+                                let line = String::from_utf8_lossy(&buf);
+                                let line = line.trim();
+                                if !line.is_empty() {
+                                    if let Ok(resp) = serde_json::from_str::<ChatResponse>(line) {
+                                        if !resp.message.content.is_empty() {
+                                            on_content_token(&resp.message.content);
+                                            accumulated_content.push_str(&resp.message.content);
+                                        }
+                                        if resp.done_reason.as_deref() == Some("length") {
+                                            tracing::warn!(
+                                                chars = accumulated_content.len(),
+                                                "Response truncated: model hit num_predict token limit"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            return Ok(ChatStreamResult {
+                                content: accumulated_content,
+                                thinking: if accumulated_thinking.is_empty() {
+                                    None
+                                } else {
+                                    Some(accumulated_thinking)
+                                },
+                            });
+                        }
                     }
                 }
                 _ = cancel.cancelled() => {

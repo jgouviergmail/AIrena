@@ -13,7 +13,7 @@ export const DEFAULT_LLM_PARAMS: LlmParams = {
   temperature: 0.8,
   topP: 0.9,
   topK: 40,
-  numPredict: 1024,
+  numPredict: 2048,
   numCtx: 8192,
   repeatPenalty: 1.3,
 };
@@ -229,5 +229,29 @@ export type ArenaEvent =
         searchesUsedDiscussion: number;
       };
     }
+  | {
+      type: "directiveGenerated";
+      data: {
+        speakerId: string;
+        speakerName: string;
+        speechAct: string;
+        emotionBehavior: string | null;
+        relationshipSummary: string;
+      };
+    }
   | { type: "discussionEnded"; data: null }
   | { type: "error"; data: { message: string } };
+
+// Directive data for UI visualization
+export interface DirectiveData {
+  speechAct: string;
+  emotionBehavior: string | null;
+  relationshipSummary: string;
+}
+
+// Ban tracking for emotion sidebar
+export interface BanInfo {
+  remaining: number;
+  totalBans: number;
+  justIssued: boolean;
+}

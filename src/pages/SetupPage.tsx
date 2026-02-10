@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { LlmParamsForm } from "@/components/setup/LlmParamsForm";
+import { PersonaEditor } from "@/components/setup/PersonaEditor";
 import { EmojiPicker } from "@/components/setup/EmojiPicker";
 import { getProfileEmoji } from "@/lib/profile-emoji";
 import { useSetupStore } from "@/stores/useSetupStore";
@@ -306,6 +307,7 @@ function StepArbitre() {
   const saveArbitreProfile = useSettingsStore((s) => s.saveArbitreProfile);
   const deleteArbitreProfile = useSettingsStore((s) => s.deleteArbitreProfile);
   const hasTavilyKey = !!useSettingsStore((s) => s.settings.tavilyApiKey);
+  const discussionLanguage = useSetupStore((s) => s.discussionLanguage);
   const [showLlm, setShowLlm] = useState(false);
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [savePersonality, setSavePersonality] = useState("");
@@ -405,11 +407,11 @@ function StepArbitre() {
           <FileText className="h-4 w-4 text-primary" />
           {t("setup.arbitrePrompt")}
         </label>
-        <textarea
-          value={arbitre.systemPrompt}
-          onChange={(e) => updateArbitre({ systemPrompt: e.target.value })}
-          rows={4}
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        <PersonaEditor
+          systemPrompt={arbitre.systemPrompt}
+          profileType="arbitre"
+          discussionLanguage={discussionLanguage}
+          onChange={(prompt) => updateArbitre({ systemPrompt: prompt })}
         />
       </div>
 
@@ -564,6 +566,7 @@ function StepGladiateurs({
   const saveSettings = useSettingsStore((s) => s.saveSettings);
   const saveProfile = useSettingsStore((s) => s.saveProfile);
   const deleteProfile = useSettingsStore((s) => s.deleteProfile);
+  const discussionLanguage = useSetupStore((s) => s.discussionLanguage);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [collapsedCats, setCollapsedCats] = useState<Set<string>>(
     () => new Set(CATEGORY_ORDER),
@@ -905,15 +908,13 @@ function StepGladiateurs({
                   <label className="text-xs text-muted-foreground">
                     {t("setup.gladiateurPrompt")}
                   </label>
-                  <textarea
-                    value={g.systemPrompt}
-                    onChange={(e) =>
-                      updateGladiateur(g.id, {
-                        systemPrompt: e.target.value,
-                      })
+                  <PersonaEditor
+                    systemPrompt={g.systemPrompt}
+                    profileType="gladiateur"
+                    discussionLanguage={discussionLanguage}
+                    onChange={(prompt) =>
+                      updateGladiateur(g.id, { systemPrompt: prompt })
                     }
-                    rows={3}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                 </div>
                 <div>

@@ -17,7 +17,7 @@ impl Default for LlmParams {
             temperature: 0.8,
             top_p: 0.9,
             top_k: 40,
-            num_predict: 1024,
+            num_predict: 2048,
             num_ctx: 8192,
             repeat_penalty: 1.3,
         }
