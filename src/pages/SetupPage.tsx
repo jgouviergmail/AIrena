@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
@@ -13,6 +14,7 @@ import {
   Globe,
   GripVertical,
   Heart,
+  Info,
   MessageSquare,
   Play,
   Plus,
@@ -517,6 +519,36 @@ function StepArbitre() {
         </div>
       )}
 
+      {/* Optional Wikipedia search for introduction (always available — free) */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <BookOpen className="h-4 w-4 text-green-600" />
+          {t("setup.arbitreWikiSearchTitle")}
+        </label>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={arbitre.wikiSearchIntro ?? false}
+            onClick={() => updateArbitre({ wikiSearchIntro: !(arbitre.wikiSearchIntro ?? false) })}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+              (arbitre.wikiSearchIntro ?? false) ? "bg-green-600" : "bg-muted",
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
+                (arbitre.wikiSearchIntro ?? false) ? "translate-x-4" : "translate-x-0",
+              )}
+            />
+          </button>
+          <span className="text-sm text-muted-foreground">
+            {(arbitre.wikiSearchIntro ?? false) ? t("setup.switchYes") : t("setup.switchNo")}
+          </span>
+        </div>
+      </div>
+
       <button
         onClick={() => setShowLlm(!showLlm)}
         className="flex w-full items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground hover:text-foreground/80"
@@ -559,8 +591,10 @@ function StepGladiateurs({
   const updateGladiateurLlm = useSetupStore((s) => s.updateGladiateurLlm);
   const reorderGladiateurs = useSetupStore((s) => s.reorderGladiateurs);
   const maxTurns = useSetupStore((s) => s.maxTurns);
-  const webSearchMaxPerGladiateur = useSetupStore((s) => s.webSearchMaxPerGladiateur);
-  const setWebSearchMaxPerGladiateur = useSetupStore((s) => s.setWebSearchMaxPerGladiateur);
+  const webSearchPool = useSetupStore((s) => s.webSearchPool);
+  const setWebSearchPool = useSetupStore((s) => s.setWebSearchPool);
+  const wikiSearchPool = useSetupStore((s) => s.wikiSearchPool);
+  const setWikiSearchPool = useSetupStore((s) => s.setWikiSearchPool);
   const settings = useSettingsStore((s) => s.settings);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const saveSettings = useSettingsStore((s) => s.saveSettings);
@@ -671,7 +705,7 @@ function StepGladiateurs({
   };
 
   const hasTavilyKey = !!settings.tavilyApiKey.trim();
-  const maxSearchBound = maxTurns ?? 100;
+  const maxSearchBound = (maxTurns ?? 100) * Math.max(gladiateurs.length, 1);
 
   return (
     <div className="space-y-6">
@@ -707,29 +741,29 @@ function StepGladiateurs({
         <div className="space-y-2">
           <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
             <Globe className="h-4 w-4 text-primary" />
-            {t("setup.webSearchMaxPerGladiateur")}
+            {t("setup.webSearchPool")}
           </label>
           <div className="flex items-center gap-3">
             <input
               type="number"
               min={0}
               max={maxSearchBound}
-              value={webSearchMaxPerGladiateur}
+              value={webSearchPool}
               onChange={(e) =>
-                setWebSearchMaxPerGladiateur(
+                setWebSearchPool(
                   Math.max(0, Math.min(maxSearchBound, parseInt(e.target.value) || 0)),
                 )
               }
               className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             />
             <span className="text-sm text-muted-foreground">
-              {t("setup.webSearchMaxPerGladiateurDesc", { max: maxSearchBound })}
+              {t("setup.webSearchPoolDesc", { max: maxSearchBound })}
             </span>
           </div>
-          {webSearchMaxPerGladiateur > 0 && (
+          {webSearchPool > 0 && (
             <p className="text-xs text-muted-foreground">
               {t("setup.webSearchBudget", {
-                count: webSearchMaxPerGladiateur * gladiateurs.length,
+                count: webSearchPool,
               })}
             </p>
           )}
@@ -739,6 +773,46 @@ function StepGladiateurs({
         <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
           <Globe className="h-3.5 w-3.5" />
           {t("setup.webSearchNoKey")}
+        </div>
+      )}
+
+      {/* Global wiki search config */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <BookOpen className="h-4 w-4 text-green-600" />
+          {t("setup.wikiSearchPool")}
+        </label>
+        <div className="flex items-center gap-3">
+          <input
+            type="number"
+            min={0}
+            max={maxSearchBound}
+            value={wikiSearchPool}
+            onChange={(e) =>
+              setWikiSearchPool(
+                Math.max(0, Math.min(maxSearchBound, parseInt(e.target.value) || 0)),
+              )
+            }
+            className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <span className="text-sm text-muted-foreground">
+            {t("setup.wikiSearchPoolDesc", { max: maxSearchBound })}
+          </span>
+        </div>
+        {wikiSearchPool > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {t("setup.wikiSearchBudget", {
+              count: wikiSearchPool,
+            })}
+          </p>
+        )}
+      </div>
+
+      {/* First-turn search rule explanation */}
+      {(webSearchPool > 0 || wikiSearchPool > 0) && (
+        <div className="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+          <span>{t("setup.firstTurnSearchRule")}</span>
         </div>
       )}
 
@@ -943,7 +1017,8 @@ function StepSummary() {
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
   const maxTurns = useSetupStore((s) => s.maxTurns);
   const userInterventionTimeoutSecs = useSetupStore((s) => s.userInterventionTimeoutSecs);
-  const webSearchMaxPerGladiateur = useSetupStore((s) => s.webSearchMaxPerGladiateur);
+  const webSearchPool = useSetupStore((s) => s.webSearchPool);
+  const wikiSearchPool = useSetupStore((s) => s.wikiSearchPool);
 
   return (
     <div className="space-y-6">
@@ -987,11 +1062,25 @@ function StepSummary() {
             </div>
           )}
         </div>
-        {webSearchMaxPerGladiateur > 0 && (
+        {webSearchPool > 0 && (
           <SummaryRow
             label={t("setup.webSearch")}
             value={t("setup.webSearchBudget", {
-              count: webSearchMaxPerGladiateur * gladiateurs.length + ((arbitre.webSearchIntro ?? false) ? 1 : 0),
+              count: webSearchPool + ((arbitre.webSearchIntro ?? false) ? 1 : 0),
+            })}
+          />
+        )}
+        {(arbitre.wikiSearchIntro ?? false) && (
+          <SummaryRow
+            label={t("setup.arbitreWikiSearchIntro")}
+            value="1"
+          />
+        )}
+        {wikiSearchPool > 0 && (
+          <SummaryRow
+            label={t("setup.wikiSearch")}
+            value={t("setup.wikiSearchBudget", {
+              count: wikiSearchPool + ((arbitre.wikiSearchIntro ?? false) ? 1 : 0),
             })}
           />
         )}

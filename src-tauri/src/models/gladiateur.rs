@@ -30,7 +30,8 @@ pub struct GladIAteurState {
     pub emotions: EmotionalProfile,
     /// Emotion history per turn (capped at 30)
     pub emotion_history: Vec<EmotionSnapshot>,
-    pub web_searches_used_discussion: u32,
+    /// History of past search queries (for deduplication in prompts)
+    pub search_queries_history: Vec<String>,
 }
 
 impl GladIAteurState {
@@ -43,7 +44,7 @@ impl GladIAteurState {
             memory: ParticipantMemory::default(),
             emotions,
             emotion_history: Vec::new(),
-            web_searches_used_discussion: 0,
+            search_queries_history: Vec::new(),
         }
     }
 

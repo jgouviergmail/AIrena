@@ -36,6 +36,7 @@ export interface IArbitreConfig {
   turnDistribution: "sequential" | "random" | "democratic" | "authoritarian";
   llmParams: LlmParams;
   webSearchIntro?: boolean;
+  wikiSearchIntro?: boolean;
 }
 
 export interface DiscussionConfig {
@@ -46,7 +47,8 @@ export interface DiscussionConfig {
   maxTurns: number | null;
   userName: string;
   userInterventionTimeoutSecs: number;
-  webSearchMaxPerGladiateur: number;
+  webSearchPool: number;
+  wikiSearchPool: number;
 }
 
 export type SpeakerRole = "IArbitre" | "GladIAteur" | "user";
@@ -226,7 +228,18 @@ export type ArenaEvent =
         speakerName: string;
         queries: string[];
         resultsCount: number;
-        searchesUsedDiscussion: number;
+        poolUsed: number;
+      };
+    }
+  | {
+      type: "wikiSearchPerformed";
+      data: {
+        speakerId: string;
+        speakerName: string;
+        queries: string[];
+        resultsCount: number;
+        poolUsed: number;
+        articleUrls: string[];
       };
     }
   | {

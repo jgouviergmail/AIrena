@@ -85,7 +85,7 @@ pub enum ArenaEvent {
         speaker_name: String,
         queries: Vec<String>,
         results_count: u32,
-        searches_used_discussion: u32,
+        pool_used: u32,
     },
     /// Full emotion history for a participant (emitted end of each turn)
     #[serde(rename_all = "camelCase")]
@@ -100,6 +100,17 @@ pub enum ArenaEvent {
         axis: String,
         direction: String,
         value: u8,
+    },
+    /// Wikipedia search performed by a speaker (batched, one event per speaker per turn)
+    #[serde(rename_all = "camelCase")]
+    WikiSearchPerformed {
+        speaker_id: String,
+        speaker_name: String,
+        queries: Vec<String>,
+        results_count: u32,
+        pool_used: u32,
+        /// URLs of Wikipedia articles found (for clickable links in the feed)
+        article_urls: Vec<String>,
     },
     /// Dynamic behavioral directive generated for a speaker (for UI visualization)
     #[serde(rename_all = "camelCase")]

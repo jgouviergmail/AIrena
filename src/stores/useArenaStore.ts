@@ -40,6 +40,11 @@ interface ArenaState {
   webSearchCount: number;
   _pendingSearchCount: number;
   webSearchesPerMessage: Record<string, number>;
+  wikiSearchCount: number;
+  _pendingWikiCount: number;
+  wikiSearchesPerMessage: Record<string, number>;
+  wikiArticleUrlsPerMessage: Record<string, string[]>;
+  _pendingWikiUrls: string[];
   directives: Map<string, DirectiveData>;
   bans: Map<string, BanInfo>;
   error: string | null;
@@ -68,6 +73,11 @@ const initialState = {
   webSearchCount: 0,
   _pendingSearchCount: 0,
   webSearchesPerMessage: {} as Record<string, number>,
+  wikiSearchCount: 0,
+  _pendingWikiCount: 0,
+  wikiSearchesPerMessage: {} as Record<string, number>,
+  wikiArticleUrlsPerMessage: {} as Record<string, string[]>,
+  _pendingWikiUrls: [] as string[],
   directives: new Map<string, DirectiveData>(),
   bans: new Map<string, BanInfo>(),
   error: null as string | null,
@@ -152,10 +162,20 @@ export const useArenaStore = create<ArenaState>((set) => ({
           const wsPerMsg = s._pendingSearchCount > 0
             ? { ...s.webSearchesPerMessage, [msg.id]: s._pendingSearchCount }
             : s.webSearchesPerMessage;
+          const wkPerMsg = s._pendingWikiCount > 0
+            ? { ...s.wikiSearchesPerMessage, [msg.id]: s._pendingWikiCount }
+            : s.wikiSearchesPerMessage;
+          const wkUrls = s._pendingWikiUrls.length > 0
+            ? { ...s.wikiArticleUrlsPerMessage, [msg.id]: [...s._pendingWikiUrls] }
+            : s.wikiArticleUrlsPerMessage;
           return {
             messages: [...s.messages, msg],
             webSearchesPerMessage: wsPerMsg,
+            wikiSearchesPerMessage: wkPerMsg,
+            wikiArticleUrlsPerMessage: wkUrls,
             _pendingSearchCount: 0,
+            _pendingWikiCount: 0,
+            _pendingWikiUrls: [],
           };
         });
         break;
@@ -220,6 +240,8 @@ export const useArenaStore = create<ArenaState>((set) => ({
         set({
           activeSpeakerId: event.data.speakerId,
           _pendingSearchCount: 0,
+          _pendingWikiCount: 0,
+          _pendingWikiUrls: [],
         });
         break;
 
@@ -227,6 +249,14 @@ export const useArenaStore = create<ArenaState>((set) => ({
         set((s) => ({
           webSearchCount: s.webSearchCount + event.data.queries.length,
           _pendingSearchCount: s._pendingSearchCount + event.data.queries.length,
+        }));
+        break;
+
+      case "wikiSearchPerformed":
+        set((s) => ({
+          wikiSearchCount: s.wikiSearchCount + event.data.queries.length,
+          _pendingWikiCount: s._pendingWikiCount + event.data.queries.length,
+          _pendingWikiUrls: [...s._pendingWikiUrls, ...event.data.articleUrls],
         }));
         break;
 

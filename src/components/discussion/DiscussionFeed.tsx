@@ -9,6 +9,8 @@ export function DiscussionFeed() {
   const messages = useArenaStore((s) => s.messages);
   const activeSpeakerId = useArenaStore((s) => s.activeSpeakerId);
   const webSearchesPerMessage = useArenaStore((s) => s.webSearchesPerMessage);
+  const wikiSearchesPerMessage = useArenaStore((s) => s.wikiSearchesPerMessage);
+  const wikiArticleUrlsPerMessage = useArenaStore((s) => s.wikiArticleUrlsPerMessage);
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
   const arbitre = useSetupStore((s) => s.arbitre);
 
@@ -70,6 +72,8 @@ export function DiscussionFeed() {
           isActive={msg.speakerId === activeSpeakerId}
           emoji={emojiMap.get(msg.speakerId)}
           searchCount={webSearchesPerMessage[msg.id]}
+          wikiSearchCount={wikiSearchesPerMessage[msg.id]}
+          wikiArticleUrls={wikiArticleUrlsPerMessage[msg.id]}
           participantNames={participantNames}
           emojiMap={emojiMap}
         />

@@ -16,7 +16,8 @@ interface SetupState {
   gladiateurs: GladIAteurConfig[];
   maxTurns: number | null;
   userInterventionTimeoutSecs: number;
-  webSearchMaxPerGladiateur: number;
+  webSearchPool: number;
+  wikiSearchPool: number;
 
   setStep: (step: number) => void;
   setTopic: (topic: string) => void;
@@ -29,7 +30,8 @@ interface SetupState {
   updateGladiateurLlm: (id: string, patch: Partial<LlmParams>) => void;
   setMaxTurns: (val: number | null) => void;
   setUserTimeout: (val: number) => void;
-  setWebSearchMaxPerGladiateur: (val: number) => void;
+  setWebSearchPool: (val: number) => void;
+  setWikiSearchPool: (val: number) => void;
   reorderGladiateurs: (fromIndex: number, toIndex: number) => void;
   buildConfig: (userName: string) => DiscussionConfig;
   reset: () => void;
@@ -51,7 +53,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   gladiateurs: [],
   maxTurns: null,
   userInterventionTimeoutSecs: 120,
-  webSearchMaxPerGladiateur: 0,
+  webSearchPool: 0,
+  wikiSearchPool: 0,
 
   setStep: (step) => set({ step }),
   setTopic: (topic) => set({ topic }),
@@ -84,19 +87,26 @@ export const useSetupStore = create<SetupState>((set, get) => ({
     })),
 
   setMaxTurns: (val) =>
-    set((s) => ({
-      maxTurns: val,
-      // Auto-clamp web search max if turns decreased below it
-      webSearchMaxPerGladiateur:
-        val !== null && s.webSearchMaxPerGladiateur > val
-          ? val
-          : s.webSearchMaxPerGladiateur,
-    })),
+    set((s) => {
+      const poolMax = val !== null ? val * Math.max(s.gladiateurs.length, 1) : Infinity;
+      return {
+        maxTurns: val,
+        // Auto-clamp pool if turns decreased below it
+        webSearchPool: s.webSearchPool > poolMax ? poolMax : s.webSearchPool,
+        wikiSearchPool: s.wikiSearchPool > poolMax ? poolMax : s.wikiSearchPool,
+      };
+    }),
   setUserTimeout: (val) => set({ userInterventionTimeoutSecs: val }),
-  setWebSearchMaxPerGladiateur: (val) =>
-    set((s) => ({
-      webSearchMaxPerGladiateur: Math.min(val, s.maxTurns ?? Infinity),
-    })),
+  setWebSearchPool: (val) =>
+    set((s) => {
+      const poolMax = (s.maxTurns ?? Infinity) * Math.max(s.gladiateurs.length, 1);
+      return { webSearchPool: Math.min(val, poolMax) };
+    }),
+  setWikiSearchPool: (val) =>
+    set((s) => {
+      const poolMax = (s.maxTurns ?? Infinity) * Math.max(s.gladiateurs.length, 1);
+      return { wikiSearchPool: Math.min(val, poolMax) };
+    }),
 
   reorderGladiateurs: (fromIndex, toIndex) =>
     set((s) => {
@@ -119,7 +129,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       maxTurns: s.maxTurns,
       userName,
       userInterventionTimeoutSecs: s.userInterventionTimeoutSecs,
-      webSearchMaxPerGladiateur: s.webSearchMaxPerGladiateur,
+      webSearchPool: s.webSearchPool,
+      wikiSearchPool: s.wikiSearchPool,
     };
   },
 
@@ -132,6 +143,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       gladiateurs: [],
       maxTurns: null,
       userInterventionTimeoutSecs: 120,
-      webSearchMaxPerGladiateur: 0,
+      webSearchPool: 0,
+      wikiSearchPool: 0,
     }),
 }));

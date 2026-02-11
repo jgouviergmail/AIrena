@@ -3,6 +3,7 @@ use crate::models::emotion::EmotionalProfile;
 use crate::models::memory::ParticipantMemory;
 use crate::models::message::{Message, SpeakerRole};
 use crate::tavily::TavilySearchResponse;
+use crate::wikipedia::WikiSearchResponse;
 
 use super::truncate_str as truncate;
 
@@ -19,13 +20,25 @@ pub fn build_introduction_prompt(
     let participants = participant_names.join(", ");
     let datetime = build_datetime_context(discussion_language);
     let web_block = web_search_results
-        .map(|r| format!("\n\n{}", r))
+        .map(|r| {
+            let instruction = match discussion_language {
+                "en" => "\n⚡ Only use results that are relevant to the debate topic. Ignore off-topic results. \
+                         Weave key facts or current data naturally into your introduction to frame the topic. Do NOT list them raw.",
+                "zh" => "\n⚡ 只使用与辩论主题相关的结果。忽略偏题的结果。\
+                         将关键事实或当前数据自然地融入你的介绍中来构建主题框架。不要原样列举。",
+                _ => "\n⚡ N'utilise que les résultats pertinents par rapport au sujet du débat. Ignore les résultats hors-sujet. \
+                         Intègre naturellement des faits clés ou des données actuelles dans ton introduction pour cadrer le sujet. Ne les liste PAS tels quels.",
+            };
+            format!("\n\n{}{}", r, instruction)
+        })
         .unwrap_or_default();
     match discussion_language {
         "en" => format!(
             "{}\n\nYou are the moderator of a debate. The topic is: \"{}\"\n\
              The participants are: {}{}\n\n\
-             Introduce the topic briefly (2-3 sentences) and invite the first participant to speak.\n\
+             Introduce the topic in a BROAD and NEUTRAL manner (2-3 sentences), covering the key dimensions \
+             and perspectives of the subject without narrowing it to a single angle or your personal bias. \
+             Then invite the first participant to speak.\n\
              IMPORTANT RULE: Clearly remind participants that this first round is for presenting \
              initial opinions only — each speaker must share their own position on the topic. \
              Debating, challenging, or responding to others' arguments is NOT allowed until the second round.\n\
@@ -35,7 +48,8 @@ pub fn build_introduction_prompt(
         "zh" => format!(
             "{}\n\n你是一场辩论的主持人。主题是：\"{}\"\n\
              参与者有：{}{}\n\n\
-             简要介绍主题（2-3句话），并邀请第一位参与者发言。\n\
+             以广泛且中立的方式简要介绍主题（2-3句话），涵盖该主题的主要方面和视角，\
+             不要将其缩小为单一角度或个人偏见。然后邀请第一位参与者发言。\n\
              重要规则：明确提醒参与者，第一轮仅用于表达初始观点——每位发言者必须分享自己对主题的立场。\
              在第二轮之前，不得辩论、质疑或回应他人的论点。\n\
              请用中文回答。",
@@ -44,7 +58,9 @@ pub fn build_introduction_prompt(
         _ => format!(
             "{}\n\nTu es le modérateur d'un débat. Le sujet est : \"{}\"\n\
              Les participants sont : {}{}\n\n\
-             Présente brièvement le sujet (2-3 phrases) et invite le premier participant à prendre la parole.\n\
+             Présente le sujet de manière LARGE et NEUTRE (2-3 phrases), en couvrant les dimensions \
+             et perspectives clés du sujet sans le réduire à un seul angle ou à ton biais personnel. \
+             Puis invite le premier participant à prendre la parole.\n\
              RÈGLE IMPORTANTE : Rappelle clairement aux participants que ce premier tour est réservé \
              à l'expression des opinions initiales — chaque intervenant doit présenter sa propre position sur le sujet. \
              Il est INTERDIT de débattre, contester ou répondre aux arguments des autres avant le deuxième tour.\n\
@@ -147,20 +163,31 @@ pub fn build_thought_prompt(
     };
 
     let web_block = web_search_results
-        .map(|r| format!("\n\n{}", r))
+        .map(|r| {
+            let instruction = match discussion_language {
+                "en" => "\n⚡ First assess: are these results actually relevant to the debate and the current exchange? \
+                         Discard anything off-topic. Then identify which specific facts you can weave into your argument.",
+                "zh" => "\n⚡ 首先评估：这些结果是否真的与辩论和当前交流相关？丢弃任何偏题的内容。\
+                         然后找出哪些具体事实可以融入你的论证。",
+                _ => "\n⚡ Évalue d'abord : ces résultats sont-ils vraiment pertinents pour le débat et l'échange en cours ? \
+                         Écarte tout ce qui est hors-sujet. Puis identifie quels faits précis tu peux intégrer dans ton argumentation.",
+            };
+            format!("\n\n{}{}", r, instruction)
+        })
         .unwrap_or_default();
 
     let end_thought = build_end_awareness_thought(current_turn, max_turns, discussion_language);
 
-    // Context block with recent exchanges
+    // Date/time context + recent exchanges
+    let datetime = build_datetime_context(discussion_language);
     let context_block = if !recent_exchanges.is_empty() {
         match discussion_language {
-            "en" => format!("[Recent exchanges]\n{}\n\n", recent_exchanges),
-            "zh" => format!("[近期交流]\n{}\n\n", recent_exchanges),
-            _ => format!("[Échanges récents]\n{}\n\n", recent_exchanges),
+            "en" => format!("{}\n\n[Recent exchanges]\n{}\n\n", datetime, recent_exchanges),
+            "zh" => format!("{}\n\n[近期交流]\n{}\n\n", datetime, recent_exchanges),
+            _ => format!("{}\n\n[Échanges récents]\n{}\n\n", datetime, recent_exchanges),
         }
     } else {
-        String::new()
+        format!("{}\n\n", datetime)
     };
 
     // Stay-in-character preamble (prevents refusals and meta-reasoning)
@@ -330,9 +357,27 @@ Tes tics verbaux sont des ponctuations OCCASIONNELLES, pas des béquilles. Utili
         }
     }
 
-    // Web search results (injected before memory context)
+    // Web/wiki search results (injected before memory context)
     if let Some(web_results) = web_search_results {
         user_msg.push_str(web_results);
+        user_msg.push('\n');
+        let search_instruction = match discussion_language {
+            "en" => "⚡ CRITICAL — Be SELECTIVE with these results: first verify they are relevant to the debate topic \
+                     and the current exchange. If a result is off-topic or incorrect, IGNORE it completely. \
+                     For relevant results: weave specific facts, data, or references naturally into YOUR OWN reasoning \
+                     to support or challenge arguments. Do NOT restate or list them — integrate them as a knowledgeable \
+                     debater would cite a source mid-argument.",
+            "zh" => "⚡ 关键——对这些结果要有选择性：首先验证它们是否与辩论主题和当前交流相关。\
+                     如果结果偏题或不正确，完全忽略它。\
+                     对于相关结果：将具体事实、数据或参考资料自然地融入你自己的推理中，\
+                     以支持或质疑论点。不要重述或列举——像一个博学的辩论者在论证中引用资料一样整合它们。",
+            _ => "⚡ CRITIQUE — Sois SÉLECTIF avec ces résultats : vérifie d'abord qu'ils sont pertinents par rapport \
+                     au sujet du débat et à l'échange en cours. Si un résultat est hors-sujet ou incorrect, IGNORE-le complètement. \
+                     Pour les résultats pertinents : intègre des faits, données ou références précises naturellement \
+                     dans TON PROPRE raisonnement pour appuyer ou contester des arguments. \
+                     Ne les recopie PAS et ne les liste PAS — cite-les comme un débatteur cultivé le ferait en pleine argumentation.",
+        };
+        user_msg.push_str(search_instruction);
         user_msg.push_str("\n\n");
     }
 
@@ -378,22 +423,46 @@ Tes tics verbaux sont des ponctuations OCCASIONNELLES, pas des béquilles. Utili
         user_msg.push('\n');
     }
 
-    // Current turn messages
+    // Current turn messages — separate IArbitre directives for emphasis
     if !current_turn_messages.is_empty() {
         let label = match discussion_language {
             "en" => "Current turn",
             "zh" => "本轮",
             _ => "Tour en cours",
         };
-        user_msg.push_str(&format!("[{}]\n", label));
-        for msg in current_turn_messages {
-            user_msg.push_str(&format!(
-                "{}: {}\n",
-                msg.speaker_name,
-                truncate(&msg.content, 300)
-            ));
+        // Collect IArbitre directives separately
+        let (arbitre_msgs, other_msgs): (Vec<_>, Vec<_>) = current_turn_messages
+            .iter()
+            .partition(|m| m.role == SpeakerRole::Arbitre);
+
+        if !other_msgs.is_empty() {
+            user_msg.push_str(&format!("[{}]\n", label));
+            for msg in &other_msgs {
+                user_msg.push_str(&format!(
+                    "{}: {}\n",
+                    msg.speaker_name,
+                    truncate(&msg.content, 300)
+                ));
+            }
+            user_msg.push('\n');
         }
-        user_msg.push('\n');
+
+        // IArbitre moderation directives — emphasized section
+        if !arbitre_msgs.is_empty() {
+            let directive_header = match discussion_language {
+                "en" => "⚠ MODERATOR DIRECTIVE — You MUST take this into account in your next intervention:",
+                "zh" => "⚠ 主持人指令——你必须在下次发言中考虑此指令：",
+                _ => "⚠ DIRECTIVE DU MODÉRATEUR — Tu DOIS en tenir compte dans ta prochaine intervention :",
+            };
+            user_msg.push_str(&format!("[{}]\n", directive_header));
+            for msg in &arbitre_msgs {
+                user_msg.push_str(&format!(
+                    "{}\n",
+                    truncate(&msg.content, 500)
+                ));
+            }
+            user_msg.push('\n');
+        }
     }
 
     // Inner thought as context
@@ -822,7 +891,17 @@ pub fn build_synthesis_prompt(
 
     let datetime = build_datetime_context(discussion_language);
     let web_block = web_search_results
-        .map(|r| format!("\n\n{}", r))
+        .map(|r| {
+            let instruction = match discussion_language {
+                "en" => "\n⚡ Only reference results that are relevant to the debate. Ignore off-topic results. \
+                         Weave pertinent facts naturally into your synthesis to ground it in concrete data.",
+                "zh" => "\n⚡ 只引用与辩论相关的结果。忽略偏题的结果。\
+                         将相关事实自然地融入你的总结中，以具体数据来支撑。",
+                _ => "\n⚡ Ne fais référence qu'aux résultats pertinents pour le débat. Ignore les résultats hors-sujet. \
+                         Intègre les faits pertinents naturellement dans ta synthèse pour l'ancrer dans des données concrètes.",
+            };
+            format!("\n\n{}{}", r, instruction)
+        })
         .unwrap_or_default();
 
     match discussion_language {
@@ -1254,6 +1333,60 @@ pub fn build_tiebreak_prompt(
     }
 }
 
+// ── Search prompts (shared helpers) ─────────────────────────────────
+
+/// Build a block listing past queries so the LLM avoids repeating them.
+fn build_past_queries_block(past_queries: &[String], lang: &str) -> String {
+    if past_queries.is_empty() {
+        return String::new();
+    }
+    let list = past_queries
+        .iter()
+        .map(|q| format!("  - \"{}\"", q))
+        .collect::<Vec<_>>()
+        .join("\n");
+    match lang {
+        "en" => format!(
+            "\n\nYour previous searches:\n{}\nDo NOT repeat these queries. Search for something DIFFERENT that reflects YOUR unique angle, or return needs_search: false if you have enough information.",
+            list
+        ),
+        "zh" => format!(
+            "\n\n你之前的搜索：\n{}\n不要重复这些查询。搜索反映你独特视角的不同内容，或者如果你已有足够信息则返回 needs_search: false。",
+            list
+        ),
+        _ => format!(
+            "\n\nTes recherches précédentes :\n{}\nNe répète PAS ces requêtes. Cherche quelque chose de DIFFÉRENT qui reflète TON angle unique, ou retourne needs_search: false si tu as déjà assez d'informations.",
+            list
+        ),
+    }
+}
+
+/// Build a block listing what OTHER speakers have already searched this turn.
+fn build_other_queries_block(other_queries: &[(String, String)], lang: &str) -> String {
+    if other_queries.is_empty() {
+        return String::new();
+    }
+    let list = other_queries
+        .iter()
+        .map(|(name, q)| format!("  - {} → \"{}\"", name, q))
+        .collect::<Vec<_>>()
+        .join("\n");
+    match lang {
+        "en" => format!(
+            "\n\nOther speakers already searched THIS TURN:\n{}\nDo NOT search the same things. Find a DIFFERENT angle that reflects YOUR expertise.",
+            list
+        ),
+        "zh" => format!(
+            "\n\n本轮其他发言者已搜索：\n{}\n不要搜索相同内容。找到反映你专业知识的不同角度。",
+            list
+        ),
+        _ => format!(
+            "\n\nLes autres intervenants ont déjà cherché CE TOUR :\n{}\nNe cherche PAS les mêmes choses. Trouve un angle DIFFÉRENT qui reflète TON expertise.",
+            list
+        ),
+    }
+}
+
 // ── Web Search prompts ──────────────────────────────────────────────
 
 /// Build a prompt asking the LLM whether it needs to search the web.
@@ -1263,46 +1396,54 @@ pub fn build_web_search_decision_prompt(
     search_directive: &str,
     searches_remaining: u32,
     discussion_language: &str,
+    past_queries: &[String],
+    other_queries: &[(String, String)],
 ) -> String {
+    let datetime = build_datetime_context(discussion_language);
+    let past_block = build_past_queries_block(past_queries, discussion_language);
+    let others_block = build_other_queries_block(other_queries, discussion_language);
     match discussion_language {
         "en" => format!(
-            "You have access to internet search. {}\n\
+            "{}\n\nYou have access to internet search. {}\n\
              Debate topic: \"{}\"\n\
              Recent context: {}\n\
-             Remaining searches: {}\n\n\
-             Do you need recent or specialized factual information?\n\
-             If yes, provide 1 to 3 short, relevant search queries.\n\
+             Remaining searches: {}{}{}\n\n\
+             Based on YOUR unique expertise, do you need specific factual information to strengthen YOUR argument?\n\
+             If yes, provide exactly ONE short, relevant search query that reflects YOUR perspective.\n\
+             IMPORTANT: Write the search query in English.\n\
              Respond ONLY with this JSON:\n\
-             {{\"needs_search\": true, \"queries\": [\"query 1\"]}}\n\
+             {{\"needs_search\": true, \"queries\": [\"your single query\"]}}\n\
              or\n\
              {{\"needs_search\": false, \"queries\": []}}",
-            search_directive, topic, recent_context, searches_remaining
+            datetime, search_directive, topic, recent_context, searches_remaining, past_block, others_block
         ),
         "zh" => format!(
-            "你可以使用互联网搜索。{}\n\
+            "{}\n\n你可以使用互联网搜索。{}\n\
              辩论主题：\"{}\"\n\
              近期背景：{}\n\
-             剩余搜索次数：{}\n\n\
-             你需要最新的或专业的事实信息吗？\n\
-             如果是，提供1到3个简短相关的搜索查询。\n\
+             剩余搜索次数：{}{}{}\n\n\
+             基于你独特的专业知识，你需要具体的事实信息来加强你的论点吗？\n\
+             如果是，提供恰好一个反映你视角的简短相关搜索查询。\n\
+             重要：用中文撰写搜索查询。\n\
              仅用以下JSON格式回复：\n\
-             {{\"needs_search\": true, \"queries\": [\"查询1\"]}}\n\
+             {{\"needs_search\": true, \"queries\": [\"你的查询\"]}}\n\
              或\n\
              {{\"needs_search\": false, \"queries\": []}}",
-            search_directive, topic, recent_context, searches_remaining
+            datetime, search_directive, topic, recent_context, searches_remaining, past_block, others_block
         ),
         _ => format!(
-            "Tu as accès à la recherche internet. {}\n\
+            "{}\n\nTu as accès à la recherche internet. {}\n\
              Sujet du débat : \"{}\"\n\
              Contexte récent : {}\n\
-             Recherches restantes : {}\n\n\
-             As-tu besoin d'informations factuelles récentes ou spécialisées ?\n\
-             Si oui, fournis 1 à 3 requêtes de recherche courtes et pertinentes.\n\
+             Recherches restantes : {}{}{}\n\n\
+             En fonction de TON expertise unique, as-tu besoin d'informations factuelles spécifiques pour renforcer TON argument ?\n\
+             Si oui, fournis exactement UNE requête de recherche courte et pertinente qui reflète TA perspective.\n\
+             IMPORTANT : Formule la requête de recherche en français.\n\
              Réponds UNIQUEMENT avec ce JSON :\n\
-             {{\"needs_search\": true, \"queries\": [\"requête 1\"]}}\n\
+             {{\"needs_search\": true, \"queries\": [\"ta requête\"]}}\n\
              ou\n\
              {{\"needs_search\": false, \"queries\": []}}",
-            search_directive, topic, recent_context, searches_remaining
+            datetime, search_directive, topic, recent_context, searches_remaining, past_block, others_block
         ),
     }
 }
@@ -1323,9 +1464,9 @@ pub fn build_search_results_context(
     discussion_language: &str,
 ) -> String {
     let header = match discussion_language {
-        "en" => "[Internet search results]",
-        "zh" => "[互联网搜索结果]",
-        _ => "[Résultats de recherche internet]",
+        "en" => "[Internet results — current data, recent news, fact-checking]",
+        "zh" => "[互联网结果 — 最新数据、近期新闻、事实核查]",
+        _ => "[Résultats internet — actualité, données récentes, vérifications]",
     };
 
     let query_label = match discussion_language {
@@ -1380,6 +1521,130 @@ pub fn build_search_results_context(
         output.push('\n');
 
         // Hard limit on total output
+        if output.len() > MAX_SEARCH_CONTEXT_LEN {
+            let boundary = output.floor_char_boundary(MAX_SEARCH_CONTEXT_LEN);
+            output.truncate(boundary);
+            break;
+        }
+    }
+
+    output
+}
+
+// ── Wikipedia Search prompts ──────────────────────────────────────────
+
+/// Default Wikipedia search directive per language.
+pub fn default_wiki_directive(lang: &str) -> &'static str {
+    match lang {
+        "en" => "Use Wikipedia to find encyclopedic definitions, historical context, scientific concepts, and established facts relevant to the debate.",
+        "zh" => "使用维基百科查找与辩论相关的百科定义、历史背景、科学概念和既定事实。",
+        _ => "Utilise Wikipédia pour trouver des définitions encyclopédiques, du contexte historique, des concepts scientifiques et des faits établis pertinents au débat.",
+    }
+}
+
+/// Build a prompt asking the LLM whether it needs to search Wikipedia.
+/// `web_context` contains web search results (if any) to inform the wiki query choice.
+#[allow(clippy::too_many_arguments)]
+pub fn build_wiki_search_decision_prompt(
+    topic: &str,
+    recent_context: &str,
+    search_directive: &str,
+    searches_remaining: u32,
+    discussion_language: &str,
+    past_queries: &[String],
+    web_context: Option<&str>,
+    other_queries: &[(String, String)],
+) -> String {
+    let datetime = build_datetime_context(discussion_language);
+    let past_block = build_past_queries_block(past_queries, discussion_language);
+    let others_block = build_other_queries_block(other_queries, discussion_language);
+    let web_block = web_context.map(|ctx| {
+        match discussion_language {
+            "en" => format!("\n\n[Internet search results already available]\n{}\nUse Wikipedia to COMPLEMENT this with encyclopedic depth, definitions, or historical context — do NOT duplicate what internet search already found.", ctx),
+            "zh" => format!("\n\n[已有的互联网搜索结果]\n{}\n使用维基百科来补充百科深度、定义或历史背景——不要重复互联网搜索已找到的内容。", ctx),
+            _ => format!("\n\n[Résultats de recherche internet déjà disponibles]\n{}\nUtilise Wikipédia pour COMPLÉTER avec de la profondeur encyclopédique, des définitions ou du contexte historique — ne duplique PAS ce que la recherche internet a déjà trouvé.", ctx),
+        }
+    }).unwrap_or_default();
+    match discussion_language {
+        "en" => format!(
+            "{}\n\nYou have access to Wikipedia. {}\n\
+             Debate topic: \"{}\"\n\
+             Recent context: {}\n\
+             Remaining searches: {}{}{}{}\n\n\
+             Based on YOUR unique expertise, choose a Wikipedia article that would help YOU bring an ORIGINAL perspective to this debate.\n\
+             Use the EXACT Wikipedia article title as it appears on the site (e.g., \"Twenty-second Amendment to the United States Constitution\", NOT \"Amendment 22\").\n\
+             Write numbers as words in article titles (\"Twenty-second\", not \"22nd\").\n\
+             IMPORTANT: Write the article title in English.\n\
+             Respond ONLY with this JSON:\n\
+             {{\"needs_search\": true, \"queries\": [\"Exact article title\"]}}\n\
+             or {{\"needs_search\": false, \"queries\": []}} if you already have enough information.",
+            datetime, search_directive, topic, recent_context, searches_remaining, past_block, others_block, web_block
+        ),
+        "zh" => format!(
+            "{}\n\n你可以使用维基百科。{}\n\
+             辩论主题：\"{}\"\n\
+             近期背景：{}\n\
+             剩余搜索次数：{}{}{}{}\n\n\
+             基于你独特的专业知识，选择一篇能帮助你为这场辩论带来原创视角的维基百科文章。\n\
+             使用维基百科上显示的确切文章标题（例如：「美利坚合众国宪法第二十二条修正案」，而不是「修正案22」）。\n\
+             重要：用中文撰写文章标题。\n\
+             仅用以下JSON格式回复：\n\
+             {{\"needs_search\": true, \"queries\": [\"确切文章标题\"]}}\n\
+             或 {{\"needs_search\": false, \"queries\": []}} 如果你已有足够信息。",
+            datetime, search_directive, topic, recent_context, searches_remaining, past_block, others_block, web_block
+        ),
+        _ => format!(
+            "{}\n\nTu as accès à Wikipédia. {}\n\
+             Sujet du débat : \"{}\"\n\
+             Contexte récent : {}\n\
+             Recherches restantes : {}{}{}{}\n\n\
+             En fonction de TON expertise unique, choisis un article Wikipédia qui t'aiderait à apporter un angle ORIGINAL à ce débat.\n\
+             Utilise le titre EXACT de l'article Wikipédia tel qu'il apparaît sur le site (ex : \"Vingt-deuxième amendement de la Constitution des États-Unis\", PAS \"Amendement 22\").\n\
+             Écris les nombres en toutes lettres dans les titres d'articles (\"Vingt-deuxième\", pas \"22e\").\n\
+             IMPORTANT : Écris le titre d'article en français.\n\
+             Réponds UNIQUEMENT avec ce JSON :\n\
+             {{\"needs_search\": true, \"queries\": [\"Titre exact d'article\"]}}\n\
+             ou {{\"needs_search\": false, \"queries\": []}} si tu as déjà assez d'informations.",
+            datetime, search_directive, topic, recent_context, searches_remaining, past_block, others_block, web_block
+        ),
+    }
+}
+
+/// Format Wikipedia search results as context to inject into prompts.
+pub fn build_wiki_results_context(
+    results: &[(String, WikiSearchResponse)],
+    discussion_language: &str,
+) -> String {
+    let header = match discussion_language {
+        "en" => "[Wikipedia results — encyclopedic context, definitions, established facts]",
+        "zh" => "[维基百科结果 — 百科背景、定义、既定事实]",
+        _ => "[Résultats Wikipédia — contexte encyclopédique, définitions, faits établis]",
+    };
+
+    let mut output = String::from(header);
+    output.push('\n');
+
+    for (query, response) in results {
+        output.push_str(&format!("\"{}\"\n", query));
+
+        if let Some(ref query_data) = response.query {
+            let mut pages = query_data.pages.clone();
+            pages.sort_by_key(|p| p.index);
+
+            for (i, page) in pages.iter().take(3).enumerate() {
+                if page.extract.is_empty() {
+                    continue;
+                }
+                output.push_str(&format!(
+                    "{}. \"{}\" : {}\n",
+                    i + 1,
+                    truncate(&page.title, 100),
+                    truncate(&page.extract, 400)
+                ));
+            }
+        }
+        output.push('\n');
+
         if output.len() > MAX_SEARCH_CONTEXT_LEN {
             let boundary = output.floor_char_boundary(MAX_SEARCH_CONTEXT_LEN);
             output.truncate(boundary);
@@ -1684,7 +1949,7 @@ mod tests {
             },
         )];
         let ctx = build_search_results_context(&results, "fr");
-        assert!(ctx.contains("[Résultats de recherche internet]"));
+        assert!(ctx.contains("[Résultats internet"));
         assert!(ctx.contains("test query"));
         assert!(ctx.contains("A test answer"));
         assert!(ctx.contains("example.com"));
@@ -1722,6 +1987,102 @@ mod tests {
     fn test_build_search_results_context_empty() {
         let results: Vec<(String, TavilySearchResponse)> = vec![];
         let ctx = build_search_results_context(&results, "en");
-        assert!(ctx.contains("[Internet search results]"));
+        assert!(ctx.contains("[Internet results"));
+    }
+
+    // ── Wikipedia prompt tests ──
+
+    #[test]
+    fn test_default_wiki_directive_all_languages() {
+        let fr = default_wiki_directive("fr");
+        assert!(fr.contains("Wikipédia"));
+
+        let en = default_wiki_directive("en");
+        assert!(en.contains("Wikipedia"));
+
+        let zh = default_wiki_directive("zh");
+        assert!(zh.contains("维基百科"));
+
+        let other = default_wiki_directive("de");
+        assert_eq!(other, fr);
+    }
+
+    #[test]
+    fn test_build_wiki_results_context_basic() {
+        use crate::wikipedia::{WikiPage, WikiQuery, WikiSearchResponse};
+        let results = vec![(
+            "intelligence artificielle".to_string(),
+            WikiSearchResponse {
+                query: Some(WikiQuery {
+                    pages: vec![
+                        WikiPage {
+                            title: "Intelligence artificielle".to_string(),
+                            pageid: 1,
+                            index: 1,
+                            extract: "L'intelligence artificielle est un domaine de l'informatique.".to_string(),
+                        },
+                        WikiPage {
+                            title: "Apprentissage automatique".to_string(),
+                            pageid: 2,
+                            index: 2,
+                            extract: "L'apprentissage automatique est une branche de l'IA.".to_string(),
+                        },
+                    ],
+                }),
+            },
+        )];
+        let ctx = build_wiki_results_context(&results, "fr");
+        assert!(ctx.contains("[Résultats Wikipédia"));
+        assert!(ctx.contains("Intelligence artificielle"));
+        assert!(ctx.contains("Apprentissage automatique"));
+    }
+
+    #[test]
+    fn test_build_wiki_results_context_sorts_by_index() {
+        use crate::wikipedia::{WikiPage, WikiQuery, WikiSearchResponse};
+        let results = vec![(
+            "test".to_string(),
+            WikiSearchResponse {
+                query: Some(WikiQuery {
+                    pages: vec![
+                        WikiPage { title: "B".to_string(), pageid: 2, index: 3, extract: "Second".to_string() },
+                        WikiPage { title: "A".to_string(), pageid: 1, index: 1, extract: "First".to_string() },
+                    ],
+                }),
+            },
+        )];
+        let ctx = build_wiki_results_context(&results, "en");
+        let pos_a = ctx.find("\"A\"").unwrap();
+        let pos_b = ctx.find("\"B\"").unwrap();
+        assert!(pos_a < pos_b, "A (index=1) should come before B (index=3)");
+    }
+
+    #[test]
+    fn test_build_wiki_results_context_truncation() {
+        use crate::wikipedia::{WikiPage, WikiQuery, WikiSearchResponse};
+        let long_extract = "x".repeat(500);
+        let results: Vec<(String, WikiSearchResponse)> = (0..10)
+            .map(|i| {
+                (
+                    format!("query {i}"),
+                    WikiSearchResponse {
+                        query: Some(WikiQuery {
+                            pages: vec![WikiPage {
+                                title: format!("Title {i}"),
+                                pageid: i,
+                                index: 1,
+                                extract: long_extract.clone(),
+                            }],
+                        }),
+                    },
+                )
+            })
+            .collect();
+        let ctx = build_wiki_results_context(&results, "fr");
+        assert!(
+            ctx.len() <= MAX_SEARCH_CONTEXT_LEN,
+            "Output should be truncated to {} chars, got {}",
+            MAX_SEARCH_CONTEXT_LEN, ctx.len()
+        );
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use tauri::ipc::Channel;
@@ -25,6 +25,7 @@ use crate::ollama::client::OllamaClient;
 use crate::ollama::error::OllamaError;
 use crate::tavily::client::TavilyClient;
 use crate::tavily::error::TavilyError;
+use crate::wikipedia::client::WikiClient;
 
 use super::truncate_str;
 
@@ -82,6 +83,8 @@ pub struct DiscussionEngine {
     emotion_driven: bool,
     /// Tavily web search client (None if no API key configured)
     tavily_client: Option<TavilyClient>,
+    /// Wikipedia search client (always available — free, no API key)
+    wiki_client: WikiClient,
     /// Database connection for Tavily usage tracking (Arc-internal, cheap clone)
     db: tokio_rusqlite::Connection,
     /// Cumulative reactions: (speaker_id, target_speaker_id) -> (likes, dislikes)
@@ -92,6 +95,16 @@ pub struct DiscussionEngine {
     dynamics_cache: HashMap<String, ParsedDynamics>,
     /// Last speech act per speaker: speaker_id -> SpeechAct
     last_speech_acts: HashMap<String, SpeechAct>,
+    /// Queries executed by all speakers THIS turn (for cross-gladiateur dedup)
+    turn_search_queries: Vec<(String, String)>,
+    /// Global pool counter: web searches consumed across all gladiateurs
+    web_searches_used_pool: u32,
+    /// Global pool counter: wiki searches consumed across all gladiateurs
+    wiki_searches_used_pool: u32,
+    /// Gladiateur indices that have completed their forced first web search
+    forced_web_done: HashSet<usize>,
+    /// Gladiateur indices that have completed their forced first wiki search
+    forced_wiki_done: HashSet<usize>,
 }
 
 impl DiscussionEngine {
@@ -133,11 +146,17 @@ impl DiscussionEngine {
             cancel_token: CancellationToken::new(),
             emotion_driven: false,
             tavily_client,
+            wiki_client: WikiClient::new(),
             db,
             cumulative_reactions: HashMap::new(),
             speaker_own_messages: HashMap::new(),
             dynamics_cache: HashMap::new(),
             last_speech_acts: HashMap::new(),
+            turn_search_queries: Vec::new(),
+            web_searches_used_pool: 0,
+            wiki_searches_used_pool: 0,
+            forced_web_done: HashSet::new(),
+            forced_wiki_done: HashSet::new(),
         }
     }
 
@@ -243,31 +262,82 @@ impl DiscussionEngine {
         }
 
         // --- INTRODUCTION ---
-        // Optional web search for IArbitre (1 credit, forced on topic)
-        let intro_web_search: Option<String> = if self.config.arbitre.web_search_intro
-            && self.tavily_client.is_some()
-        {
+        // Optional web + wiki search for IArbitre (forced on topic)
+        let want_web_intro = self.config.arbitre.web_search_intro && self.tavily_client.is_some();
+        let want_wiki_intro = self.config.arbitre.wiki_search_intro;
+        let topic_query = truncate_str(&self.config.topic, 200).to_string();
+
+        // For wiki intro, extract a broad encyclopedic concept via LLM instead of the raw topic
+        let wiki_intro_query = if want_wiki_intro {
+            let wiki_sys = match self.config.discussion_language.as_str() {
+                "en" => "You are a research assistant. Respond ONLY with valid JSON, no other text.",
+                "zh" => "你是研究助手。仅用有效的JSON回复，不要有其他文本。",
+                _ => "Tu es un assistant de recherche. Réponds UNIQUEMENT avec du JSON valide, aucun autre texte.",
+            };
+            let wiki_prompt = prompt_builder::build_wiki_search_decision_prompt(
+                &self.config.topic, "", prompt_builder::default_wiki_directive(&self.config.discussion_language),
+                1, &self.config.discussion_language, &[], None, &[],
+            );
+            let q = self.pick_forced_query(
+                wiki_sys, &wiki_prompt, &self.arbitre.config.llm_params,
+                topic_query.clone(), "IArbitre", "wiki-intro",
+            ).await;
+            tracing::info!(query = %q, "IArbitre wiki intro query (LLM-picked)");
+            q
+        } else {
+            topic_query.clone()
+        };
+
+        let (intro_web_ctx, intro_wiki_ctx) = if want_web_intro && want_wiki_intro {
+            // Both active: run sequentially (avoids &self/&mut self borrow conflict)
             let global_usage = repository::get_tavily_usage(&self.db).await.unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "Failed to read Tavily usage count — assuming 0");
                 0
             });
-            if global_usage < TAVILY_FREE_MONTHLY_QUOTA {
-                let topic_query = truncate_str(&self.config.topic, 200).to_string();
-                let (ctx, _count) = self.process_web_search(
+            let web_ctx = if global_usage < TAVILY_FREE_MONTHLY_QUOTA {
+                let (ctx, _, _) = self.process_web_search(
                     &self.arbitre.config.system_prompt,
-                    &self.arbitre.config.id,
-                    &self.arbitre.config.name,
-                    1,
-                    "",
-                    "",
-                    Some(vec![topic_query]),
-                    &self.arbitre.config.llm_params,
-                    0,
-                    &channel,
+                    &self.arbitre.config.id, &self.arbitre.config.name,
+                    1, "", "", Some(vec![topic_query.clone()]),
+                    &self.arbitre.config.llm_params, &channel, &[], &[],
                 ).await;
                 ctx
-            } else { None }
-        } else { None };
+            } else { None };
+            let wiki_ctx = self.process_wiki_search_intro(
+                &wiki_intro_query, &self.arbitre.config.id, &self.arbitre.config.name, &channel,
+            ).await;
+            (web_ctx, wiki_ctx)
+        } else if want_web_intro {
+            let global_usage = repository::get_tavily_usage(&self.db).await.unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to read Tavily usage count — assuming 0");
+                0
+            });
+            let web_ctx = if global_usage < TAVILY_FREE_MONTHLY_QUOTA {
+                let (ctx, _, _) = self.process_web_search(
+                    &self.arbitre.config.system_prompt,
+                    &self.arbitre.config.id, &self.arbitre.config.name,
+                    1, "", "", Some(vec![topic_query.clone()]),
+                    &self.arbitre.config.llm_params, &channel, &[], &[],
+                ).await;
+                ctx
+            } else { None };
+            (web_ctx, None)
+        } else if want_wiki_intro {
+            let wiki_ctx = self.process_wiki_search_intro(
+                &wiki_intro_query, &self.arbitre.config.id, &self.arbitre.config.name, &channel,
+            ).await;
+            (None, wiki_ctx)
+        } else {
+            (None, None)
+        };
+
+        // Combine intro search contexts
+        let intro_search_context: Option<String> = match (&intro_web_ctx, &intro_wiki_ctx) {
+            (Some(w), Some(wiki)) => Some(format!("{w}\n\n{wiki}")),
+            (Some(w), None) => Some(w.clone()),
+            (None, Some(wiki)) => Some(wiki.clone()),
+            (None, None) => None,
+        };
 
         let participant_names: Vec<String> = self
             .gladiateurs
@@ -278,7 +348,7 @@ impl DiscussionEngine {
             &self.config.topic,
             &participant_names,
             &self.config.discussion_language,
-            intro_web_search.as_deref(),
+            intro_search_context.as_deref(),
         );
         let intro_request = self.ollama_client.build_request(
             &self.config.arbitre.system_prompt,
@@ -424,6 +494,9 @@ impl DiscussionEngine {
                 self.handle_user_intervention(&mut cmd_rx, &channel).await;
             }
 
+            // Reset cross-gladiateur search dedup for this turn
+            self.turn_search_queries.clear();
+
             // FOR EACH ACTIVE GLADIATEUR
             let mut broke_early = false;
             let total_speakers = order.len();
@@ -459,45 +532,178 @@ impl DiscussionEngine {
                     self.update_cumulative_reactions(&speaker_id, &reaction_snapshot);
                 }
 
-                // C.2.5 WEB SEARCH (if enabled + quotas OK)
-                // First intervention: mandatory search on topic (skip LLM decision)
+                // C.2.5 SEARCH (web + wiki, if enabled + quotas OK)
+                // First turn: FORCED search for all enabled sources (ensure up-to-date context)
                 // Subsequent turns: LLM decides whether to search
-                let web_search_context: Option<String> = {
+                let search_context: Option<String> = {
                     let global_usage = repository::get_tavily_usage(&self.db).await.unwrap_or_else(|e| {
                         tracing::warn!(error = %e, "Failed to read Tavily usage count — assuming 0");
                         0
                     });
-                    let (can, max_q) = self.can_search_gladiateur(glad_idx, global_usage);
-                    if can {
-                        let is_first_search = self.gladiateurs[glad_idx].web_searches_used_discussion == 0;
-                        let forced_queries = if is_first_search {
-                            Some(vec![truncate_str(&self.config.topic, 200).to_string()])
-                        } else {
-                            None
-                        };
-                        let directive = prompt_builder::default_search_directive(
-                            &self.config.discussion_language,
+                    let (web_can, web_max) = self.can_search_web(global_usage);
+                    let (wiki_can, _wiki_max) = self.can_search_wiki();
+                    let is_first_web = !self.forced_web_done.contains(&glad_idx);
+                    let is_first_wiki = !self.forced_wiki_done.contains(&glad_idx);
+                    let topic_q = truncate_str(&self.config.topic, 200).to_string();
+                    let recent = truncate_str(&self.build_recent_exchanges(glad_idx), 500).to_string();
+                    let lang = self.config.discussion_language.clone();
+
+                    tracing::info!(
+                        speaker = %speaker_name,
+                        web_can, wiki_can, is_first_web, is_first_wiki,
+                        web_pool = self.config.web_search_pool,
+                        wiki_pool = self.config.wiki_search_pool,
+                        web_pool_used = self.web_searches_used_pool,
+                        wiki_pool_used = self.wiki_searches_used_pool,
+                        "Search capabilities"
+                    );
+
+                    let mut web_ctx: Option<String> = None;
+                    let mut wiki_ctx: Option<String> = None;
+
+                    // Build persona-aware search system prompt (brief extract for JSON utility calls)
+                    let persona_extract = truncate_str(
+                        &self.gladiateurs[glad_idx].config.system_prompt, 200
+                    );
+                    let search_sys = match lang.as_str() {
+                        "en" => format!(
+                            "You are {}. {}\nRespond ONLY with valid JSON, no other text.",
+                            speaker_name, persona_extract
+                        ),
+                        "zh" => format!(
+                            "你是{}。{}\n仅用有效的JSON回复，不要有其他文本。",
+                            speaker_name, persona_extract
+                        ),
+                        _ => format!(
+                            "Tu es {}. {}\nRéponds UNIQUEMENT avec du JSON valide, aucun autre texte.",
+                            speaker_name, persona_extract
+                        ),
+                    };
+
+                    // Search architecture: ALWAYS web first, then wiki informed by web results.
+                    // Phase 1 = forced first-turn, Phase 2 = LLM-decided subsequent turns.
+                    let forced_web = web_can && is_first_web;
+                    let forced_wiki = wiki_can && is_first_wiki;
+
+                    // ── STEP 1: WEB SEARCH (always first when active) ──
+                    if forced_web {
+                        // Forced first-turn: LLM picks persona-specific query, fallback to topic
+                        let web_remaining = self.config.web_search_pool
+                            .saturating_sub(self.web_searches_used_pool);
+                        let prompt = prompt_builder::build_web_search_decision_prompt(
+                            &self.config.topic, &recent,
+                            prompt_builder::default_search_directive(&lang),
+                            web_remaining, &lang,
+                            &self.gladiateurs[glad_idx].search_queries_history,
+                            &self.turn_search_queries,
                         );
-                        let recent = truncate_str(
-                            &self.build_recent_exchanges(glad_idx), 500
-                        ).to_string();
-                        let used_so_far = self.gladiateurs[glad_idx].web_searches_used_discussion;
-                        let (ctx, count) = self.process_web_search(
-                            &self.gladiateurs[glad_idx].config.system_prompt,
-                            &speaker_id,
-                            &speaker_name,
-                            max_q,
-                            directive,
-                            &recent,
-                            forced_queries,
+                        let query = self.pick_forced_query(
+                            &search_sys, &prompt,
                             &self.gladiateurs[glad_idx].config.llm_params,
-                            used_so_far,
-                            &channel,
+                            topic_q.clone(), &speaker_name, "web",
                         ).await;
-                        self.gladiateurs[glad_idx].web_searches_used_discussion += count;
-                        ctx
-                    } else { None }
+                        tracing::info!(speaker = %speaker_name, query = %query, "Forced first-turn web query");
+                        self.gladiateurs[glad_idx].search_queries_history.push(query.clone());
+                        let (ctx, count, _) = self.process_web_search(
+                            &search_sys, &speaker_id, &speaker_name, web_max, "", "",
+                            Some(vec![query.clone()]),
+                            &self.gladiateurs[glad_idx].config.llm_params, &channel,
+                            &self.gladiateurs[glad_idx].search_queries_history,
+                            &self.turn_search_queries,
+                        ).await;
+                        self.web_searches_used_pool += count;
+                        self.forced_web_done.insert(glad_idx);
+                        self.turn_search_queries.push((speaker_name.clone(), query));
+                        web_ctx = ctx;
+                    } else if web_can {
+                        // Phase 2: LLM decides whether to search
+                        let directive = prompt_builder::default_search_directive(&lang);
+                        let (ctx, count, executed) = self.process_web_search(
+                            &search_sys, &speaker_id, &speaker_name, web_max, directive, &recent,
+                            None, &self.gladiateurs[glad_idx].config.llm_params, &channel,
+                            &self.gladiateurs[glad_idx].search_queries_history,
+                            &self.turn_search_queries,
+                        ).await;
+                        self.web_searches_used_pool += count;
+                        self.gladiateurs[glad_idx].search_queries_history.extend(executed.iter().cloned());
+                        for q in &executed {
+                            self.turn_search_queries.push((speaker_name.clone(), q.clone()));
+                        }
+                        web_ctx = ctx;
+                    }
+
+                    // ── STEP 2: WIKI SEARCH (after web, informed by web results) ──
+                    if forced_wiki {
+                        // Forced first-turn: LLM picks persona-specific concept
+                        // Fallback = speaker_name (guarantees unique query per gladiateur)
+                        let wiki_remaining = self.config.wiki_search_pool
+                            .saturating_sub(self.wiki_searches_used_pool);
+                        let prompt = prompt_builder::build_wiki_search_decision_prompt(
+                            &self.config.topic, &recent,
+                            prompt_builder::default_wiki_directive(&lang),
+                            wiki_remaining, &lang,
+                            &self.gladiateurs[glad_idx].search_queries_history,
+                            web_ctx.as_deref(),
+                            &self.turn_search_queries,
+                        );
+                        let query = self.pick_forced_query(
+                            &search_sys, &prompt,
+                            &self.gladiateurs[glad_idx].config.llm_params,
+                            speaker_name.clone(), &speaker_name, "wiki",
+                        ).await;
+                        tracing::info!(speaker = %speaker_name, query = %query, "Forced first-turn wiki query");
+                        self.gladiateurs[glad_idx].search_queries_history.push(query.clone());
+                        let (ctx, count) = self.process_wiki_search(
+                            glad_idx, query.clone(), &channel,
+                        ).await;
+                        self.wiki_searches_used_pool += count;
+                        self.forced_wiki_done.insert(glad_idx);
+                        self.turn_search_queries.push((speaker_name.clone(), query));
+                        wiki_ctx = ctx;
+                    } else if wiki_can {
+                        // Phase 2: LLM decides whether to search (with web context if available)
+                        let directive = prompt_builder::default_wiki_directive(&lang);
+                        let wiki_remaining = self.config.wiki_search_pool
+                            .saturating_sub(self.wiki_searches_used_pool);
+                        let prompt = prompt_builder::build_wiki_search_decision_prompt(
+                            &self.config.topic, &recent, directive, wiki_remaining, &lang,
+                            &self.gladiateurs[glad_idx].search_queries_history,
+                            web_ctx.as_deref(),
+                            &self.turn_search_queries,
+                        );
+                        let query = self.pick_forced_query(
+                            &search_sys, &prompt,
+                            &self.gladiateurs[glad_idx].config.llm_params,
+                            String::new(), &speaker_name, "wiki",
+                        ).await;
+                        if !query.is_empty() {
+                            self.gladiateurs[glad_idx].search_queries_history.push(query.clone());
+                            let (ctx, count) = self.process_wiki_search(
+                                glad_idx, query.clone(), &channel,
+                            ).await;
+                            self.wiki_searches_used_pool += count;
+                            self.turn_search_queries.push((speaker_name.clone(), query));
+                            wiki_ctx = ctx;
+                        }
+                    }
+
+                    // Combine web + wiki contexts
+                    match (web_ctx, wiki_ctx) {
+                        (Some(w), Some(wiki)) => Some(format!("{w}\n\n{wiki}")),
+                        (Some(w), None) => Some(w),
+                        (None, Some(wiki)) => Some(wiki),
+                        (None, None) => None,
+                    }
                 };
+
+                if let Some(ref ctx) = search_context {
+                    tracing::info!(
+                        speaker = %speaker_name,
+                        turn = self.current_turn,
+                        search_ctx_len = ctx.len(),
+                        "Search context ready for injection"
+                    );
+                }
 
                 // C.2.8 DYNAMIC DIRECTIVE (emotion_driven only)
                 let dynamic_directive: Option<String> = if self.emotion_driven {
@@ -529,7 +735,7 @@ impl DiscussionEngine {
                         turn = self.current_turn,
                         "Using think mode for intervention"
                     );
-                    let (t, c) = self.process_intervention_think(glad_idx, web_search_context.as_deref(), dynamic_directive.as_deref(), &channel).await;
+                    let (t, c) = self.process_intervention_think(glad_idx, search_context.as_deref(), dynamic_directive.as_deref(), &channel).await;
                     // If think mode failed (HTTP 400 = model doesn't support it),
                     // fall back to the normal thought + intervention path
                     if c.is_none() {
@@ -537,23 +743,31 @@ impl DiscussionEngine {
                             speaker = %speaker_name,
                             "Think mode produced no content, falling back to normal intervention"
                         );
-                        let thought = self.process_thought(glad_idx, web_search_context.as_deref(), &channel).await;
+                        let thought = self.process_thought(glad_idx, search_context.as_deref(), &channel).await;
                         let content = self
-                            .process_intervention(glad_idx, thought.as_deref(), web_search_context.as_deref(), dynamic_directive.as_deref(), &channel)
+                            .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), &channel)
                             .await;
                         (thought, content)
                     } else {
                         (t, c)
                     }
                 } else {
-                    let thought = self.process_thought(glad_idx, web_search_context.as_deref(), &channel).await;
+                    let thought = self.process_thought(glad_idx, search_context.as_deref(), &channel).await;
                     let content = self
-                        .process_intervention(glad_idx, thought.as_deref(), web_search_context.as_deref(), dynamic_directive.as_deref(), &channel)
+                        .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), &channel)
                         .await;
                     (thought, content)
                 };
 
                 if let Some(text) = &content {
+                    tracing::info!(
+                        speaker = %speaker_name,
+                        turn = self.current_turn,
+                        len = text.len(),
+                        had_search = search_context.is_some(),
+                        preview = %truncate_str(text, 200),
+                        "GladIAteur response preview"
+                    );
                     let mut msg = self.create_message(
                         &speaker_id,
                         &speaker_name,
@@ -966,11 +1180,39 @@ impl DiscussionEngine {
     fn build_recent_exchanges(&self, glad_idx: usize) -> String {
         let mut recent = String::new();
 
-        // Previous turn messages (from messages_history)
+        // Previous turn messages (from messages_history) — including IArbitre directives
         if self.current_turn > 1 {
             let prev_turn = self.current_turn - 1;
             for m in &self.messages_history {
-                if m.turn_number == prev_turn && m.role != SpeakerRole::Arbitre {
+                if m.turn_number == prev_turn {
+                    if m.role == SpeakerRole::Arbitre {
+                        // Emphasize moderator directives so GladIAteurs notice them
+                        recent.push_str(&format!(
+                            "[MODERATOR] {}: {}\n",
+                            m.speaker_name,
+                            truncate_str(&m.content, 300)
+                        ));
+                    } else {
+                        recent.push_str(&format!(
+                            "{}: {}\n",
+                            m.speaker_name,
+                            truncate_str(&m.content, 200)
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Current turn messages so far
+        for m in &self.turn_messages {
+            if m.speaker_id != self.gladiateurs[glad_idx].config.id {
+                if m.role == SpeakerRole::Arbitre {
+                    recent.push_str(&format!(
+                        "[MODERATOR] {}: {}\n",
+                        m.speaker_name,
+                        truncate_str(&m.content, 300)
+                    ));
+                } else {
                     recent.push_str(&format!(
                         "{}: {}\n",
                         m.speaker_name,
@@ -980,24 +1222,13 @@ impl DiscussionEngine {
             }
         }
 
-        // Current turn messages so far
-        for m in &self.turn_messages {
-            if m.speaker_id != self.gladiateurs[glad_idx].config.id {
-                recent.push_str(&format!(
-                    "{}: {}\n",
-                    m.speaker_name,
-                    truncate_str(&m.content, 200)
-                ));
-            }
-        }
-
         recent
     }
 
     async fn process_thought(
         &self,
         glad_idx: usize,
-        web_search_results: Option<&str>,
+        search_results: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> Option<String> {
         let has_prior_context = !self.turn_messages.is_empty()
@@ -1011,7 +1242,7 @@ impl DiscussionEngine {
             self.emotion_driven,
             self.current_turn,
             self.config.max_turns,
-            web_search_results,
+            search_results,
         );
         let request = self.ollama_client.build_request(
             &self.gladiateurs[glad_idx].config.system_prompt,
@@ -1053,7 +1284,7 @@ impl DiscussionEngine {
         &self,
         glad_idx: usize,
         thought: Option<&str>,
-        web_search_results: Option<&str>,
+        search_results: Option<&str>,
         dynamic_directive: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> Option<String> {
@@ -1070,7 +1301,7 @@ impl DiscussionEngine {
             self.emotion_driven,
             self.current_turn,
             self.config.max_turns,
-            web_search_results,
+            search_results,
             &all_names,
             dynamic_directive,
         );
@@ -1243,7 +1474,7 @@ impl DiscussionEngine {
     async fn process_intervention_think(
         &self,
         glad_idx: usize,
-        web_search_results: Option<&str>,
+        search_results: Option<&str>,
         dynamic_directive: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> (Option<String>, Option<String>) {
@@ -1260,7 +1491,7 @@ impl DiscussionEngine {
             self.emotion_driven,
             self.current_turn,
             self.config.max_turns,
-            web_search_results,
+            search_results,
             &all_names,
             dynamic_directive,
         );
@@ -1616,12 +1847,12 @@ impl DiscussionEngine {
         }
     }
 
-    async fn generate_synthesis(&self, web_search_results: Option<&str>, channel: &Channel<ArenaEvent>) {
+    async fn generate_synthesis(&self, search_results: Option<&str>, channel: &Channel<ArenaEvent>) {
         let prompt = prompt_builder::build_synthesis_prompt(
             &self.config.topic,
             &self.arbitre.memory,
             &self.config.discussion_language,
-            web_search_results,
+            search_results,
         );
         let request = self.ollama_client.build_request(
             &self.arbitre.config.system_prompt,
@@ -1659,18 +1890,16 @@ impl DiscussionEngine {
 
     // ===== Web Search =====
 
-    /// Check if a gladiateur can search this turn.
+    /// Check if the web search pool has remaining credits.
     /// Returns (can_search, max_queries_this_turn).
-    /// Uses global `web_search_max_per_gladiateur` from config (max 1 per turn).
-    fn can_search_gladiateur(&self, glad_idx: usize, global_usage: u32) -> (bool, u32) {
-        let max_per_disc = self.config.web_search_max_per_gladiateur;
-        if max_per_disc == 0 || self.tavily_client.is_none() {
+    /// Pool is shared between all gladiateurs, max 1 per gladiateur per turn.
+    fn can_search_web(&self, global_usage: u32) -> (bool, u32) {
+        let pool = self.config.web_search_pool;
+        if pool == 0 || self.tavily_client.is_none() {
             return (false, 0);
         }
-        let remaining_disc = max_per_disc
-            .saturating_sub(self.gladiateurs[glad_idx].web_searches_used_discussion);
-        // Max 1 search per gladiateur per turn
-        let max_queries = remaining_disc.min(1);
+        let pool_remaining = pool.saturating_sub(self.web_searches_used_pool);
+        let max_queries = pool_remaining.min(1);
         let global_remaining = TAVILY_FREE_MONTHLY_QUOTA.saturating_sub(global_usage);
         let max_queries = max_queries.min(global_remaining);
         (max_queries > 0, max_queries)
@@ -1689,9 +1918,10 @@ impl DiscussionEngine {
         recent_context: &str,
         forced_queries: Option<Vec<String>>,
         llm_params: &LlmParams,
-        searches_used_so_far: u32,
         channel: &Channel<ArenaEvent>,
-    ) -> (Option<String>, u32) {
+        past_queries: &[String],
+        other_queries: &[(String, String)],
+    ) -> (Option<String>, u32, Vec<String>) {
         // 1. Determine queries
         let queries: Vec<String> = if let Some(forced) = forced_queries {
             forced.into_iter().take(max_queries as usize).collect()
@@ -1699,7 +1929,6 @@ impl DiscussionEngine {
             // LLM decision (non-streaming, JSON)
             let mut decision_params = llm_params.clone();
             decision_params.temperature = 0.3;
-            decision_params.num_predict = 100;
 
             let prompt = prompt_builder::build_web_search_decision_prompt(
                 &self.config.topic,
@@ -1707,6 +1936,8 @@ impl DiscussionEngine {
                 search_directive,
                 max_queries,
                 &self.config.discussion_language,
+                past_queries,
+                other_queries,
             );
             let request = self.ollama_client.build_request(
                 system_prompt,
@@ -1718,26 +1949,26 @@ impl DiscussionEngine {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(error = %e, "Web search decision LLM call failed — skipping search");
-                    return (None, 0);
+                    return (None, 0, Vec::new());
                 }
             };
             let decision = json_parser::parse_json_response::<json_parser::SearchDecisionResponse>(&raw)
                 .unwrap_or_default();
 
             if !decision.needs_search || decision.queries.is_empty() {
-                return (None, 0);
+                return (None, 0, Vec::new());
             }
             decision.queries.into_iter().take(max_queries as usize).collect()
         };
 
         if queries.is_empty() {
-            return (None, 0);
+            return (None, 0, Vec::new());
         }
 
         // 2. Execute each search
         let tavily = match self.tavily_client.as_ref() {
             Some(c) => c,
-            None => return (None, 0),
+            None => return (None, 0, Vec::new()),
         };
         let mut all_results: Vec<(String, crate::tavily::TavilySearchResponse)> = Vec::new();
         let mut executed_count = 0u32;
@@ -1772,7 +2003,7 @@ impl DiscussionEngine {
         }
 
         if executed_count == 0 {
-            return (None, 0);
+            return (None, 0, Vec::new());
         }
 
         // 3. Emit batched event
@@ -1781,17 +2012,190 @@ impl DiscussionEngine {
         let _ = channel.send(ArenaEvent::WebSearchPerformed {
             speaker_id: speaker_id.to_string(),
             speaker_name: speaker_name.to_string(),
-            queries: executed_queries,
+            queries: executed_queries.clone(),
             results_count: total_results,
-            searches_used_discussion: searches_used_so_far + executed_count,
+            pool_used: self.web_searches_used_pool + executed_count,
         });
 
         // 4. Format for prompt injection
         let lang = &self.config.discussion_language;
+        let ctx = prompt_builder::build_search_results_context(&all_results, lang);
+        tracing::info!(
+            speaker = %speaker_name,
+            ctx_len = ctx.len(),
+            ctx_preview = %truncate_str(&ctx, 300),
+            "Web search context injected into prompt"
+        );
         (
-            Some(prompt_builder::build_search_results_context(&all_results, lang)),
+            Some(ctx),
             executed_count,
+            executed_queries,
         )
+    }
+
+    // ===== Search helpers =====
+
+    /// Ask the LLM to pick a search query for forced first-turn search.
+    /// Returns the LLM-chosen query, or `fallback` if LLM fails/returns empty.
+    async fn pick_forced_query(
+        &self,
+        system_prompt: &str,
+        prompt: &str,
+        llm_params: &LlmParams,
+        fallback: String,
+        speaker_name: &str,
+        search_type: &str,
+    ) -> String {
+        let mut dp = llm_params.clone();
+        dp.temperature = 0.3;
+        let request = self.ollama_client.build_request(system_prompt, prompt, &dp, true);
+        let decision = match self.ollama_client.chat(&request, self.cancel_token.clone()).await {
+            Ok(raw) => {
+                tracing::info!(speaker = %speaker_name, search_type, raw = %raw, "Forced search query LLM response");
+                json_parser::parse_json_response::<json_parser::SearchDecisionResponse>(&raw)
+                    .unwrap_or_default()
+            }
+            Err(e) => {
+                tracing::warn!(speaker = %speaker_name, search_type, error = %e, "Forced search query LLM call failed");
+                json_parser::SearchDecisionResponse::default()
+            }
+        };
+        if !decision.queries.is_empty() {
+            decision.queries.into_iter().next().unwrap()
+        } else {
+            fallback
+        }
+    }
+
+    // ===== Wikipedia Search =====
+
+    /// Build clickable Wikipedia article URLs from a search response.
+    fn build_article_urls(response: &crate::wikipedia::WikiSearchResponse, wiki_lang: &str) -> Vec<String> {
+        response.query.as_ref()
+            .map(|q| q.pages.iter().map(|p| {
+                format!("https://{}.wikipedia.org/wiki/{}", wiki_lang, p.title.replace(' ', "_"))
+            }).collect())
+            .unwrap_or_default()
+    }
+
+    /// Check if the wiki search pool has remaining credits.
+    /// Returns (can_search, max_queries_this_turn).
+    /// Pool is shared between all gladiateurs, max 1 per gladiateur per turn.
+    fn can_search_wiki(&self) -> (bool, u32) {
+        let pool = self.config.wiki_search_pool;
+        if pool == 0 {
+            return (false, 0);
+        }
+        let remaining = pool.saturating_sub(self.wiki_searches_used_pool);
+        let max_queries = remaining.min(1);
+        (max_queries > 0, max_queries)
+    }
+
+    /// Raw Wikipedia search for intro (returns formatted context, emits WikiSearchPerformed).
+    async fn process_wiki_search_intro(
+        &self,
+        query: &str,
+        speaker_id: &str,
+        speaker_name: &str,
+        channel: &Channel<ArenaEvent>,
+    ) -> Option<String> {
+        let lang = &self.config.discussion_language;
+        tracing::info!(query = %query, lang = %lang, speaker = %speaker_name, "Wikipedia intro search");
+        match self.wiki_client.search(query, lang, self.cancel_token.clone()).await {
+            Ok((response, actual_lang)) => {
+                let has_results = response.query.as_ref().is_some_and(|q| !q.pages.is_empty());
+                if has_results {
+                    let article_urls = Self::build_article_urls(&response, &actual_lang);
+                    let results_count = response.query.as_ref().map(|q| q.pages.len() as u32).unwrap_or(0);
+
+                    tracing::info!(speaker = %speaker_name, urls = ?article_urls, "Wikipedia intro results found");
+
+                    // Emit event so the UI shows the wiki badge on the intro message
+                    let _ = channel.send(ArenaEvent::WikiSearchPerformed {
+                        speaker_id: speaker_id.to_string(),
+                        speaker_name: speaker_name.to_string(),
+                        queries: vec![query.to_string()],
+                        results_count,
+                        pool_used: 0, // IArbitre intro does not consume pool
+                        article_urls,
+                    });
+
+                    let results = vec![(query.to_string(), response)];
+                    let ctx = prompt_builder::build_wiki_results_context(&results, lang);
+                    tracing::info!(
+                        speaker = %speaker_name,
+                        ctx_len = ctx.len(),
+                        ctx_preview = %truncate_str(&ctx, 300),
+                        "Wikipedia intro context injected into prompt"
+                    );
+                    Some(ctx)
+                } else {
+                    tracing::info!("Wikipedia intro search returned no results");
+                    None
+                }
+            }
+            Err(crate::wikipedia::error::WikiError::Cancelled) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, "Wikipedia intro search failed");
+                None
+            }
+        }
+    }
+
+    /// Execute Wikipedia search for a gladiateur. Returns (formatted_context, queries_executed_count).
+    async fn process_wiki_search(
+        &self,
+        glad_idx: usize,
+        query: String,
+        channel: &Channel<ArenaEvent>,
+    ) -> (Option<String>, u32) {
+        let lang = &self.config.discussion_language;
+        let speaker_id = &self.gladiateurs[glad_idx].config.id;
+        let speaker_name = &self.gladiateurs[glad_idx].config.name;
+
+        tracing::info!(speaker = %speaker_name, query = %query, lang = %lang, "Wikipedia search for gladiateur");
+
+        let (response, actual_lang) = match self.wiki_client.search(&query, lang, self.cancel_token.clone()).await {
+            Ok(r) => r,
+            Err(crate::wikipedia::error::WikiError::Cancelled) => return (None, 0),
+            Err(e) => {
+                tracing::warn!(query = %query, error = %e, "Wikipedia search failed");
+                return (None, 0);
+            }
+        };
+
+        let has_results = response.query.as_ref().is_some_and(|q| !q.pages.is_empty());
+        if !has_results {
+            tracing::info!(speaker = %speaker_name, query = %query, "Wikipedia returned no results");
+            return (None, 0);
+        }
+
+        let article_urls = Self::build_article_urls(&response, &actual_lang);
+
+        tracing::info!(speaker = %speaker_name, urls = ?article_urls, "Wikipedia results found");
+
+        let results_count = response.query.as_ref().map(|q| q.pages.len() as u32).unwrap_or(0);
+
+        // Emit event
+        let _ = channel.send(ArenaEvent::WikiSearchPerformed {
+            speaker_id: speaker_id.to_string(),
+            speaker_name: speaker_name.to_string(),
+            queries: vec![query.clone()],
+            results_count,
+            pool_used: self.wiki_searches_used_pool + 1,
+            article_urls,
+        });
+
+        // Format for prompt injection
+        let all_results = vec![(query, response)];
+        let ctx = prompt_builder::build_wiki_results_context(&all_results, lang);
+        tracing::info!(
+            speaker = %speaker_name,
+            ctx_len = ctx.len(),
+            ctx_preview = %truncate_str(&ctx, 300),
+            "Wikipedia context injected into prompt"
+        );
+        (Some(ctx), 1)
     }
 
     // ── Emotion analysis, contagion, history ──────────────────────────
@@ -2066,13 +2470,13 @@ impl DiscussionEngine {
 mod tests {
     use super::TAVILY_FREE_MONTHLY_QUOTA;
 
-    /// Test the quota logic directly (same as can_search_gladiateur body)
-    fn check_quota(max_per_disc: u32, used: u32, global_usage: u32, has_tavily: bool) -> (bool, u32) {
-        if max_per_disc == 0 || !has_tavily {
+    /// Test the web pool quota logic directly (same as can_search_web body)
+    fn check_web_pool(pool: u32, pool_used: u32, global_usage: u32, has_tavily: bool) -> (bool, u32) {
+        if pool == 0 || !has_tavily {
             return (false, 0);
         }
-        let remaining_disc = max_per_disc.saturating_sub(used);
-        let max_queries = remaining_disc.min(1); // max 1 per turn
+        let pool_remaining = pool.saturating_sub(pool_used);
+        let max_queries = pool_remaining.min(1);
         let global_remaining = TAVILY_FREE_MONTHLY_QUOTA.saturating_sub(global_usage);
         let max_queries = max_queries.min(global_remaining);
         (max_queries > 0, max_queries)
@@ -2080,50 +2484,89 @@ mod tests {
 
     #[test]
     fn test_quota_disabled() {
-        let (can, max) = check_quota(0, 0, 0, true);
+        let (can, max) = check_web_pool(0, 0, 0, true);
         assert!(!can);
         assert_eq!(max, 0);
     }
 
     #[test]
     fn test_quota_no_tavily() {
-        let (can, max) = check_quota(5, 0, 0, false);
+        let (can, max) = check_web_pool(5, 0, 0, false);
         assert!(!can);
         assert_eq!(max, 0);
     }
 
     #[test]
     fn test_quota_fresh() {
-        let (can, max) = check_quota(5, 0, 0, true);
+        let (can, max) = check_web_pool(5, 0, 0, true);
         assert!(can);
-        assert_eq!(max, 1); // max 1 per turn
+        assert_eq!(max, 1);
     }
 
     #[test]
-    fn test_quota_discussion_limit() {
-        let (can, max) = check_quota(5, 4, 0, true);
+    fn test_quota_pool_limit() {
+        let (can, max) = check_web_pool(5, 4, 0, true);
         assert!(can);
         assert_eq!(max, 1); // min(5-4, 1) = 1
     }
 
     #[test]
     fn test_quota_exhausted() {
-        let (can, max) = check_quota(5, 5, 0, true);
+        let (can, max) = check_web_pool(5, 5, 0, true);
         assert!(!can);
-        assert_eq!(max, 0); // 5-5 = 0
+        assert_eq!(max, 0);
     }
 
     #[test]
     fn test_quota_global_limit() {
-        let (can, max) = check_quota(10, 0, 999, true);
+        let (can, max) = check_web_pool(10, 0, 999, true);
         assert!(can);
-        assert_eq!(max, 1); // min(10, 1, 1000-999) = 1
+        assert_eq!(max, 1);
     }
 
     #[test]
     fn test_quota_global_exhausted() {
-        let (can, max) = check_quota(10, 0, 1000, true);
+        let (can, max) = check_web_pool(10, 0, 1000, true);
         assert!(!can);
-        assert_eq!(max, 0); // 1000-1000 = 0
+        assert_eq!(max, 0);
+    }
+
+    // ── Wiki pool tests (simpler: no global usage, no API key check) ──
+
+    fn check_wiki_pool(pool: u32, pool_used: u32) -> (bool, u32) {
+        if pool == 0 {
+            return (false, 0);
+        }
+        let remaining = pool.saturating_sub(pool_used);
+        let max_queries = remaining.min(1);
+        (max_queries > 0, max_queries)
+    }
+
+    #[test]
+    fn test_wiki_quota_disabled() {
+        let (can, max) = check_wiki_pool(0, 0);
+        assert!(!can);
+        assert_eq!(max, 0);
+    }
+
+    #[test]
+    fn test_wiki_quota_fresh() {
+        let (can, max) = check_wiki_pool(5, 0);
+        assert!(can);
+        assert_eq!(max, 1);
+    }
+
+    #[test]
+    fn test_wiki_quota_exhausted() {
+        let (can, max) = check_wiki_pool(3, 3);
+        assert!(!can);
+        assert_eq!(max, 0);
+    }
+
+    #[test]
+    fn test_wiki_quota_one_remaining() {
+        let (can, max) = check_wiki_pool(3, 2);
+        assert!(can);
+        assert_eq!(max, 1);
     }
 }

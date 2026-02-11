@@ -10,6 +10,7 @@ import { EmotionSidebar } from "@/components/emotion/EmotionSidebar";
 import { ResizeDivider } from "@/components/layout/ResizeDivider";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { useSetupStore } from "@/stores/useSetupStore";
+import * as api from "@/lib/tauri-api";
 
 export default function ArenaPage() {
   const { t } = useTranslation();
@@ -44,6 +45,21 @@ export default function ArenaPage() {
       navigate("/");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Force-stop discussion when navigating away (quit = stop)
+  // Use a ref to skip the StrictMode double-mount cycle (mount → unmount → remount)
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    const timer = setTimeout(() => { mountedRef.current = true; }, 100);
+    return () => {
+      clearTimeout(timer);
+      if (!mountedRef.current) return; // StrictMode unmount — skip
+      const currentStatus = useArenaStore.getState().status;
+      if (currentStatus === "running" || currentStatus === "paused" || currentStatus === "synthesizing") {
+        api.forceStopDiscussion().catch(() => {});
+      }
+    };
   }, []);
 
   return (

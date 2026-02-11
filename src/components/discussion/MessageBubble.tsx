@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Brain, Globe } from "lucide-react";
+import { BookOpen, Brain, Globe } from "lucide-react";
 import { SpeakerBadge } from "./SpeakerBadge";
 import { cn } from "@/lib/utils";
 import type { Message, SpeakerRole } from "@/lib/types";
@@ -75,6 +75,8 @@ export function MessageBubble({
   isActive,
   emoji,
   searchCount,
+  wikiSearchCount,
+  wikiArticleUrls,
   participantNames = EMPTY_NAMES,
   emojiMap,
 }: {
@@ -83,6 +85,8 @@ export function MessageBubble({
   isActive?: boolean;
   emoji?: string;
   searchCount?: number;
+  wikiSearchCount?: number;
+  wikiArticleUrls?: string[];
   participantNames?: string[];
   emojiMap?: Map<string, string>;
 }) {
@@ -123,6 +127,15 @@ export function MessageBubble({
           {(searchCount ?? 0) > 0 && (
             <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-500" title={`${searchCount} web search(es)`}>
               <Globe className="h-3 w-3" />
+            </span>
+          )}
+          {(wikiSearchCount ?? 0) > 0 && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500 cursor-pointer"
+              title={wikiArticleUrls?.join("\n") ?? `${wikiSearchCount} Wikipedia`}
+              onClick={() => wikiArticleUrls?.[0] && window.open(wikiArticleUrls[0], "_blank")}
+            >
+              <BookOpen className="h-3 w-3" />
             </span>
           )}
         </div>

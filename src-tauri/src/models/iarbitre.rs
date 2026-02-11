@@ -16,6 +16,9 @@ pub struct IArbitreConfig {
     /// If true, the IArbitre does 1 mandatory web search on the topic before introduction
     #[serde(default)]
     pub web_search_intro: bool,
+    /// If true, the IArbitre does 1 mandatory Wikipedia search on the topic before introduction
+    #[serde(default)]
+    pub wiki_search_intro: bool,
 }
 
 #[derive(Debug, Clone)]

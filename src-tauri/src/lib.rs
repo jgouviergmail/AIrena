@@ -6,6 +6,7 @@ mod models;
 mod ollama;
 mod state;
 mod tavily;
+mod wikipedia;
 
 use std::sync::{Arc, Mutex};
 
