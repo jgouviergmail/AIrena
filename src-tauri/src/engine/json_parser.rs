@@ -163,7 +163,15 @@ fn extract_duplicate_key_reactions(raw: &str) -> Result<Vec<RawReaction>, JsonPa
             if let Some(rx_start) = raw[search_reaction_from..].find("\"reaction\"") {
                 let rx_abs = search_reaction_from + rx_start;
                 if let Some(reaction) = extract_json_string_value(&raw[rx_abs..]) {
-                    reactions.push(RawReaction { speaker, reaction });
+                    // Best-effort: try to extract justification after reaction
+                    let search_just_from = rx_abs + 11;
+                    let justification = raw[search_just_from..]
+                        .find("\"justification\"")
+                        .and_then(|j_start| {
+                            extract_json_string_value(&raw[search_just_from + j_start..])
+                        })
+                        .unwrap_or_default();
+                    reactions.push(RawReaction { speaker, reaction, justification });
                     search_from = rx_abs + 11; // len('"reaction":') = 11
                     continue;
                 }
@@ -210,6 +218,7 @@ fn extract_json_string_value(s: &str) -> Option<String> {
 pub struct ParsedReaction {
     pub speaker_name: String,
     pub reaction_type: ReactionType,
+    pub justification: Option<String>,
 }
 
 /// Strip leading French articles: "Le ", "La ", "L'", "Les "
@@ -310,9 +319,15 @@ fn validate_reactions(raw: Vec<RawReaction>, known_speakers: &[String]) -> Vec<P
                 return None;
             }
 
+            let justification = {
+                let trimmed = r.justification.trim();
+                if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+            };
+
             Some(ParsedReaction {
                 speaker_name: speaker.clone(),
                 reaction_type,
+                justification,
             })
         })
         .collect()
@@ -488,6 +503,32 @@ fn remove_trailing_commas(input: &str) -> String {
 
 fn safe_truncate(s: &str, max_bytes: usize) -> String {
     super::truncate_str(s, max_bytes).to_string()
+}
+
+/// Extract document content from `<document>...</document>` tags in a response.
+/// Returns (text_without_tags, Option<document_content>).
+/// If no valid tags are found, returns the original text unchanged.
+pub fn extract_and_strip_document(raw: &str) -> (String, Option<String>) {
+    let open = "<document>";
+    let close = "</document>";
+    if let Some(start) = raw.find(open) {
+        if let Some(end) = raw.find(close) {
+            if end > start {
+                let doc = raw[start + open.len()..end].trim().to_string();
+                let before = raw[..start].trim_end();
+                let after = raw[end + close.len()..].trim_start();
+                let stripped = if after.is_empty() {
+                    before.to_string()
+                } else {
+                    format!("{}\n{}", before, after)
+                };
+                if !doc.is_empty() {
+                    return (stripped.trim().to_string(), Some(doc));
+                }
+            }
+        }
+    }
+    (raw.to_string(), None)
 }
 
 #[cfg(test)]
@@ -928,5 +969,55 @@ mod tests {
         let decision: SearchDecisionResponse = parse_json_response(raw).unwrap();
         assert!(decision.needs_search);
         assert_eq!(decision.queries, vec!["test"]);
+    }
+
+    // ── extract_and_strip_document tests ──────────────────────────
+
+    #[test]
+    fn test_extract_document_present() {
+        let raw = "Here is my analysis.\n\n<document>\n# Title\nContent here\n</document>";
+        let (text, doc) = extract_and_strip_document(raw);
+        assert_eq!(text, "Here is my analysis.");
+        assert_eq!(doc.unwrap(), "# Title\nContent here");
+    }
+
+    #[test]
+    fn test_extract_document_absent() {
+        let raw = "Just a regular response with no document tags.";
+        let (text, doc) = extract_and_strip_document(raw);
+        assert_eq!(text, raw);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn test_extract_document_empty() {
+        let raw = "Text before\n<document>\n</document>\nText after";
+        let (text, doc) = extract_and_strip_document(raw);
+        assert_eq!(text, raw);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn test_extract_document_open_only() {
+        let raw = "Text <document> some content without closing";
+        let (text, doc) = extract_and_strip_document(raw);
+        assert_eq!(text, raw);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn test_extract_document_multiline_content() {
+        let raw = "Discussion text.\n\n<document>\nLine 1\nLine 2\nLine 3\n</document>\n";
+        let (text, doc) = extract_and_strip_document(raw);
+        assert_eq!(text, "Discussion text.");
+        assert_eq!(doc.unwrap(), "Line 1\nLine 2\nLine 3");
+    }
+
+    #[test]
+    fn test_extract_document_with_text_after() {
+        let raw = "Before\n<document>Content</document>\nAfter";
+        let (text, doc) = extract_and_strip_document(raw);
+        assert_eq!(text, "Before\nAfter");
+        assert_eq!(doc.unwrap(), "Content");
     }
 }

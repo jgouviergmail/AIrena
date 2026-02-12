@@ -43,4 +43,6 @@ pub struct RawReaction {
     pub speaker: String,
     #[serde(alias = "response", alias = "opinion", alias = "avis", alias = "vote", alias = "type")]
     pub reaction: String,
+    #[serde(default, alias = "reason", alias = "explication", alias = "raison", alias = "motif")]
+    pub justification: String,
 }

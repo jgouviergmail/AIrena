@@ -131,3 +131,21 @@ export async function deleteDiscussionHistory(id: string): Promise<void> {
 export async function deleteAllDiscussionHistory(): Promise<void> {
   return await invoke("delete_all_discussion_history");
 }
+
+// -- File utilities --
+
+export async function downloadTextFile(
+  content: string,
+  defaultFileName: string,
+): Promise<void> {
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+  const ext = defaultFileName.split(".").pop() ?? "txt";
+  const path = await save({
+    defaultPath: defaultFileName,
+    filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+  });
+  if (path) {
+    await writeTextFile(path, content);
+  }
+}

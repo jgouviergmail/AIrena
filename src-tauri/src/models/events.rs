@@ -121,6 +121,14 @@ pub enum ArenaEvent {
         emotion_behavior: Option<String>,
         relationship_summary: String,
     },
+    /// Document updated by a speaker (co-construction)
+    #[serde(rename_all = "camelCase")]
+    DocumentUpdated {
+        speaker_id: String,
+        speaker_name: String,
+        content: String,
+        format: String,
+    },
     /// Discussion ended
     DiscussionEnded,
     /// Non-fatal error (displayed in feed)
@@ -141,6 +149,7 @@ mod tests {
                 from_speaker_name: "Le Scientifique".to_string(),
                 reaction_type: ReactionType::Like,
                 target_message_id: "msg-123".to_string(),
+                justification: Some("Argument solide et bien documenté".to_string()),
             },
         };
         let json = serde_json::to_string(&event).unwrap();

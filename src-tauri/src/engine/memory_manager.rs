@@ -1,23 +1,25 @@
 use std::collections::HashMap;
 
+use crate::constants;
 use crate::models::memory::{MessageSummary, ParticipantMemory, ParticipantPosition, TurnSnapshot};
 use crate::models::message::Message;
 
-/// Maximum number of immediate turns to keep
-const MAX_IMMEDIATE_TURNS: usize = 3;
-
-/// Maximum characters per message in immediate memory
-const MAX_MESSAGE_CHARS: usize = 600;
-
-/// Add a turn snapshot to immediate memory, evicting oldest if needed
-pub fn add_turn_to_memory(memory: &mut ParticipantMemory, turn_number: u32, messages: &[Message]) {
+/// Add a turn snapshot to immediate memory, evicting oldest if needed.
+/// When `is_fiction` is true, stores full story segments for narrative continuity.
+pub fn add_turn_to_memory(
+    memory: &mut ParticipantMemory,
+    turn_number: u32,
+    messages: &[Message],
+    is_fiction: bool,
+) {
+    let max_chars = if is_fiction { constants::MEMORY_MAX_FICTION_MESSAGE_CHARS } else { constants::MEMORY_MAX_MESSAGE_CHARS };
     let snapshot = TurnSnapshot {
         turn_number,
         messages: messages
             .iter()
             .map(|m| MessageSummary {
                 speaker_name: m.speaker_name.clone(),
-                content: truncate_content(&m.content, MAX_MESSAGE_CHARS),
+                content: truncate_content(&m.content, max_chars),
             })
             .collect(),
     };
@@ -25,13 +27,10 @@ pub fn add_turn_to_memory(memory: &mut ParticipantMemory, turn_number: u32, mess
     memory.immediate.push(snapshot);
 
     // Evict oldest turns beyond the limit
-    while memory.immediate.len() > MAX_IMMEDIATE_TURNS {
+    while memory.immediate.len() > constants::MEMORY_MAX_IMMEDIATE_TURNS {
         memory.immediate.remove(0);
     }
 }
-
-/// Maximum characters for the contextual summary to prevent unbounded growth
-const MAX_SUMMARY_CHARS: usize = 1500;
 
 /// Update contextual summary and positional map from a combined LLM response
 pub fn update_from_llm_response(
@@ -39,7 +38,7 @@ pub fn update_from_llm_response(
     summary: String,
     positions: HashMap<String, String>,
 ) {
-    memory.contextual_summary = truncate_content(&summary, MAX_SUMMARY_CHARS);
+    memory.contextual_summary = truncate_content(&summary, constants::MEMORY_MAX_SUMMARY_CHARS);
 
     memory.positional_map = positions
         .into_iter()
@@ -65,11 +64,13 @@ pub fn positional_map_to_json(memory: &ParticipantMemory) -> String {
     serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
 }
 
-/// Format turn messages as text for the memory update prompt
-pub fn format_turn_messages(messages: &[Message]) -> String {
+/// Format turn messages as text for the memory update prompt.
+/// When `is_fiction` is true, uses the fiction limit so the summarizer sees full story segments.
+pub fn format_turn_messages(messages: &[Message], is_fiction: bool) -> String {
+    let max_chars = if is_fiction { constants::MEMORY_MAX_FICTION_MESSAGE_CHARS } else { constants::MEMORY_FORMAT_TURN_CHARS };
     messages
         .iter()
-        .map(|m| format!("{}: {}", m.speaker_name, truncate_content(&m.content, 400)))
+        .map(|m| format!("{}: {}", m.speaker_name, truncate_content(&m.content, max_chars)))
         .collect::<Vec<_>>()
         .join("\n")
 }

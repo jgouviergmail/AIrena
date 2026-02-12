@@ -2,6 +2,8 @@ import { create } from "zustand";
 import i18n from "@/i18n/config";
 import type {
   DiscussionConfig,
+  DiscussionMode,
+  DocumentFormat,
   GladIAteurConfig,
   IArbitreConfig,
   LlmParams,
@@ -16,9 +18,13 @@ interface SetupState {
   gladiateurs: GladIAteurConfig[];
   maxTurns: number | null;
   userInterventionTimeoutSecs: number;
+  discussionMode: DiscussionMode;
+  documentFormat: DocumentFormat;
   webSearchPool: number;
   wikiSearchPool: number;
 
+  setDiscussionMode: (mode: DiscussionMode) => void;
+  setDocumentFormat: (fmt: DocumentFormat) => void;
   setStep: (step: number) => void;
   setTopic: (topic: string) => void;
   setDiscussionLanguage: (lang: string) => void;
@@ -52,10 +58,14 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   arbitre: getDefaultArbitre(),
   gladiateurs: [],
   maxTurns: null,
+  discussionMode: "debate" as DiscussionMode,
+  documentFormat: "none" as DocumentFormat,
   userInterventionTimeoutSecs: 120,
   webSearchPool: 0,
   wikiSearchPool: 0,
 
+  setDiscussionMode: (mode) => set({ discussionMode: mode }),
+  setDocumentFormat: (fmt) => set({ documentFormat: fmt }),
   setStep: (step) => set({ step }),
   setTopic: (topic) => set({ topic }),
   setDiscussionLanguage: (lang) => set({ discussionLanguage: lang }),
@@ -129,6 +139,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       maxTurns: s.maxTurns,
       userName,
       userInterventionTimeoutSecs: s.userInterventionTimeoutSecs,
+      discussionMode: s.discussionMode,
+      documentFormat: s.documentFormat,
       webSearchPool: s.webSearchPool,
       wikiSearchPool: s.wikiSearchPool,
     };
@@ -142,6 +154,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       arbitre: getDefaultArbitre(),
       gladiateurs: [],
       maxTurns: null,
+      discussionMode: "debate" as DiscussionMode,
+      documentFormat: "none" as DocumentFormat,
       userInterventionTimeoutSecs: 120,
       webSearchPool: 0,
       wikiSearchPool: 0,

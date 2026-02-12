@@ -4,15 +4,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::error::WikiError;
 use super::WikiSearchResponse;
-
-/// Max results per search query (3 to allow disambiguation filtering)
-const WIKI_RESULTS_LIMIT: u8 = 3;
-/// Max characters for the plain-text extract (intro only)
-const WIKI_EXTRACT_CHARS: u16 = 500;
-/// Wikipedia maxlag parameter (seconds) — request is retried server-side if lag exceeds this
-const WIKI_MAX_LAG_SECS: u8 = 5;
-/// HTTP timeout for Wikipedia API calls
-const WIKI_TIMEOUT_SECS: u64 = 15;
+use crate::constants;
 
 #[derive(Clone)]
 pub struct WikiClient {
@@ -23,7 +15,7 @@ impl WikiClient {
     pub fn new() -> Self {
         Self {
             http_client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(WIKI_TIMEOUT_SECS))
+                .timeout(Duration::from_secs(constants::WIKI_TIMEOUT_SECS))
                 .user_agent(format!(
                     "AIrena/{} (https://github.com/AIrena) reqwest",
                     env!("CARGO_PKG_VERSION")
@@ -48,9 +40,9 @@ impl WikiClient {
             "https://{}.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch={}&gsrlimit={}&prop=extracts&exintro=1&explaintext=1&exchars={}&format=json&formatversion=2&maxlag={}",
             lang,
             urlencoding::encode(query),
-            WIKI_RESULTS_LIMIT,
-            WIKI_EXTRACT_CHARS,
-            WIKI_MAX_LAG_SECS,
+            constants::WIKI_RESULTS_LIMIT,
+            constants::WIKI_EXTRACT_CHARS,
+            constants::WIKI_MAX_LAG_SECS,
         )
     }
 

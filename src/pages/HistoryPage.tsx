@@ -92,10 +92,9 @@ export default function HistoryPage() {
 
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-foreground">
-                    {d.topic}
+                    {formatDate(d.createdAt)} — {t(`setup.mode_${d.discussionMode}`)} — {d.topic}
                   </p>
                   <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-                    <span>{formatDate(d.createdAt)}</span>
                     <span>{t("history.turns", { count: d.totalTurns })}</span>
                     <span className="truncate text-[10px]">{d.modelName}</span>
                     {!d.hasSynthesis && (

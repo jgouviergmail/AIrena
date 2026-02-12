@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::error::OllamaError;
 use super::types::{ChatRequest, ChatResponse, ModelInfo};
+use crate::constants;
 use crate::models::settings::LlmParams;
 
 /// Result of a streaming chat with think mode
@@ -24,7 +25,7 @@ impl OllamaClient {
     pub fn new(base_url: &str, model: &str) -> Self {
         Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(120))
+                .timeout(Duration::from_secs(constants::OLLAMA_HTTP_TIMEOUT_SECS))
                 .build()
                 .expect("Failed to build HTTP client"),
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -67,14 +68,14 @@ impl OllamaClient {
         on_thinking_token: impl Fn(&str) + Send,
         cancel: CancellationToken,
     ) -> Result<ChatStreamResult, OllamaError> {
-        for attempt in 0..=2u32 {
+        for attempt in 0..=constants::OLLAMA_MAX_RETRIES {
             match self
                 .stream_ndjson(request, &on_content_token, &on_thinking_token, &cancel)
                 .await
             {
                 Ok(result) => return Ok(result),
                 Err(OllamaError::Cancelled) => return Err(OllamaError::Cancelled),
-                Err(e) if e.is_connection_error() && attempt < 2 => {
+                Err(e) if e.is_connection_error() && attempt < constants::OLLAMA_MAX_RETRIES => {
                     tracing::warn!(
                         "Ollama connection error (attempt {}): {}",
                         attempt + 1,
@@ -217,7 +218,7 @@ impl OllamaClient {
         let resp = self.client
             .post(&url)
             .json(&body)
-            .timeout(Duration::from_secs(300)) // Model loading can take a while
+            .timeout(Duration::from_secs(constants::OLLAMA_PRELOAD_TIMEOUT_SECS))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -232,7 +233,7 @@ impl OllamaClient {
     pub async fn check_connection(&self) -> bool {
         self.client
             .get(format!("{}/api/tags", self.base_url))
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(constants::OLLAMA_CHECK_TIMEOUT_SECS))
             .send()
             .await
             .is_ok()

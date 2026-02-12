@@ -21,7 +21,7 @@ pub struct TurnSnapshot {
 #[derive(Debug, Clone)]
 pub struct MessageSummary {
     pub speaker_name: String,
-    /// Truncated to ~200 tokens
+    /// Truncated to MAX_MESSAGE_CHARS (1500) or MAX_FICTION_MESSAGE_CHARS (3000) in fiction mode
     pub content: String,
 }
 

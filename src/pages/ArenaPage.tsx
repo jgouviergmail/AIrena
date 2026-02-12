@@ -7,10 +7,10 @@ import { DiscussionControls } from "@/components/discussion/DiscussionControls";
 import { UserInputArea } from "@/components/discussion/UserInputArea";
 import { TurnIndicator } from "@/components/discussion/TurnIndicator";
 import { EmotionSidebar } from "@/components/emotion/EmotionSidebar";
+import { DocumentSidebar } from "@/components/document/DocumentSidebar";
 import { ResizeDivider } from "@/components/layout/ResizeDivider";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { useSetupStore } from "@/stores/useSetupStore";
-import * as api from "@/lib/tauri-api";
 
 export default function ArenaPage() {
   const { t } = useTranslation();
@@ -23,11 +23,18 @@ export default function ArenaPage() {
   const error = useArenaStore((s) => s.error);
   const synthesisStreaming = useArenaStore((s) => s.synthesisStreaming);
   const userTimeout = useSetupStore((s) => s.userInterventionTimeoutSecs);
+  const documentFormat = useSetupStore((s) => s.documentFormat);
+  const discussionMode = useSetupStore((s) => s.discussionMode);
   const prevStatusRef = useRef(status);
   const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [docSidebarWidth, setDocSidebarWidth] = useState(350);
+  const hasDocument = documentFormat !== "none";
 
   const handleResize = useCallback((delta: number) => {
     setSidebarWidth((w) => Math.max(200, Math.min(500, w + delta)));
+  }, []);
+  const handleDocResize = useCallback((delta: number) => {
+    setDocSidebarWidth((w) => Math.max(200, Math.min(600, w + delta)));
   }, []);
 
   // Navigate to summary only when status TRANSITIONS to "ended"
@@ -39,37 +46,28 @@ export default function ArenaPage() {
     prevStatusRef.current = status;
   }, [status, navigate]);
 
-  // Redirect if no discussion (only on initial mount)
+  // Redirect on mount: idle → home, ended → summary
   useEffect(() => {
-    if (status === "idle") {
-      navigate("/");
-    }
+    if (status === "idle") navigate("/");
+    else if (status === "ended") navigate("/summary");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Force-stop discussion when navigating away (quit = stop)
-  // Use a ref to skip the StrictMode double-mount cycle (mount → unmount → remount)
-  const mountedRef = useRef(false);
-  useEffect(() => {
-    const timer = setTimeout(() => { mountedRef.current = true; }, 100);
-    return () => {
-      clearTimeout(timer);
-      if (!mountedRef.current) return; // StrictMode unmount — skip
-      const currentStatus = useArenaStore.getState().status;
-      if (currentStatus === "running" || currentStatus === "paused" || currentStatus === "synthesizing") {
-        api.forceStopDiscussion().catch(() => {});
-      }
-    };
   }, []);
 
   return (
     <>
-      <TopBar title={t("arena.title")} />
+      <TopBar title={`${t("arena.title")} — ${t(`setup.mode_${discussionMode}`)}`} />
 
       <div className="flex min-h-0 flex-1 flex-col">
         {/* Status bar */}
         <div className="relative z-10 flex items-center justify-between border-b border-border px-4 py-2">
-          <TurnIndicator turn={currentTurn} status={status} determiningOrder={determiningOrder} webSearchCount={webSearchCount} />
+          <div className="flex items-center gap-3">
+            <TurnIndicator turn={currentTurn} status={status} determiningOrder={determiningOrder} webSearchCount={webSearchCount} />
+            {discussionMode !== "debate" && (
+              <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                {t(`setup.mode_${discussionMode}`)}
+              </span>
+            )}
+          </div>
           <DiscussionControls status={status} userTurnActive={userTurnActive} />
         </div>
 
@@ -107,6 +105,14 @@ export default function ArenaPage() {
               </div>
             )}
           </div>
+
+          {/* Document sidebar (if format selected) */}
+          {hasDocument && (
+            <>
+              <ResizeDivider onResize={handleDocResize} />
+              <DocumentSidebar width={docSidebarWidth} />
+            </>
+          )}
 
           {/* Resize divider + Emotion sidebar */}
           <ResizeDivider onResize={handleResize} />

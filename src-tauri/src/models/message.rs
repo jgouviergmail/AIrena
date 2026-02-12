@@ -41,4 +41,6 @@ pub struct Reaction {
     pub from_speaker_name: String,
     pub reaction_type: ReactionType,
     pub target_message_id: String,
+    #[serde(default)]
+    pub justification: Option<String>,
 }

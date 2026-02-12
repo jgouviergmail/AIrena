@@ -8,6 +8,7 @@ import type {
   ArenaEvent,
   BanInfo,
   DirectiveData,
+  DocumentFormat,
   EmotionalProfile,
   EmotionSnapshot,
   Message,
@@ -45,6 +46,9 @@ interface ArenaState {
   wikiSearchesPerMessage: Record<string, number>;
   wikiArticleUrlsPerMessage: Record<string, string[]>;
   _pendingWikiUrls: string[];
+  documentContent: string;
+  documentFormat: DocumentFormat;
+  documentLastEditor: string | null;
   directives: Map<string, DirectiveData>;
   bans: Map<string, BanInfo>;
   error: string | null;
@@ -78,6 +82,9 @@ const initialState = {
   wikiSearchesPerMessage: {} as Record<string, number>,
   wikiArticleUrlsPerMessage: {} as Record<string, string[]>,
   _pendingWikiUrls: [] as string[],
+  documentContent: "",
+  documentFormat: "none" as DocumentFormat,
+  documentLastEditor: null as string | null,
   directives: new Map<string, DirectiveData>(),
   bans: new Map<string, BanInfo>(),
   error: null as string | null,
@@ -283,6 +290,14 @@ export const useArenaStore = create<ArenaState>((set) => ({
         // No state update — handled by EmotionSidebar via CSS animations
         break;
 
+      case "documentUpdated":
+        set({
+          documentContent: event.data.content,
+          documentFormat: event.data.format as DocumentFormat,
+          documentLastEditor: event.data.speakerName,
+        });
+        break;
+
       case "directiveGenerated":
         set((s) => {
           const d = new Map(s.directives);
@@ -391,6 +406,9 @@ export const useArenaStore = create<ArenaState>((set) => ({
             synthesis: arenaState.synthesis,
             createdAt: new Date().toISOString(),
             messages: arenaState.messages,
+            discussionMode: setupState.discussionMode,
+            documentContent: arenaState.documentContent,
+            documentFormat: arenaState.documentFormat,
           }).catch((err) =>
             console.error("Failed to save discussion history:", err),
           );
@@ -420,6 +438,9 @@ export const useArenaStore = create<ArenaState>((set) => ({
       emotions: new Map<string, EmotionalProfile>(),
       emotionHistory: new Map<string, EmotionSnapshot[]>(),
       moodSummary: new Map<string, string>(),
+      documentContent: "",
+      documentFormat: "none" as DocumentFormat,
+      documentLastEditor: null,
       directives: new Map<string, DirectiveData>(),
       bans: new Map<string, BanInfo>(),
     });

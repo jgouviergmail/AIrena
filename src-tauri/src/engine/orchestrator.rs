@@ -14,7 +14,8 @@ use crate::engine::memory_manager;
 use crate::engine::prompt_builder;
 use crate::engine::turn_manager;
 use crate::models::emotion::{EmotionSnapshot, EmotionalProfile};
-use crate::models::discussion::{DiscussionConfig, DiscussionStatus, TurnDistribution};
+use crate::engine::mode_prompts;
+use crate::models::discussion::{DiscussionConfig, DiscussionMode, DiscussionStatus, DocumentFormat, TurnDistribution};
 use crate::models::engine_command::EngineCommand;
 use crate::models::events::ArenaEvent;
 use crate::models::gladiateur::GladIAteurState;
@@ -29,18 +30,13 @@ use crate::wikipedia::client::WikiClient;
 
 use super::truncate_str;
 
-/// Maximum length for a text to be considered a potential model refusal.
-/// Real substantive responses are longer than this threshold.
-const MAX_REFUSAL_LENGTH: usize = 300;
-
-/// Tavily free tier monthly quota (credits).
-const TAVILY_FREE_MONTHLY_QUOTA: u32 = 1000;
+use crate::constants;
 
 /// Detect model safety refusals (e.g. "I'm sorry, but I can't help with that.")
 fn is_model_refusal(text: &str) -> bool {
     let lower = text.to_lowercase();
     let trimmed = lower.trim();
-    if trimmed.len() > MAX_REFUSAL_LENGTH {
+    if trimmed.len() > constants::ORCH_MAX_REFUSAL_LENGTH {
         return false;
     }
     trimmed.starts_with("i'm sorry")
@@ -105,6 +101,8 @@ pub struct DiscussionEngine {
     forced_web_done: HashSet<usize>,
     /// Gladiateur indices that have completed their forced first wiki search
     forced_wiki_done: HashSet<usize>,
+    /// Co-construction document content (accumulated across turns)
+    document_content: String,
 }
 
 impl DiscussionEngine {
@@ -157,6 +155,7 @@ impl DiscussionEngine {
             wiki_searches_used_pool: 0,
             forced_web_done: HashSet::new(),
             forced_wiki_done: HashSet::new(),
+            document_content: String::new(),
         }
     }
 
@@ -216,9 +215,9 @@ impl DiscussionEngine {
     /// Localized system prompt for the memory summarizer
     fn memory_summarizer_prompt(&self) -> String {
         match self.config.discussion_language.as_str() {
-            "en" => "You are a memory summarizer.".to_string(),
-            "zh" => "你是一个记忆总结器。".to_string(),
-            _ => "Tu es un résumeur de mémoire.".to_string(),
+            "en" => "You are a discussion memory summarizer. Maintain an accurate, concise summary and track each participant's current stance. Respond ONLY with valid JSON.".to_string(),
+            "zh" => "你是一个讨论记忆总结器。维护准确简洁的摘要并跟踪每位参与者的当前立场。仅用有效的JSON回复。".to_string(),
+            _ => "Tu es un résumeur de mémoire de discussion. Maintiens un résumé précis et concis et suis la position actuelle de chaque participant. Réponds UNIQUEMENT avec du JSON valide.".to_string(),
         }
     }
 
@@ -265,7 +264,7 @@ impl DiscussionEngine {
         // Optional web + wiki search for IArbitre (forced on topic)
         let want_web_intro = self.config.arbitre.web_search_intro && self.tavily_client.is_some();
         let want_wiki_intro = self.config.arbitre.wiki_search_intro;
-        let topic_query = truncate_str(&self.config.topic, 200).to_string();
+        let topic_query = truncate_str(&self.config.topic, constants::ORCH_TOPIC_FOR_SEARCH).to_string();
 
         // For wiki intro, extract a broad encyclopedic concept via LLM instead of the raw topic
         let wiki_intro_query = if want_wiki_intro {
@@ -294,7 +293,7 @@ impl DiscussionEngine {
                 tracing::warn!(error = %e, "Failed to read Tavily usage count — assuming 0");
                 0
             });
-            let web_ctx = if global_usage < TAVILY_FREE_MONTHLY_QUOTA {
+            let web_ctx = if global_usage < constants::TAVILY_FREE_MONTHLY_QUOTA {
                 let (ctx, _, _) = self.process_web_search(
                     &self.arbitre.config.system_prompt,
                     &self.arbitre.config.id, &self.arbitre.config.name,
@@ -312,7 +311,7 @@ impl DiscussionEngine {
                 tracing::warn!(error = %e, "Failed to read Tavily usage count — assuming 0");
                 0
             });
-            let web_ctx = if global_usage < TAVILY_FREE_MONTHLY_QUOTA {
+            let web_ctx = if global_usage < constants::TAVILY_FREE_MONTHLY_QUOTA {
                 let (ctx, _, _) = self.process_web_search(
                     &self.arbitre.config.system_prompt,
                     &self.arbitre.config.id, &self.arbitre.config.name,
@@ -349,6 +348,7 @@ impl DiscussionEngine {
             &participant_names,
             &self.config.discussion_language,
             intro_search_context.as_deref(),
+            &self.config.discussion_mode,
         );
         let intro_request = self.ollama_client.build_request(
             &self.config.arbitre.system_prompt,
@@ -407,12 +407,77 @@ impl DiscussionEngine {
             self.turn_messages.clear();
             self.turn_reaction_counts.clear();
 
+            // UserDriven mode: force user intervention first, then gladiateurs decide to respond
+            let order = if self.config.discussion_mode == DiscussionMode::UserDriven {
+                // 1. Force user intervention at start of each turn
+                self.user_intervention_pending = true;
+                self.user_intervention_handled = false;
+                self.handle_user_intervention(&mut cmd_rx, &channel).await;
+
+                if self.cancel_token.is_cancelled() { break; }
+                if self.process_commands(&mut cmd_rx, &channel).await { break; }
+
+                // 2. Each gladiateur decides to respond or pass
+                let mut responding = Vec::new();
+                for i in 0..self.gladiateurs.len() {
+                    if self.gladiateurs[i].ban_remaining_turns > 0 { continue; }
+                    if self.cancel_token.is_cancelled() { break; }
+                    if self.ask_respond_or_pass(i).await {
+                        responding.push(i);
+                    }
+                }
+
+                if self.cancel_token.is_cancelled() { break; }
+
+                // If no gladiateur wants to respond, skip the turn
+                if responding.is_empty() {
+                    let reason = match self.config.discussion_language.as_str() {
+                        "en" => "No participant chose to respond this turn.".to_string(),
+                        "zh" => "本轮没有参与者选择回应。".to_string(),
+                        _ => "Aucun participant n'a choisi de répondre ce tour.".to_string(),
+                    };
+                    let _ = channel.send(ArenaEvent::TurnSkipped {
+                        reason,
+                        next_available_turn: self.current_turn + 1,
+                    });
+                    continue;
+                }
+
+                // Emit TurnStarted with only responding speakers
+                let speaker_ids: Vec<String> = responding.iter()
+                    .map(|&i| self.gladiateurs[i].config.id.clone())
+                    .collect();
+                let _ = channel.send(ArenaEvent::TurnStarted {
+                    turn_number: self.current_turn,
+                    speaker_order: speaker_ids,
+                });
+
+                responding
+            } else {
+            // CollaborativeFiction: force user to write the story opening on turn 1
+            if self.config.discussion_mode == DiscussionMode::CollaborativeFiction
+                && self.current_turn == 1
+            {
+                self.user_intervention_pending = true;
+                self.user_intervention_handled = false;
+                self.handle_user_intervention(&mut cmd_rx, &channel).await;
+                if self.cancel_token.is_cancelled() { break; }
+                if self.process_commands(&mut cmd_rx, &channel).await { break; }
+            }
+
+            // CollaborativeFiction: always use Sequential to maintain narrative continuity
+            let effective_distribution = if self.config.discussion_mode == DiscussionMode::CollaborativeFiction {
+                &TurnDistribution::Sequential
+            } else {
+                &self.config.arbitre.turn_distribution
+            };
+
             // Determine speaker order — sync for Sequential/Random, async for Democratic/Authoritarian
-            let order = match &self.config.arbitre.turn_distribution {
+            let order = match effective_distribution {
                 TurnDistribution::Sequential | TurnDistribution::Random => {
                     turn_manager::determine_speaker_order(
                         &self.gladiateurs,
-                        &self.config.arbitre.turn_distribution,
+                        effective_distribution,
                     )
                 }
                 TurnDistribution::Democratic | TurnDistribution::Authoritarian => {
@@ -432,7 +497,7 @@ impl DiscussionEngine {
                         discussion_language: self.config.discussion_language.clone(),
                     };
 
-                    match &self.config.arbitre.turn_distribution {
+                    match effective_distribution {
                         TurnDistribution::Democratic => {
                             turn_manager::determine_order_democratic(
                                 &self.gladiateurs,
@@ -489,9 +554,30 @@ impl DiscussionEngine {
                 speaker_order: speaker_ids,
             });
 
-            // Handle pending user intervention at start of turn
-            if self.user_intervention_pending && !self.user_intervention_handled {
+            order
+            }; // end of else (non-UserDriven)
+
+            // Handle pending user intervention at start of turn (skip in UserDriven — user already spoke)
+            if self.config.discussion_mode != DiscussionMode::UserDriven
+                && self.user_intervention_pending
+                && !self.user_intervention_handled
+            {
                 self.handle_user_intervention(&mut cmd_rx, &channel).await;
+            }
+
+            // Socratic mode: IArbitre poses a question each turn (starting turn 2)
+            if self.config.discussion_mode == DiscussionMode::Socratic && self.current_turn > 1 {
+                let arb_id = self.arbitre.config.id.clone();
+                let arb_name = self.arbitre.config.name.clone();
+                let _ = channel.send(ArenaEvent::SpeakerActive {
+                    speaker_id: arb_id.clone(),
+                });
+                if let Some(question) = self.generate_socratic_question().await {
+                    let msg = self.create_message(&arb_id, &arb_name, SpeakerRole::Arbitre, &question);
+                    let _ = channel.send(ArenaEvent::MessageComplete { message: msg.clone() });
+                    self.turn_messages.push(msg.clone());
+                    self.messages_history.push(msg);
+                }
             }
 
             // Reset cross-gladiateur search dedup for this turn
@@ -544,8 +630,8 @@ impl DiscussionEngine {
                     let (wiki_can, _wiki_max) = self.can_search_wiki();
                     let is_first_web = !self.forced_web_done.contains(&glad_idx);
                     let is_first_wiki = !self.forced_wiki_done.contains(&glad_idx);
-                    let topic_q = truncate_str(&self.config.topic, 200).to_string();
-                    let recent = truncate_str(&self.build_recent_exchanges(glad_idx), 500).to_string();
+                    let topic_q = truncate_str(&self.config.topic, constants::ORCH_TOPIC_FOR_SEARCH).to_string();
+                    let recent = truncate_str(&self.build_recent_exchanges(glad_idx), constants::ORCH_RECENT_FOR_SEARCH).to_string();
                     let lang = self.config.discussion_language.clone();
 
                     tracing::info!(
@@ -563,7 +649,7 @@ impl DiscussionEngine {
 
                     // Build persona-aware search system prompt (brief extract for JSON utility calls)
                     let persona_extract = truncate_str(
-                        &self.gladiateurs[glad_idx].config.system_prompt, 200
+                        &self.gladiateurs[glad_idx].config.system_prompt, constants::ORCH_PERSONA_FOR_SEARCH
                     );
                     let search_sys = match lang.as_str() {
                         "en" => format!(
@@ -760,19 +846,24 @@ impl DiscussionEngine {
                 };
 
                 if let Some(text) = &content {
+                    // Defense in depth: strip any <document> tags the LLM may have generated
+                    // despite not having document context. The extracted doc is ignored —
+                    // Pass 2 is authoritative for document updates.
+                    let (discussion_text, _) = json_parser::extract_and_strip_document(text);
+
                     tracing::info!(
                         speaker = %speaker_name,
                         turn = self.current_turn,
-                        len = text.len(),
+                        len = discussion_text.len(),
                         had_search = search_context.is_some(),
-                        preview = %truncate_str(text, 200),
+                        preview = %truncate_str(&discussion_text, 200),
                         "GladIAteur response preview"
                     );
                     let mut msg = self.create_message(
                         &speaker_id,
                         &speaker_name,
                         SpeakerRole::Gladiateur,
-                        text,
+                        &discussion_text,
                     );
                     msg.inner_thought = thought.clone();
                     let _ = channel.send(ArenaEvent::MessageComplete {
@@ -785,9 +876,26 @@ impl DiscussionEngine {
                     let own_msgs = self.speaker_own_messages
                         .entry(speaker_id.clone())
                         .or_default();
-                    own_msgs.push(text.clone());
+                    own_msgs.push(discussion_text.clone());
                     if own_msgs.len() > 2 {
                         own_msgs.remove(0);
+                    }
+
+                    // Pass 2: Generate document update via separate LLM call
+                    let llm_params = self.gladiateurs[glad_idx].config.llm_params.clone();
+                    if let Some(updated_doc) = self.generate_document_update(
+                        &speaker_name,
+                        &discussion_text,
+                        &llm_params,
+                        &channel,
+                    ).await {
+                        self.document_content = updated_doc.clone();
+                        let _ = channel.send(ArenaEvent::DocumentUpdated {
+                            speaker_id: speaker_id.clone(),
+                            speaker_name: speaker_name.clone(),
+                            content: updated_doc,
+                            format: self.config.document_format.as_extension().to_string(),
+                        });
                     }
                 }
 
@@ -971,7 +1079,7 @@ impl DiscussionEngine {
             .map(|m| (m.speaker_name.clone(), m.content.clone()))
             .collect();
         let prompt =
-            prompt_builder::build_reaction_prompt(&prev_interventions, &self.config.discussion_language);
+            prompt_builder::build_reaction_prompt(&prev_interventions, &self.config.discussion_language, &self.config.discussion_mode);
         let request = self.ollama_client.build_request(
             &self.gladiateurs[glad_idx].config.system_prompt,
             &prompt,
@@ -1032,6 +1140,7 @@ impl DiscussionEngine {
                                 from_speaker_name: self.gladiateurs[glad_idx].config.name.clone(),
                                 reaction_type: parsed.reaction_type,
                                 target_message_id: target.id.clone(),
+                                justification: parsed.justification.clone(),
                             },
                         };
                         // DEBUG: log exact JSON to verify serialization matches frontend expectations
@@ -1163,6 +1272,7 @@ impl DiscussionEngine {
             group_avg_engagement: avg_engagement,
             discussion_language: self.config.discussion_language.clone(),
             user_name: self.config.user_name.clone(),
+            discussion_mode: self.config.discussion_mode.clone(),
         };
 
         let last_act = self.last_speech_acts.get(speaker_id);
@@ -1179,6 +1289,7 @@ impl DiscussionEngine {
     /// Build a string with recent exchanges for the thought prompt context
     fn build_recent_exchanges(&self, glad_idx: usize) -> String {
         let mut recent = String::new();
+        let is_fiction = self.config.discussion_mode == DiscussionMode::CollaborativeFiction;
 
         // Previous turn messages (from messages_history) — including IArbitre directives
         if self.current_turn > 1 {
@@ -1190,13 +1301,19 @@ impl DiscussionEngine {
                         recent.push_str(&format!(
                             "[MODERATOR] {}: {}\n",
                             m.speaker_name,
-                            truncate_str(&m.content, 300)
+                            truncate_str(&m.content, constants::ORCH_EXCHANGE_MODERATOR)
+                        ));
+                    } else if is_fiction {
+                        // Fiction: show full content for narrative continuity
+                        recent.push_str(&format!(
+                            "--- {} ---\n{}\n\n",
+                            m.speaker_name, m.content
                         ));
                     } else {
                         recent.push_str(&format!(
                             "{}: {}\n",
                             m.speaker_name,
-                            truncate_str(&m.content, 200)
+                            truncate_str(&m.content, constants::ORCH_EXCHANGE_GENERIC)
                         ));
                     }
                 }
@@ -1210,13 +1327,19 @@ impl DiscussionEngine {
                     recent.push_str(&format!(
                         "[MODERATOR] {}: {}\n",
                         m.speaker_name,
-                        truncate_str(&m.content, 300)
+                        truncate_str(&m.content, constants::ORCH_EXCHANGE_MODERATOR)
+                    ));
+                } else if is_fiction {
+                    // Fiction: show full content for narrative continuity
+                    recent.push_str(&format!(
+                        "--- {} ---\n{}\n\n",
+                        m.speaker_name, m.content
                     ));
                 } else {
                     recent.push_str(&format!(
                         "{}: {}\n",
                         m.speaker_name,
-                        truncate_str(&m.content, 200)
+                        truncate_str(&m.content, constants::ORCH_EXCHANGE_GENERIC)
                     ));
                 }
             }
@@ -1243,6 +1366,7 @@ impl DiscussionEngine {
             self.current_turn,
             self.config.max_turns,
             search_results,
+            &self.config.discussion_mode,
         );
         let request = self.ollama_client.build_request(
             &self.gladiateurs[glad_idx].config.system_prompt,
@@ -1304,6 +1428,7 @@ impl DiscussionEngine {
             search_results,
             &all_names,
             dynamic_directive,
+            &self.config.discussion_mode,
         );
 
         let request = self.ollama_client.build_request(
@@ -1353,7 +1478,7 @@ impl DiscussionEngine {
                 );
                 // Retry with higher temp — model may cooperate on second try
                 let mut params = self.gladiateurs[glad_idx].config.llm_params.clone();
-                params.temperature = (params.temperature + 0.3).min(2.0);
+                params.temperature = (params.temperature + constants::TEMP_DIFFICULTY_BOOST).min(constants::TEMP_MAX);
                 let retry = self.ollama_client.build_request(&sys, &usr, &params, false);
                 match self.ollama_client.chat(&retry, cancel).await {
                     Ok(c2) if !c2.is_empty() && !is_model_refusal(&c2) => {
@@ -1383,7 +1508,7 @@ impl DiscussionEngine {
                 );
                 // Retry with higher temp
                 let mut params = self.gladiateurs[glad_idx].config.llm_params.clone();
-                params.temperature = (params.temperature + 0.2).min(2.0);
+                params.temperature = (params.temperature + constants::TEMP_REFUSAL_BOOST).min(constants::TEMP_MAX);
                 let retry = self.ollama_client.build_request(&sys, &usr, &params, false);
                 match self.ollama_client.chat(&retry, cancel).await {
                     Ok(c) if !c.is_empty() => {
@@ -1433,23 +1558,22 @@ impl DiscussionEngine {
 
         let emo = &self.gladiateurs[glad_idx].emotions;
 
-        // Base probability: 20%
-        let mut probability: f64 = 0.20;
+        let mut probability: f64 = constants::THINK_BASE_PROBABILITY;
 
         // High frustration → more likely to think deeply
-        if emo.frustration > 70 {
-            probability += 0.15;
+        if emo.frustration > constants::THINK_FRUSTRATION_THRESHOLD {
+            probability += constants::THINK_FRUSTRATION_BOOST;
         }
 
         // High engagement → invested, thinks more
-        if emo.engagement > 70 {
-            probability += 0.10;
+        if emo.engagement > constants::THINK_ENGAGEMENT_THRESHOLD {
+            probability += constants::THINK_ENGAGEMENT_BOOST;
         }
 
         // End of discussion → synthesize thoughts
         if let Some(max) = self.config.max_turns {
-            if self.current_turn + 2 >= max {
-                probability += 0.15;
+            if self.current_turn + constants::THINK_NEAR_END_TURNS >= max {
+                probability += constants::THINK_NEAR_END_BOOST;
             }
         }
 
@@ -1459,12 +1583,12 @@ impl DiscussionEngine {
             .get(&self.gladiateurs[glad_idx].config.id)
             .copied()
             .unwrap_or((0, 0));
-        if dislikes >= 2 {
-            probability += 0.10;
+        if dislikes >= constants::EMOTION_CONTRADICTION_THRESHOLD {
+            probability += constants::THINK_CONTRADICTED_BOOST;
         }
 
-        // Cap at 60% to keep it non-systematic
-        probability = probability.min(0.60);
+        // Cap to keep it non-systematic
+        probability = probability.min(constants::THINK_MAX_PROBABILITY);
 
         use rand::Rng;
         rand::thread_rng().gen_bool(probability)
@@ -1494,6 +1618,7 @@ impl DiscussionEngine {
             search_results,
             &all_names,
             dynamic_directive,
+            &self.config.discussion_mode,
         );
 
         let mut request = self.ollama_client.build_request(
@@ -1634,6 +1759,7 @@ impl DiscussionEngine {
             intervention,
             &self.config.topic,
             &self.config.discussion_language,
+            &self.config.discussion_mode,
         );
         let request = self.ollama_client.build_request(
             &self.arbitre.config.system_prompt,
@@ -1658,7 +1784,7 @@ impl DiscussionEngine {
                     }
                     return;
                 }
-                let duration = moderation.ban_duration.clamp(1, 3);
+                let duration = moderation.ban_duration.clamp(constants::MODERATION_BAN_MIN_TURNS, constants::MODERATION_BAN_MAX_TURNS);
                 self.gladiateurs[glad_idx].ban_remaining_turns = duration;
                 self.gladiateurs[glad_idx].ban_issued_this_turn = true;
 
@@ -1784,21 +1910,23 @@ impl DiscussionEngine {
         }
 
         let turn = self.current_turn;
+        let is_fiction = self.config.discussion_mode == DiscussionMode::CollaborativeFiction;
         for g in &mut self.gladiateurs {
-            memory_manager::add_turn_to_memory(&mut g.memory, turn, &self.turn_messages);
+            memory_manager::add_turn_to_memory(&mut g.memory, turn, &self.turn_messages, is_fiction);
         }
-        memory_manager::add_turn_to_memory(&mut self.arbitre.memory, turn, &self.turn_messages);
+        memory_manager::add_turn_to_memory(&mut self.arbitre.memory, turn, &self.turn_messages, is_fiction);
 
         // LLM-based contextual + positional update
         let contextual_summary = &self.arbitre.memory.contextual_summary;
         let positional_json = memory_manager::positional_map_to_json(&self.arbitre.memory);
-        let turn_text = memory_manager::format_turn_messages(&self.turn_messages);
+        let turn_text = memory_manager::format_turn_messages(&self.turn_messages, is_fiction);
         let prompt = prompt_builder::build_memory_update_prompt(
             contextual_summary,
             &positional_json,
             turn,
             &turn_text,
             &self.config.discussion_language,
+            &self.config.discussion_mode,
         );
         let mem_sys = self.memory_summarizer_prompt();
         let request = self.ollama_client.build_request(
@@ -1814,7 +1942,7 @@ impl DiscussionEngine {
                 // Empty response — retry once with higher temperature
                 tracing::warn!(turn = self.current_turn, "Memory update returned empty — retrying");
                 let mut retry_params = self.arbitre.config.llm_params.clone();
-                retry_params.temperature = (retry_params.temperature + 0.3).min(2.0);
+                retry_params.temperature = (retry_params.temperature + constants::TEMP_DIFFICULTY_BOOST).min(constants::TEMP_MAX);
                 let retry = self.ollama_client.build_request(
                     &mem_sys,
                     &prompt,
@@ -1848,11 +1976,14 @@ impl DiscussionEngine {
     }
 
     async fn generate_synthesis(&self, search_results: Option<&str>, channel: &Channel<ArenaEvent>) {
+        let document_context = self.build_document_context_for_synthesis();
         let prompt = prompt_builder::build_synthesis_prompt(
             &self.config.topic,
             &self.arbitre.memory,
             &self.config.discussion_language,
             search_results,
+            &self.config.discussion_mode,
+            document_context.as_deref(),
         );
         let request = self.ollama_client.build_request(
             &self.arbitre.config.system_prompt,
@@ -1900,7 +2031,7 @@ impl DiscussionEngine {
         }
         let pool_remaining = pool.saturating_sub(self.web_searches_used_pool);
         let max_queries = pool_remaining.min(1);
-        let global_remaining = TAVILY_FREE_MONTHLY_QUOTA.saturating_sub(global_usage);
+        let global_remaining = constants::TAVILY_FREE_MONTHLY_QUOTA.saturating_sub(global_usage);
         let max_queries = max_queries.min(global_remaining);
         (max_queries > 0, max_queries)
     }
@@ -1928,7 +2059,7 @@ impl DiscussionEngine {
         } else {
             // LLM decision (non-streaming, JSON)
             let mut decision_params = llm_params.clone();
-            decision_params.temperature = 0.3;
+            decision_params.temperature = constants::TEMP_VOTING;
 
             let prompt = prompt_builder::build_web_search_decision_prompt(
                 &self.config.topic,
@@ -2047,7 +2178,7 @@ impl DiscussionEngine {
         search_type: &str,
     ) -> String {
         let mut dp = llm_params.clone();
-        dp.temperature = 0.3;
+        dp.temperature = constants::TEMP_VOTING;
         let request = self.ollama_client.build_request(system_prompt, prompt, &dp, true);
         let decision = match self.ollama_client.chat(&request, self.cancel_token.clone()).await {
             Ok(raw) => {
@@ -2229,7 +2360,7 @@ impl DiscussionEngine {
 
         // Build recent context from turn messages
         let recent_context = self.turn_messages.iter()
-            .map(|m| format!("[{}] {}", m.speaker_name, truncate_str(&m.content, 200)))
+            .map(|m| format!("[{}] {}", m.speaker_name, truncate_str(&m.content, constants::ORCH_EMOTION_CONTEXT)))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -2262,9 +2393,9 @@ impl DiscussionEngine {
         );
 
         let sys_prompt = match self.config.discussion_language.as_str() {
-            "en" => "You are an emotion analyst. Respond only with JSON.",
-            "zh" => "你是情绪分析师。仅用JSON回复。",
-            _ => "Tu es un analyste émotionnel. Réponds uniquement en JSON.",
+            "en" => "You are an emotion analyst. Base your analysis strictly on the exchanges and reactions provided. Do not invent events. Respond only with JSON.",
+            "zh" => "你是情绪分析师。严格根据提供的交流和反应进行分析。不要捏造事件。仅用JSON回复。",
+            _ => "Tu es un analyste émotionnel. Base ton analyse strictement sur les échanges et réactions fournis. N'invente pas d'événements. Réponds uniquement en JSON.",
         };
 
         let request = self.ollama_client.build_request(
@@ -2342,14 +2473,13 @@ impl DiscussionEngine {
     /// Record emotion history snapshots and emit EmotionHistoryUpdate events.
     fn record_emotion_history(&mut self, channel: &Channel<ArenaEvent>) {
         let turn = self.current_turn;
-        const MAX_HISTORY: usize = 30;
 
         // Arbitre
         self.arbitre.emotion_history.push(EmotionSnapshot {
             turn,
             emotions: self.arbitre.emotions.clone(),
         });
-        if self.arbitre.emotion_history.len() > MAX_HISTORY {
+        if self.arbitre.emotion_history.len() > constants::ORCH_MAX_EMOTION_HISTORY {
             self.arbitre.emotion_history.remove(0);
         }
         let _ = channel.send(ArenaEvent::EmotionHistoryUpdate {
@@ -2363,7 +2493,7 @@ impl DiscussionEngine {
                 turn,
                 emotions: g.emotions.clone(),
             });
-            if g.emotion_history.len() > MAX_HISTORY {
+            if g.emotion_history.len() > constants::ORCH_MAX_EMOTION_HISTORY {
                 g.emotion_history.remove(0);
             }
             let _ = channel.send(ArenaEvent::EmotionHistoryUpdate {
@@ -2464,11 +2594,166 @@ impl DiscussionEngine {
             timestamp: chrono::Utc::now(),
         }
     }
+
+    /// Build read-only document context for synthesis, or None if document format is disabled.
+    fn build_document_context_for_synthesis(&self) -> Option<String> {
+        if self.config.document_format == DocumentFormat::None {
+            return None;
+        }
+        Some(prompt_builder::build_document_context_readonly(
+            &self.document_content,
+            self.config.document_format.as_extension(),
+            &self.config.discussion_language,
+            &self.config.discussion_mode,
+        ))
+    }
+
+    /// Pass 2: Generate document update via separate non-streaming LLM call.
+    /// The LLM receives only the discussion text + current document, and outputs the updated document.
+    /// Returns the updated document content, or None if document mode is disabled or an error occurs.
+    async fn generate_document_update(
+        &self,
+        speaker_name: &str,
+        discussion_text: &str,
+        llm_params: &LlmParams,
+        _channel: &Channel<ArenaEvent>,
+    ) -> Option<String> {
+        if self.config.document_format == DocumentFormat::None {
+            return None;
+        }
+        if self.cancel_token.is_cancelled() {
+            return None;
+        }
+
+        tracing::info!(speaker = %speaker_name, "Pass 2: generating document update");
+
+        let (sys, usr) = prompt_builder::build_document_update_prompt(
+            &self.document_content,
+            self.config.document_format.as_extension(),
+            discussion_text,
+            &self.config.discussion_mode,
+            &self.config.discussion_language,
+            &self.config.topic,
+        );
+
+        // Use speaker's LLM params with enough tokens for the full document.
+        // The document grows over turns — estimate current tokens (≈ chars/3 for multilingual)
+        // and set num_predict to 2× current size + padding, so the LLM can reproduce + extend.
+        let mut params = llm_params.clone();
+        let estimated_doc_tokens = (self.document_content.len() / 3) as i32;
+        params.num_predict = params.num_predict.max(estimated_doc_tokens * 2 + 1024).max(4096);
+
+        let request = self.ollama_client.build_request(&sys, &usr, &params, false);
+
+        match self.ollama_client.chat(&request, self.cancel_token.clone()).await {
+            Ok(raw) if !raw.trim().is_empty() => {
+                // If the LLM wrapped in <document> tags, extract; otherwise use as-is
+                let doc = if let (_, Some(extracted)) = json_parser::extract_and_strip_document(&raw) {
+                    extracted
+                } else {
+                    raw.trim().to_string()
+                };
+                tracing::info!(
+                    speaker = %speaker_name,
+                    len = doc.len(),
+                    preview = %truncate_str(&doc, 200),
+                    "Document update generated"
+                );
+                Some(doc)
+            }
+            Ok(_) => {
+                tracing::warn!(speaker = %speaker_name, "Pass 2 returned empty — document unchanged");
+                None
+            }
+            Err(OllamaError::Cancelled) => None,
+            Err(e) => {
+                tracing::warn!(speaker = %speaker_name, error = %e, "Pass 2 document update failed — document unchanged");
+                None
+            }
+        }
+    }
+
+    /// Ask a gladiateur whether they want to respond in UserDriven mode.
+    /// Returns true if the speaker wants to respond, false if they pass.
+    async fn ask_respond_or_pass(&self, glad_idx: usize) -> bool {
+        let recent = self.build_recent_exchanges(glad_idx);
+        let prompt = mode_prompts::build_respond_or_pass_prompt(
+            &self.config.topic,
+            &recent,
+            &self.gladiateurs[glad_idx].config.name,
+            &self.config.discussion_language,
+        );
+        let mut params = self.gladiateurs[glad_idx].config.llm_params.clone();
+        params.num_predict = 50; // Short response only
+        let request = self.ollama_client.build_request(
+            &self.gladiateurs[glad_idx].config.system_prompt,
+            &prompt,
+            &params,
+            false,
+        );
+        let cancel = self.cancel_token.clone();
+        // No-op callback: respond-or-pass is internal logic, tokens should NOT stream to frontend
+        match self.ollama_client.chat_streaming(
+            &request,
+            |_| {},
+            cancel,
+        ).await {
+            Ok(raw) => {
+                // Parse {"respond": true/false}
+                if let Ok(val) = json_parser::parse_json_response::<serde_json::Value>(&raw) {
+                    val.get("respond").and_then(|v| v.as_bool()).unwrap_or(true)
+                } else {
+                    true // Default to responding if parsing fails
+                }
+            }
+            Err(e) => {
+                tracing::warn!("respond-or-pass LLM failed for {}: {e}", self.gladiateurs[glad_idx].config.name);
+                true // Default to responding on error
+            }
+        }
+    }
+
+    /// Generate a Socratic question from IArbitre.
+    async fn generate_socratic_question(&self) -> Option<String> {
+        let recent = self.turn_messages.iter()
+            .chain(self.messages_history.iter().rev().take(constants::ORCH_RECENT_MESSAGES_TAKE))
+            .map(|m| format!("{}: {}", m.speaker_name, truncate_str(&m.content, constants::ORCH_SOCRATIC_CONTEXT)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = mode_prompts::build_socratic_question_prompt(
+            &self.config.topic,
+            &recent,
+            &self.config.discussion_language,
+        );
+        let mut params = self.arbitre.config.llm_params.clone();
+        params.num_predict = 200; // Short question
+        let request = self.ollama_client.build_request(
+            &self.arbitre.config.system_prompt,
+            &prompt,
+            &params,
+            false,
+        );
+        let cancel = self.cancel_token.clone();
+        // No-op callback: the full question is emitted as MessageComplete at the call site
+        match self.ollama_client.chat_streaming(
+            &request,
+            |_| {},
+            cancel,
+        ).await {
+            Ok(text) => {
+                if text.is_empty() { None } else { Some(text) }
+            }
+            Err(e) => {
+                tracing::warn!("Socratic question generation failed: {e}");
+                None
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TAVILY_FREE_MONTHLY_QUOTA;
+    use crate::constants;
 
     /// Test the web pool quota logic directly (same as can_search_web body)
     fn check_web_pool(pool: u32, pool_used: u32, global_usage: u32, has_tavily: bool) -> (bool, u32) {
@@ -2477,7 +2762,7 @@ mod tests {
         }
         let pool_remaining = pool.saturating_sub(pool_used);
         let max_queries = pool_remaining.min(1);
-        let global_remaining = TAVILY_FREE_MONTHLY_QUOTA.saturating_sub(global_usage);
+        let global_remaining = constants::TAVILY_FREE_MONTHLY_QUOTA.saturating_sub(global_usage);
         let max_queries = max_queries.min(global_remaining);
         (max_queries > 0, max_queries)
     }

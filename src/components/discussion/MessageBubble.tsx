@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BookOpen, Brain, Globe } from "lucide-react";
 import { SpeakerBadge } from "./SpeakerBadge";
+import { MathText } from "@/components/shared/MathText";
 import { cn } from "@/lib/utils";
 import type { Message, SpeakerRole } from "@/lib/types";
 
@@ -42,7 +43,7 @@ function highlightNames(
 ): React.ReactNode[] {
   // Filter out empty/falsy names to avoid regex issues
   const validNames = participantNames.filter((n) => n && n.length > 1);
-  if (validNames.length === 0) return [text];
+  if (validNames.length === 0) return [<MathText key={0} text={text} />];
   // Build expanded list: full names + short forms (article-stripped)
   const allForms = new Set<string>();
   for (const n of validNames) {
@@ -65,7 +66,7 @@ function highlightNames(
         </span>
       );
     }
-    return part;
+    return <MathText key={i} text={part} />;
   });
 }
 
@@ -182,6 +183,7 @@ export function MessageBubble({
                     ? "bg-green-500/10 text-green-500"
                     : "bg-red-500/10 text-red-500",
                 )}
+                title={r.justification ?? undefined}
               >
                 {r.reactionType === "like" ? "👍" : "👎"}
                 {reactorEmoji && <span>{reactorEmoji}</span>}

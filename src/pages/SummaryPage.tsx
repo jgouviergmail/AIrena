@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { History, Home, MessageSquarePlus, Bot, Users, Repeat } from "lucide-react";
+import { Download, History, Home, MessageSquarePlus, Bot, Users, Repeat } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { ReadOnlyFeed } from "@/components/discussion/ReadOnlyFeed";
 import { useArenaStore } from "@/stores/useArenaStore";
@@ -10,6 +10,7 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import { getProfileEmoji, ROLE_EMOJIS } from "@/lib/profile-emoji";
 import { SimpleMd } from "@/components/shared/SimpleMd";
 import { cn } from "@/lib/utils";
+import { downloadTextFile } from "@/lib/tauri-api";
 import type { ParticipantInfo, SpeakerRole } from "@/lib/types";
 
 export default function SummaryPage() {
@@ -24,6 +25,9 @@ export default function SummaryPage() {
   const arbitre = useSetupStore((s) => s.arbitre);
   const username = useSettingsStore((s) => s.settings.username);
   const modelName = useSettingsStore((s) => s.settings.ollamaModel);
+  const discussionMode = useSetupStore((s) => s.discussionMode);
+  const documentContent = useArenaStore((s) => s.documentContent);
+  const documentFormat = useArenaStore((s) => s.documentFormat);
 
   // Compute turns from messages as robust fallback (currentTurn can be undefined)
   const turnsCompleted = currentTurn
@@ -67,6 +71,11 @@ export default function SummaryPage() {
             <div className="rounded-xl border border-border bg-card p-4">
               <p className="text-xs text-muted-foreground">{t("summary.topic")}</p>
               <p className="mt-1 text-base font-semibold text-foreground">{topic || "-"}</p>
+              {discussionMode !== "debate" && (
+                <span className="mt-1 inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                  {t(`setup.mode_${discussionMode}`)}
+                </span>
+              )}
             </div>
 
             <div className="grid grid-cols-3 gap-3">
@@ -147,6 +156,19 @@ export default function SummaryPage() {
             <ReadOnlyFeed messages={messages} participants={participants} />
           )}
 
+          {/* Document download */}
+          {documentContent && documentFormat !== "none" && (
+            <div className="flex justify-center">
+              <button
+                onClick={() => downloadTextFile(documentContent, `airena-document.${documentFormat}`).catch((e) => console.error("Download failed:", e))}
+                className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                <Download className="h-4 w-4" />
+                {t("summary.downloadDocument")} (.{documentFormat})
+              </button>
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex justify-center gap-4">
             <button
@@ -176,6 +198,7 @@ export default function SummaryPage() {
     </>
   );
 }
+
 
 function StatCard({
   label,

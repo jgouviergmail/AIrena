@@ -25,6 +25,12 @@ pub struct SaveDiscussionRequest {
     pub synthesis: String,
     pub created_at: String,
     pub messages: Vec<Message>,
+    #[serde(default)]
+    pub discussion_mode: String,
+    #[serde(default)]
+    pub document_content: String,
+    #[serde(default)]
+    pub document_format: String,
 }
 
 /// Lightweight summary for listing discussions (no messages).
@@ -39,6 +45,8 @@ pub struct DiscussionSummary {
     pub total_turns: u32,
     pub has_synthesis: bool,
     pub created_at: String,
+    pub discussion_mode: String,
+    pub document_format: String,
 }
 
 /// Full discussion detail with all messages.
@@ -54,4 +62,7 @@ pub struct DiscussionDetail {
     pub synthesis: String,
     pub created_at: String,
     pub messages: Vec<Message>,
+    pub discussion_mode: String,
+    pub document_content: String,
+    pub document_format: String,
 }

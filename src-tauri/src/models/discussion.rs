@@ -12,6 +12,41 @@ pub enum TurnDistribution {
     Authoritarian,
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum DiscussionMode {
+    #[default]
+    Debate,
+    Ideation,
+    CoConstruction,
+    UserDriven,
+    Socratic,
+    Tutorial,
+    CritiqueReview,
+    CollaborativeFiction,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum DocumentFormat {
+    #[default]
+    None,
+    Txt,
+    Md,
+    Csv,
+}
+
+impl DocumentFormat {
+    pub fn as_extension(&self) -> &str {
+        match self {
+            Self::None => "none",
+            Self::Txt => "txt",
+            Self::Md => "md",
+            Self::Csv => "csv",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DiscussionStatus {
     Active,
@@ -38,4 +73,10 @@ pub struct DiscussionConfig {
     /// Shared between all gladiateurs, max 1 per gladiateur per turn.
     #[serde(default)]
     pub wiki_search_pool: u32,
+    /// Discussion mode (debate, ideation, co-construction, etc.)
+    #[serde(default)]
+    pub discussion_mode: DiscussionMode,
+    /// Document format for co-construction (none = disabled)
+    #[serde(default)]
+    pub document_format: DocumentFormat,
 }

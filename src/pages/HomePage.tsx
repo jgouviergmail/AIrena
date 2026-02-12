@@ -2,10 +2,22 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { History, MessageSquarePlus, Settings, Swords } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
+import { useArenaStore } from "@/stores/useArenaStore";
+import { useSetupStore } from "@/stores/useSetupStore";
 
 export default function HomePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const status = useArenaStore((s) => s.status);
+
+  const isDiscussionActive =
+    status === "running" || status === "paused" || status === "synthesizing";
+
+  const handleNewDiscussion = () => {
+    useArenaStore.getState().reset();
+    useSetupStore.getState().reset();
+    navigate("/setup");
+  };
 
   return (
     <>
@@ -24,13 +36,23 @@ export default function HomePage() {
         </div>
 
         <div className="flex gap-4">
-          <button
-            onClick={() => navigate("/setup")}
-            className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            <MessageSquarePlus className="h-4 w-4" />
-            {t("home.startDiscussion")}
-          </button>
+          {isDiscussionActive ? (
+            <button
+              onClick={() => navigate("/arena")}
+              className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              <Swords className="h-4 w-4" />
+              {t("home.resumeDiscussion")}
+            </button>
+          ) : (
+            <button
+              onClick={handleNewDiscussion}
+              className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+              {t("home.startDiscussion")}
+            </button>
+          )}
           <button
             onClick={() => navigate("/history")}
             className="flex items-center gap-2 rounded-lg border border-border bg-card px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"

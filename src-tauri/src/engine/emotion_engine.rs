@@ -1,3 +1,4 @@
+use crate::constants;
 use crate::models::emotion::EmotionalProfile;
 
 /// Context for rule-based emotion update
@@ -9,14 +10,14 @@ pub struct EmotionContext {
 }
 
 impl EmotionContext {
-    /// Heuristic: contradiction = >= 2 dislikes received
+    /// Heuristic: contradiction = dislikes >= threshold
     pub fn was_contradicted(&self) -> bool {
-        self.dislikes_received >= 2
+        self.dislikes_received >= constants::EMOTION_CONTRADICTION_THRESHOLD
     }
 
-    /// Heuristic: support = >= 2 likes received
+    /// Heuristic: support = likes >= threshold
     pub fn was_supported(&self) -> bool {
-        self.likes_received >= 2
+        self.likes_received >= constants::EMOTION_SUPPORT_THRESHOLD
     }
 }
 
@@ -25,47 +26,55 @@ pub fn update_emotions(current: &EmotionalProfile, ctx: &EmotionContext) -> Emot
 
     // Likes -> confiance up, engagement up (compute in u16 to avoid u8 overflow)
     if ctx.likes_received > 0 {
-        let delta_conf = ((5u16 * ctx.likes_received as u16).min(15)) as u8;
-        let delta_eng = ((3u16 * ctx.likes_received as u16).min(10)) as u8;
+        let delta_conf = ((constants::EMOTION_LIKE_CONF_FACTOR * ctx.likes_received as u16).min(constants::EMOTION_LIKE_CONF_CAP)) as u8;
+        let delta_eng = ((constants::EMOTION_LIKE_ENG_FACTOR * ctx.likes_received as u16).min(constants::EMOTION_LIKE_ENG_CAP)) as u8;
         new.confiance = add_clamped(new.confiance, delta_conf);
         new.engagement = add_clamped(new.engagement, delta_eng);
     }
 
     // Dislikes -> frustration up, confiance down
     if ctx.dislikes_received > 0 {
-        let delta_frust = ((5u16 * ctx.dislikes_received as u16).min(15)) as u8;
-        let delta_conf = ((3u16 * ctx.dislikes_received as u16).min(10)) as u8;
+        let delta_frust = ((constants::EMOTION_DISLIKE_FRUST_FACTOR * ctx.dislikes_received as u16).min(constants::EMOTION_DISLIKE_FRUST_CAP)) as u8;
+        let delta_conf = ((constants::EMOTION_DISLIKE_CONF_FACTOR * ctx.dislikes_received as u16).min(constants::EMOTION_DISLIKE_CONF_CAP)) as u8;
         new.frustration = add_clamped(new.frustration, delta_frust);
         new.confiance = sub_clamped(new.confiance, delta_conf);
     }
 
     // Contradiction -> frustration up, engagement up
     if ctx.was_contradicted() {
-        new.frustration = add_clamped(new.frustration, 8);
-        new.engagement = add_clamped(new.engagement, 5);
+        new.frustration = add_clamped(new.frustration, constants::EMOTION_CONTRADICTION_FRUST);
+        new.engagement = add_clamped(new.engagement, constants::EMOTION_CONTRADICTION_ENG);
     }
 
     // Support -> enthousiasme up, confiance up
     if ctx.was_supported() {
-        new.enthousiasme = add_clamped(new.enthousiasme, 8);
-        new.confiance = add_clamped(new.confiance, 5);
+        new.enthousiasme = add_clamped(new.enthousiasme, constants::EMOTION_SUPPORT_ENTHOUSIASME);
+        new.confiance = add_clamped(new.confiance, constants::EMOTION_SUPPORT_CONF);
     }
 
     // Ban -> frustration way up, engagement down
     if ctx.was_recently_banned {
-        new.frustration = add_clamped(new.frustration, 15);
-        new.engagement = sub_clamped(new.engagement, 10);
+        new.frustration = add_clamped(new.frustration, constants::EMOTION_BAN_FRUST);
+        new.engagement = sub_clamped(new.engagement, constants::EMOTION_BAN_ENG);
     }
 
     // Stagnation -> engagement down, curiosite down
     if ctx.is_discussion_stagnating {
-        new.engagement = sub_clamped(new.engagement, 5);
-        new.curiosite = sub_clamped(new.curiosite, 5);
+        new.engagement = sub_clamped(new.engagement, constants::EMOTION_STAGNATION_ENG);
+        new.curiosite = sub_clamped(new.curiosite, constants::EMOTION_STAGNATION_CURIOSITE);
     }
 
-    // Natural decay: extremes return toward 50
-    new.frustration = decay_toward(new.frustration, 50, 2);
-    new.enthousiasme = decay_toward(new.enthousiasme, 50, 1);
+    // Natural decay: extremes return toward target
+    new.frustration = decay_toward(
+        new.frustration,
+        constants::EMOTION_DECAY_FRUSTRATION_TARGET,
+        constants::EMOTION_DECAY_FRUSTRATION_RATE,
+    );
+    new.enthousiasme = decay_toward(
+        new.enthousiasme,
+        constants::EMOTION_DECAY_ENTHUSIASM_TARGET,
+        constants::EMOTION_DECAY_ENTHUSIASM_RATE,
+    );
 
     new
 }
@@ -91,9 +100,6 @@ fn decay_toward(val: u8, target: u8, rate: u8) -> u8 {
     }
 }
 
-pub const HIGH_THRESHOLD: u8 = 85;
-pub const LOW_THRESHOLD: u8 = 15;
-
 /// Detect thresholds that were **newly** crossed between prev and current.
 /// Returns `[(axis_name, "high"|"low", value)]`.
 pub fn detect_thresholds(
@@ -110,30 +116,33 @@ pub fn detect_thresholds(
         ("enthousiasme", prev.enthousiasme, current.enthousiasme),
     ];
     for (name, p, c) in axes {
-        if p < HIGH_THRESHOLD && c >= HIGH_THRESHOLD {
+        if p < constants::EMOTION_HIGH_THRESHOLD && c >= constants::EMOTION_HIGH_THRESHOLD {
             crossed.push((name.to_string(), "high".to_string(), c));
         }
-        if p > LOW_THRESHOLD && c <= LOW_THRESHOLD {
+        if p > constants::EMOTION_LOW_THRESHOLD && c <= constants::EMOTION_LOW_THRESHOLD {
             crossed.push((name.to_string(), "low".to_string(), c));
         }
     }
     crossed
 }
 
+/// Compute the contagion delta for a single axis.
+fn contagion_delta(avg_val: u8, current_val: u8, rate: f32, max_delta: f32) -> i8 {
+    let diff = avg_val as f32 - current_val as f32;
+    (diff * rate).round().clamp(-max_delta, max_delta) as i8
+}
+
 /// Apply emotional contagion: move target toward the group average.
-/// The contagion is weak (±3 max per axis, 5% of distance).
 pub fn apply_contagion(avg: &EmotionalProfile, target: &mut EmotionalProfile) {
     use super::apply_i8_clamped;
-    fn contagion_delta(avg_val: u8, current_val: u8) -> i8 {
-        let diff = avg_val as f32 - current_val as f32;
-        (diff * 0.05).round().clamp(-3.0, 3.0) as i8
-    }
-    target.engagement = apply_i8_clamped(target.engagement, contagion_delta(avg.engagement, target.engagement));
-    target.accord = apply_i8_clamped(target.accord, contagion_delta(avg.accord, target.accord));
-    target.confiance = apply_i8_clamped(target.confiance, contagion_delta(avg.confiance, target.confiance));
-    target.frustration = apply_i8_clamped(target.frustration, contagion_delta(avg.frustration, target.frustration));
-    target.curiosite = apply_i8_clamped(target.curiosite, contagion_delta(avg.curiosite, target.curiosite));
-    target.enthousiasme = apply_i8_clamped(target.enthousiasme, contagion_delta(avg.enthousiasme, target.enthousiasme));
+    let rate = constants::EMOTION_CONTAGION_RATE;
+    let max = constants::EMOTION_CONTAGION_MAX_DELTA;
+    target.engagement = apply_i8_clamped(target.engagement, contagion_delta(avg.engagement, target.engagement, rate, max));
+    target.accord = apply_i8_clamped(target.accord, contagion_delta(avg.accord, target.accord, rate, max));
+    target.confiance = apply_i8_clamped(target.confiance, contagion_delta(avg.confiance, target.confiance, rate, max));
+    target.frustration = apply_i8_clamped(target.frustration, contagion_delta(avg.frustration, target.frustration, rate, max));
+    target.curiosite = apply_i8_clamped(target.curiosite, contagion_delta(avg.curiosite, target.curiosite, rate, max));
+    target.enthousiasme = apply_i8_clamped(target.enthousiasme, contagion_delta(avg.enthousiasme, target.enthousiasme, rate, max));
 }
 
 /// Compute the average emotional profile from a slice of profiles

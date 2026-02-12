@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Bot, Calendar, Repeat, Trash2, Users } from "lucide-react";
+import { ArrowLeft, Bot, Calendar, Download, Repeat, Trash2, Users } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { ReadOnlyFeed } from "@/components/discussion/ReadOnlyFeed";
 import { SimpleMd } from "@/components/shared/SimpleMd";
-import { getDiscussionHistory, deleteDiscussionHistory } from "@/lib/tauri-api";
+import { getDiscussionHistory, deleteDiscussionHistory, downloadTextFile } from "@/lib/tauri-api";
 import { cn } from "@/lib/utils";
 import type { DiscussionDetail } from "@/lib/types";
 
@@ -70,6 +70,11 @@ export default function HistoryDetailPage() {
           <div className="rounded-xl border border-border bg-card p-4">
             <p className="text-xs text-muted-foreground">{t("summary.topic")}</p>
             <p className="mt-1 text-base font-semibold text-foreground">{detail.topic}</p>
+            {detail.discussionMode && detail.discussionMode !== "debate" && (
+              <span className="mt-1 inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                {t(`setup.mode_${detail.discussionMode}`)}
+              </span>
+            )}
           </div>
 
           {/* Stats */}
@@ -149,6 +154,19 @@ export default function HistoryDetailPage() {
               ) : (
                 <p className="text-sm text-muted-foreground">{t("summary.noSynthesis")}</p>
               )}
+            </div>
+          )}
+
+          {/* Document download */}
+          {detail.documentContent && detail.documentFormat && detail.documentFormat !== "none" && (
+            <div className="flex justify-center">
+              <button
+                onClick={() => downloadTextFile(detail.documentContent, `airena-document.${detail.documentFormat}`).catch((e) => console.error("Download failed:", e))}
+                className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                <Download className="h-4 w-4" />
+                {t("summary.downloadDocument")} (.{detail.documentFormat})
+              </button>
             </div>
           )}
 

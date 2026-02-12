@@ -2,6 +2,8 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import { History, Home, MessageSquarePlus, Settings, Swords } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useArenaStore } from "@/stores/useArenaStore";
+import { useSetupStore } from "@/stores/useSetupStore";
 
 const navItems = [
   { key: "home", path: "/", icon: Home, labelKey: "nav.home" },
@@ -29,10 +31,20 @@ export function Sidebar() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
+  const status = useArenaStore((s) => s.status);
 
   const isArenaActive =
     location.pathname === "/arena" || location.pathname === "/summary";
   const isHistoryActive = location.pathname.startsWith("/history");
+  const isDiscussionActive =
+    status === "running" || status === "paused" || status === "synthesizing";
+  const showArenaButton = status !== "idle";
+
+  const handleSetupClick = () => {
+    useArenaStore.getState().reset();
+    useSetupStore.getState().reset();
+    navigate("/setup");
+  };
 
   return (
     <aside className="flex h-full w-16 flex-col items-center border-r border-sidebar-border bg-sidebar py-4">
@@ -45,6 +57,28 @@ export function Sidebar() {
           const isActive = item.key === "history"
             ? isHistoryActive
             : location.pathname === item.path;
+
+          // Setup button: disabled during active discussion, resets stores on click
+          if (item.key === "setup") {
+            return (
+              <button
+                key={item.key}
+                onClick={isDiscussionActive ? undefined : handleSetupClick}
+                title={isDiscussionActive ? t("nav.discussionRunning") : t(item.labelKey)}
+                className={cn(
+                  "flex h-10 w-10 items-center justify-center rounded-lg transition-colors",
+                  isDiscussionActive
+                    ? "pointer-events-none opacity-30"
+                    : isActive
+                      ? "bg-sidebar-accent text-sidebar-primary"
+                      : "text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+                )}
+              >
+                <item.icon className="h-5 w-5" />
+              </button>
+            );
+          }
+
           return (
             <button
               key={item.key}
@@ -62,10 +96,17 @@ export function Sidebar() {
           );
         })}
 
-        {isArenaActive && (
+        {showArenaButton && (
           <button
-            title={t("arena.title")}
-            className="flex h-10 w-10 items-center justify-center rounded-lg bg-sidebar-accent text-sidebar-primary"
+            onClick={() => navigate("/arena")}
+            title={isDiscussionActive ? t("nav.backToDiscussion") : t("arena.title")}
+            className={cn(
+              "flex h-10 w-10 items-center justify-center rounded-lg transition-colors",
+              isArenaActive
+                ? "bg-sidebar-accent text-sidebar-primary"
+                : "text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+              isDiscussionActive && !isArenaActive && "animate-pulse",
+            )}
           >
             <Swords className="h-5 w-5" />
           </button>

@@ -49,7 +49,12 @@ export interface DiscussionConfig {
   userInterventionTimeoutSecs: number;
   webSearchPool: number;
   wikiSearchPool: number;
+  discussionMode: DiscussionMode;
+  documentFormat: DocumentFormat;
 }
+
+export type DiscussionMode = "debate" | "ideation" | "coConstruction" | "userDriven" | "socratic" | "tutorial" | "critiqueReview" | "collaborativeFiction";
+export type DocumentFormat = "none" | "txt" | "md" | "csv";
 
 export type SpeakerRole = "IArbitre" | "GladIAteur" | "user";
 export type ReactionType = "like" | "dislike";
@@ -59,6 +64,7 @@ export interface Reaction {
   fromSpeakerName: string;
   reactionType: ReactionType;
   targetMessageId: string;
+  justification?: string;
 }
 
 export interface Message {
@@ -144,6 +150,9 @@ export interface SaveDiscussionRequest {
   synthesis: string;
   createdAt: string;
   messages: Message[];
+  discussionMode: string;
+  documentContent: string;
+  documentFormat: string;
 }
 
 export interface DiscussionSummary {
@@ -155,6 +164,8 @@ export interface DiscussionSummary {
   totalTurns: number;
   hasSynthesis: boolean;
   createdAt: string;
+  discussionMode: string;
+  documentFormat: string;
 }
 
 export interface DiscussionDetail {
@@ -167,6 +178,9 @@ export interface DiscussionDetail {
   synthesis: string;
   createdAt: string;
   messages: Message[];
+  discussionMode: string;
+  documentContent: string;
+  documentFormat: string;
 }
 
 // ArenaEvent — tagged union (discriminated via "type" field)
@@ -240,6 +254,15 @@ export type ArenaEvent =
         resultsCount: number;
         poolUsed: number;
         articleUrls: string[];
+      };
+    }
+  | {
+      type: "documentUpdated";
+      data: {
+        speakerId: string;
+        speakerName: string;
+        content: string;
+        format: string;
       };
     }
   | {

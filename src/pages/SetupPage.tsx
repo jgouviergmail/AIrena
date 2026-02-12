@@ -38,7 +38,7 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { cn } from "@/lib/utils";
 import { DEFAULT_LLM_PARAMS } from "@/lib/types";
-import type { GladIAteurConfig, PredefinedProfile } from "@/lib/types";
+import type { DiscussionMode, DocumentFormat, GladIAteurConfig, PredefinedProfile } from "@/lib/types";
 import * as api from "@/lib/tauri-api";
 
 const TOTAL_STEPS = 4;
@@ -213,12 +213,23 @@ export default function SetupPage() {
   );
 }
 
+const DISCUSSION_MODES: DiscussionMode[] = [
+  "debate", "ideation", "coConstruction", "userDriven",
+  "socratic", "tutorial", "critiqueReview", "collaborativeFiction",
+];
+
+const DOCUMENT_FORMATS: DocumentFormat[] = ["none", "txt", "md", "csv"];
+
 function StepTopic() {
   const { t } = useTranslation();
   const topic = useSetupStore((s) => s.topic);
   const setTopic = useSetupStore((s) => s.setTopic);
   const discussionLanguage = useSetupStore((s) => s.discussionLanguage);
   const setDiscussionLanguage = useSetupStore((s) => s.setDiscussionLanguage);
+  const discussionMode = useSetupStore((s) => s.discussionMode);
+  const setDiscussionMode = useSetupStore((s) => s.setDiscussionMode);
+  const documentFormat = useSetupStore((s) => s.documentFormat);
+  const setDocumentFormat = useSetupStore((s) => s.setDocumentFormat);
   const maxTurns = useSetupStore((s) => s.maxTurns);
   const setMaxTurns = useSetupStore((s) => s.setMaxTurns);
   const userInterventionTimeoutSecs = useSetupStore((s) => s.userInterventionTimeoutSecs);
@@ -245,6 +256,31 @@ function StepTopic() {
             >
               <Globe className="h-3.5 w-3.5" />
               {t(`languages.${lang}`)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Discussion mode selector */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <MessageSquare className="h-4 w-4 text-primary" />
+          {t("setup.discussionMode")}
+        </label>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {DISCUSSION_MODES.map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setDiscussionMode(mode)}
+              className={cn(
+                "rounded-md border px-3 py-2 text-left transition-colors",
+                discussionMode === mode
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:bg-accent",
+              )}
+            >
+              <div className="text-sm font-medium">{t(`setup.mode_${mode}`)}</div>
+              <div className="mt-0.5 text-xs opacity-70">{t(`setup.mode_${mode}Desc`)}</div>
             </button>
           ))}
         </div>
@@ -296,6 +332,31 @@ function StepTopic() {
           className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
         />
       </div>
+
+      {/* Document format selector */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <FileText className="h-4 w-4 text-primary" />
+          {t("setup.documentFormat")}
+        </label>
+        <p className="text-xs text-muted-foreground">{t("setup.documentFormatDesc")}</p>
+        <div className="grid grid-cols-4 gap-2">
+          {DOCUMENT_FORMATS.map((fmt) => (
+            <button
+              key={fmt}
+              onClick={() => setDocumentFormat(fmt)}
+              className={cn(
+                "rounded-md border px-3 py-2 text-center text-sm transition-colors",
+                documentFormat === fmt
+                  ? "border-primary bg-primary/10 text-primary font-medium"
+                  : "border-border text-muted-foreground hover:bg-accent",
+              )}
+            >
+              {t(`setup.docFormat_${fmt}`)}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -310,6 +371,7 @@ function StepArbitre() {
   const deleteArbitreProfile = useSettingsStore((s) => s.deleteArbitreProfile);
   const hasTavilyKey = !!useSettingsStore((s) => s.settings.tavilyApiKey);
   const discussionLanguage = useSetupStore((s) => s.discussionLanguage);
+  const discussionMode = useSetupStore((s) => s.discussionMode);
   const [showLlm, setShowLlm] = useState(false);
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [savePersonality, setSavePersonality] = useState("");
@@ -464,27 +526,35 @@ function StepArbitre() {
           <Shuffle className="h-4 w-4 text-primary" />
           {t("setup.turnDistribution")}
         </label>
-        <div className="grid grid-cols-2 gap-2">
-          {(
-            ["sequential", "random", "democratic", "authoritarian"] as const
-          ).map((dist) => (
-            <button
-              key={dist}
-              onClick={() => updateArbitre({ turnDistribution: dist })}
-              className={cn(
-                "rounded-md border px-3 py-2 text-left transition-colors",
-                arbitre.turnDistribution === dist
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border text-muted-foreground hover:bg-accent",
-              )}
-            >
-              <div className="text-sm font-medium">{t(`setup.${dist}`)}</div>
-              <div className="mt-0.5 text-xs opacity-70">
-                {t(`setup.${dist}Desc`)}
-              </div>
-            </button>
-          ))}
-        </div>
+        {discussionMode === "userDriven" || discussionMode === "collaborativeFiction" ? (
+          <p className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+            {discussionMode === "userDriven"
+              ? t("setup.userDrivenNoTurnDist")
+              : t("setup.fictionNoTurnDist")}
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              ["sequential", "random", "democratic", "authoritarian"] as const
+            ).map((dist) => (
+              <button
+                key={dist}
+                onClick={() => updateArbitre({ turnDistribution: dist })}
+                className={cn(
+                  "rounded-md border px-3 py-2 text-left transition-colors",
+                  arbitre.turnDistribution === dist
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:bg-accent",
+                )}
+              >
+                <div className="text-sm font-medium">{t(`setup.${dist}`)}</div>
+                <div className="mt-0.5 text-xs opacity-70">
+                  {t(`setup.${dist}Desc`)}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Optional web search for introduction */}
@@ -1016,45 +1086,57 @@ function StepSummary() {
   const arbitre = useSetupStore((s) => s.arbitre);
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
   const maxTurns = useSetupStore((s) => s.maxTurns);
-  const userInterventionTimeoutSecs = useSetupStore((s) => s.userInterventionTimeoutSecs);
+  const discussionMode = useSetupStore((s) => s.discussionMode);
+  const documentFormat = useSetupStore((s) => s.documentFormat);
   const webSearchPool = useSetupStore((s) => s.webSearchPool);
   const wikiSearchPool = useSetupStore((s) => s.wikiSearchPool);
+  const emotionDriven = useSettingsStore((s) => s.settings.emotionDriven);
 
   return (
     <div className="space-y-6">
-      <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-        <SummaryRow label={t("setup.topic")} value={topic} />
+      <div className="rounded-lg border border-border bg-card p-4 space-y-4">
+        {/* Discussion settings */}
+        <SummaryRow label={t("setup.summaryDiscussionMode")} value={t(`setup.mode_${discussionMode}`)} />
+        <SummaryRow label={t("setup.summaryTopic")} value={topic} />
+        <SummaryRow label={t("setup.summaryLanguage")} value={t(`languages.${discussionLanguage}`)} />
         <SummaryRow
-          label={t("setup.discussionLanguage")}
-          value={t(`languages.${discussionLanguage}`)}
-        />
-        <SummaryRow
-          label={t("setup.maxTurns")}
+          label={t("setup.summaryTurns")}
           value={maxTurns != null ? String(maxTurns) : t("setup.maxTurnsPlaceholder")}
         />
+
+        <hr className="border-border" />
+
+        {/* IArbitre settings */}
+        <SummaryRow label={t("setup.summaryArbitre")} value={arbitre.name} />
         <SummaryRow
-          label={t("setup.userTimeout")}
-          value={`${userInterventionTimeoutSecs}s`}
+          label={t("setup.summaryTurnDist")}
+          value={discussionMode === "userDriven"
+            ? t("setup.userDrivenNoTurnDist")
+            : discussionMode === "collaborativeFiction"
+              ? t("setup.fictionNoTurnDist")
+              : t(`setup.${arbitre.turnDistribution}`)}
         />
-        <SummaryRow label={t("setup.arbitreName")} value={arbitre.name} />
-        <SummaryRow
-          label={t("setup.turnDistribution")}
-          value={t(`setup.${arbitre.turnDistribution}`)}
-        />
-        {(arbitre.webSearchIntro ?? false) && (
-          <SummaryRow
-            label={t("setup.arbitreWebSearchIntro")}
-            value="1"
-          />
+        {documentFormat !== "none" && (
+          <SummaryRow label={t("setup.summaryDocFormat")} value={`.${documentFormat}`} />
         )}
-        <div className="flex justify-between">
-          <span className="text-sm text-muted-foreground">{t("setup.gladiateurs")}</span>
+        {(arbitre.webSearchIntro ?? false) && (
+          <SummaryRow label={t("setup.summaryWebIntro")} value="1" />
+        )}
+        {(arbitre.wikiSearchIntro ?? false) && (
+          <SummaryRow label={t("setup.summaryWikiIntro")} value="1" />
+        )}
+
+        <hr className="border-border" />
+
+        {/* GladIAteurs */}
+        <div>
+          <p className="text-xs text-muted-foreground">{t("setup.summaryGladiateurs")}</p>
           {gladiateurs.length === 0 ? (
-            <span className="text-sm font-medium text-foreground">-</span>
+            <p className="mt-1 text-sm font-medium text-foreground">-</p>
           ) : (
-            <div className="space-y-1 text-right">
+            <div className="mt-1 space-y-1">
               {gladiateurs.map((g) => (
-                <div key={g.id} className="flex items-center justify-end gap-2 text-sm text-foreground">
+                <div key={g.id} className="flex items-center gap-2 text-sm text-foreground">
                   <span>{g.emoji ?? getProfileEmoji(g.name, g.systemPrompt)}</span>
                   <span className="font-medium">{g.name}</span>
                 </div>
@@ -1062,26 +1144,20 @@ function StepSummary() {
             </div>
           )}
         </div>
+        <SummaryRow
+          label={t("setup.summaryEmotionDriven")}
+          value={emotionDriven ? t("setup.switchYes") : t("setup.switchNo")}
+        />
         {webSearchPool > 0 && (
           <SummaryRow
-            label={t("setup.webSearch")}
-            value={t("setup.webSearchBudget", {
-              count: webSearchPool + ((arbitre.webSearchIntro ?? false) ? 1 : 0),
-            })}
-          />
-        )}
-        {(arbitre.wikiSearchIntro ?? false) && (
-          <SummaryRow
-            label={t("setup.arbitreWikiSearchIntro")}
-            value="1"
+            label={t("setup.summaryWebPool")}
+            value={t("setup.webSearchBudget", { count: webSearchPool })}
           />
         )}
         {wikiSearchPool > 0 && (
           <SummaryRow
-            label={t("setup.wikiSearch")}
-            value={t("setup.wikiSearchBudget", {
-              count: wikiSearchPool + ((arbitre.wikiSearchIntro ?? false) ? 1 : 0),
-            })}
+            label={t("setup.summaryWikiPool")}
+            value={t("setup.wikiSearchBudget", { count: wikiSearchPool })}
           />
         )}
       </div>
@@ -1091,9 +1167,9 @@ function StepSummary() {
 
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex justify-between">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-sm font-medium text-foreground">{value}</span>
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-0.5 text-sm font-medium text-foreground">{value}</p>
     </div>
   );
 }

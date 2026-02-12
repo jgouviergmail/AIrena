@@ -81,6 +81,36 @@ pub async fn initialize(db: &Connection) -> Result<(), tokio_rusqlite::Error> {
                 "ALTER TABLE predefined_profiles ADD COLUMN initial_emotions TEXT;"
             )?;
         }
+        // Migration: add discussion_mode column to discussions (idempotent)
+        let has_discussion_mode: bool = conn
+            .prepare("PRAGMA table_info(discussions)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .any(|col| col.as_deref() == Ok("discussion_mode"));
+        if !has_discussion_mode {
+            conn.execute_batch(
+                "ALTER TABLE discussions ADD COLUMN discussion_mode TEXT NOT NULL DEFAULT 'debate';"
+            )?;
+        }
+        // Migration: add document_content column to discussions (idempotent)
+        let has_document_content: bool = conn
+            .prepare("PRAGMA table_info(discussions)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .any(|col| col.as_deref() == Ok("document_content"));
+        if !has_document_content {
+            conn.execute_batch(
+                "ALTER TABLE discussions ADD COLUMN document_content TEXT NOT NULL DEFAULT '';"
+            )?;
+        }
+        // Migration: add document_format column to discussions (idempotent)
+        let has_document_format: bool = conn
+            .prepare("PRAGMA table_info(discussions)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .any(|col| col.as_deref() == Ok("document_format"));
+        if !has_document_format {
+            conn.execute_batch(
+                "ALTER TABLE discussions ADD COLUMN document_format TEXT NOT NULL DEFAULT 'none';"
+            )?;
+        }
         Ok(())
     })
     .await
