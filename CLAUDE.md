@@ -44,9 +44,11 @@ The Rust backend is a single library crate (`airena_lib`). `main.rs` just calls 
 
 **Core flow**: `lib.rs` initializes logging, SQLite DB, seeds profiles, creates `AppState`, and registers 20+ Tauri commands.
 
-- **state.rs** — `AppState` holds `engine_cmd_tx` (mpsc channel to running engine), `cancel_token`, and `db` connection. Uses `std::sync::Mutex` (not tokio) because locks are never held across `.await`.
+- **state.rs** — `AppState` holds `engine_cmd_tx` (mpsc channel to running engine), `cancel_token`, and `db` connection. Uses `std::sync::Mutex` (not tokio) because locks are never held across `.await`. Helper methods: `get_settings()`, `clear_engine_slots()`.
+- **constants.rs** — Centralized tunable parameters (memory limits, truncation sizes, prompt thresholds). All magic numbers extracted here.
 - **commands/** — Tauri IPC handlers grouped by domain: `discussion.rs`, `ollama.rs`, `settings.rs`, `history.rs`
-- **engine/orchestrator.rs** — `DiscussionEngine`: the main discussion loop (~2800 lines). Handles introduction → turn loop (speaker order → web/wiki search → directive → prompt → stream → reactions → emotions → memory → moderation) → synthesis → end.
+- **engine/mod.rs** — Shared utilities: `truncate_str()`, `truncate_tail()` (UTF-8–safe), `apply_i8_clamped()` (emotion delta)
+- **engine/orchestrator.rs** — `DiscussionEngine`: the main discussion loop. Handles introduction → turn loop (speaker order → web/wiki search → directive → prompt → stream → reactions → emotions → memory → moderation) → synthesis → end.
 - **engine/turn_manager.rs** — Turn distribution: Sequential, Random, Democratic (masked Borda voting via parallel LLM calls), Authoritarian (IArbitre decides)
 - **engine/prompt_builder.rs** — Builds context-aware prompts for each speaker turn, reactions, emotions, synthesis, and end-of-discussion awareness
 - **engine/directive_builder.rs** — Cognitive personality system: 5-layer behavioral directives based on emotions, relationships, speech acts (10 types: Challenge, SteelMan, Anecdote, etc.), and situational awareness
@@ -55,9 +57,10 @@ The Rust backend is a single library crate (`airena_lib`). `main.rs` just calls 
 - **engine/emotion_engine.rs** — Rule-based emotion updates (6 axes: engagement, accord, confiance, frustration, curiosité, enthousiasme) + LLM emotion assessment
 - **engine/memory_manager.rs** — Maintains discussion summaries and participant position tracking
 - **engine/json_parser.rs** — Parses LLM JSON responses with fuzzy speaker name matching (exact → article-stripped → prefix → contains)
-- **ollama/client.rs** — `OllamaClient`: HTTP streaming via reqwest, supports think mode, 3-attempt retry
+- **ollama/client.rs** — `OllamaClient`: HTTP streaming via reqwest, supports think mode, 3-attempt retry. `stream_ndjson()` unified streaming function.
+- **tavily/client.rs** — `TavilyClient`: Tavily web search API (requires API key). Per-agent quota enforcement (per-discussion + per-turn). Credit tracking in settings.
 - **wikipedia/client.rs** — `WikiClient`: Wikipedia search with language mapping (fr/en/zh→en fallback), smart disambiguation filtering via keyword scoring
-- **db/** — SQLite via tokio-rusqlite: `schema.rs` (migrations), `repository.rs` (all queries), `seed.rs` (predefined profiles)
+- **db/** — SQLite via tokio-rusqlite: `schema.rs` (migrations), `repository.rs` (all queries with `row_to_profile()` + `PROFILE_COLUMNS` DRY helpers), `seed.rs` (predefined profiles)
 - **models/** — All data structures with `Serialize`/`Deserialize`. Key types: `ArenaEvent` (30+ variants), `SpeakerRole`, `EmotionalProfile`, `TurnDistribution`, `DiscussionMode` (8 variants), `DocumentFormat`
 
 ### Frontend (src/)

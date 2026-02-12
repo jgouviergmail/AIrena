@@ -406,11 +406,14 @@ Le document sera téléchargeable dans la synthèse de la discussion.
 
 --------------------------------------------------------------------
 
-ajoute les nouveaux profils suivants, selon le même modèle que les profils existants :
+Améliore les profils existants pour leur donner plus de profondeur et de réalisme, ils ne doivent pas être caricaturaux mais hyper réalistes.
+Pour les profils de personnalités historiques tu peux t'aider de recherches sur internet sur des sites reconnus et fiables afin de définir fidèlement leur personnalité et leur profil psychologique
+
+Esnuite, ajoute les nouveaux profils suivants, selon le même modèle que les profils existants :
 - métier : le Journaliste, l'Ecrivain, le Musicien, le Professeur de primaire, le Professeur de collège, le Professeur de lycée, l'Avocat, le Chef cusinier
 - autres : l'Adolescent, l'Influenceur, le Stoïcien, le Boomer, le Voyageur, le Paranoïaque, le Manipulateur Narcissique, le Nihiliste
 - imaginaires : Gaïa, le Temps, la Mort, le Génie
 - experts : le Prompt Engineer, l'Ingénieur en Informatique, l'Ingénieur Généraliste,  l'Astrophysicien, l'Anthropologue, le Neuroscientifique, le Linguiste, l'Économiste, le Criminologue
 - personnalités : Napoléon Bonaparte, Charles de Gaulle,  Louis Pasteur, Confucius, Pablo Picasso, Mahatma Gandhi, Martin Luther King Jr., Nelson Mandela, Simone Veil, Alfred Hitchcock
 
-Pour les personnalités, aide toi de recherches internet afin définir fidèlement leur personnalité et leur profil psychologique
+Pour les personnalités, aide toi de recherches internet sur des sites reconnus et fiables afin de définir fidèlement leur personnalité et leur profil psychologique

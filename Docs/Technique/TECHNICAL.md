@@ -1,7 +1,7 @@
 # AIrena — Documentation Technique
 
-> **Version** : 1.6-dev
-> **Dernière mise à jour** : 2026-02-11
+> **Version** : 1.6
+> **Dernière mise à jour** : 2026-02-13
 > **Auteur** : jgouv
 > **Identifiant** : `com.jgouv.airena`
 
@@ -87,6 +87,8 @@
 | tracing-subscriber | 0.3 | Filtrage et sortie logs |
 | tracing-appender | 0.2.4 | Rotation quotidienne des logs |
 | urlencoding | 2.x | Encodage URL (Wikipedia) |
+| tauri-plugin-dialog | 2.x | Dialogues fichiers (backend bridge) |
+| tauri-plugin-fs | 2.x | Accès fichiers (backend bridge) |
 
 ### Frontend
 
@@ -230,9 +232,24 @@ npm run build        # tsc + vite build
 2. **Base de données** : ouvre `{app_data_dir}/airena.db`, exécute les migrations de schéma
 3. **Seeding** : injecte les profils prédéfinis (ON CONFLICT DO UPDATE)
 4. **AppState** : crée l'état partagé (canal moteur, token annulation, connexion DB)
-5. **Commandes** : enregistre 20+ handlers Tauri via `generate_handler!`
+5. **Commandes** : enregistre 24 handlers Tauri via `generate_handler!`
 6. **Plugins** : active opener, dialog, fs
 7. **Boucle événementielle** : lance Tauri
+
+**Modules** :
+```
+commands/ — Handlers IPC (discussion, ollama, settings, history)
+constants.rs — Constantes centralisées (limites mémoire, tailles de troncature, seuils, quotas)
+db/       — SQLite (schema, repository, seed)
+engine/   — Cœur métier (orchestrator, turn_manager, prompt_builder, directive_builder,
+             emotion_engine, memory_manager, json_parser, dynamics_parser, mode_prompts)
+error.rs  — CommandError enum
+models/   — Structures de données (11 fichiers)
+ollama/   — Client HTTP streaming NDJSON
+state.rs  — AppState (Mutex)
+tavily/   — Client Tavily API
+wikipedia/ — Client Wikipedia API
+```
 
 ### 6.2 État applicatif (AppState)
 
@@ -335,10 +352,21 @@ Le cœur de l'application. Exécute la boucle de discussion complète dans une t
    ├── Intervention utilisateur (si activée)
    │   ├── UserTurnReady → attente submit/skip
    │   └── Traitement du message utilisateur
+   ├── Mise à jour document (mode Co-Construction)
+   │   └── Extraction <document> → LLM update → DocumentUpdated
    └── Mise à jour mémoire (résumé + positions)
 4. Synthèse (SynthesisChunk + SynthesisComplete)
 5. DiscussionEnded
 ```
+
+**Variantes par mode** :
+
+| Mode | Comportement spécifique de l'orchestrateur |
+|---|---|
+| **UserDriven** | L'utilisateur est forcé de donner son input au début de chaque tour. Chaque GladIAteur décide via LLM s'il répond ou passe. Seuls les répondants sont inclus dans le TurnStarted. Si tous passent, le tour est sauté automatiquement. |
+| **CollaborativeFiction** | L'utilisateur écrit l'ouverture au tour 1. Distribution toujours séquentielle (pas de randomisation). Sémantique de relais narratif. |
+| **Socratic** | L'IArbitre pose une nouvelle question d'approfondissement à chaque tour (à partir du tour 2). |
+| **Autres modes** | Boucle standard avec instructions mode-spécifiques dans les prompts. |
 
 #### Gestionnaire de tours (`engine/turn_manager.rs`)
 
@@ -357,7 +385,8 @@ Construit les prompts contextuels pour chaque rôle et situation. **Toutes les i
 |---|---|
 | `build_introduction_prompt` | Introduction par l'IArbitre |
 | `build_turn_prompt` | Tour d'un orateur (contexte, émotions, directive) |
-| `build_reaction_prompt` | Collecte des réactions (like/dislike) |
+| `build_reaction_prompt` | Collecte des réactions (like/dislike + justification) — sémantique adaptée au mode |
+| `build_thought_prompt` | Réflexion interne guidée par le mode (mode think) |
 | `build_emotion_assessment_prompt` | Évaluation émotionnelle par le LLM |
 | `build_memory_update_prompt` | Résumé + suivi des positions |
 | `build_synthesis_prompt` | Synthèse finale |
@@ -379,6 +408,8 @@ Système de **personnalité cognitive** à 5 couches :
 
 **10 actes de parole** : Challenge, SteelMan, Anecdote, Question, Provocation, Concession, Redirect, Humor, Appeal, Synthesis
 
+**Awareness du mode** : Le `SpeakerTurnContext` inclut `discussion_mode: DiscussionMode`. En mode Fiction Collaborative, les émotions influencent le style narratif (pas le comportement débat) via `build_fiction_emotion_behavior()`, et les actes de parole sont remappés en actions narratives via `SpeechAct::describe_fiction()`. En mode UserDriven, un rappel contextuel « répondre au message de l'utilisateur » est injecté ; en modes non-UserDriven, un rappel « observateur uniquement » est ajouté.
+
 #### Moteur émotionnel (`engine/emotion_engine.rs`)
 
 Mise à jour **rule-based** (sans LLM) sur 6 axes :
@@ -398,9 +429,21 @@ Mise à jour **rule-based** (sans LLM) sur 6 axes :
 
 Extrait les champs de personnalité depuis les blocs XML `<dynamics>` des system prompts. Supporte les labels trilingues (FR/EN/ZH).
 
-#### Prompts par mode (`engine/mode_prompts.rs`)
+#### Prompts par mode (`engine/mode_prompts.rs` — ~940 lignes)
 
-Instructions spécifiques pour les 8 modes de discussion :
+Module de **938 lignes** fournissant des instructions trilingues (FR/EN/ZH) par mode via 7 fonctions :
+
+| Fonction | Rôle |
+|---|---|
+| `mode_descriptor(mode, lang)` | Nom lisible du mode (« débat », « brainstorming »…) |
+| `mode_introduction_instructions(mode, lang)` | Instructions d'introduction pour l'IArbitre |
+| `mode_intervention_preamble(mode, lang)` | Posture/ton attendu de chaque orateur |
+| `mode_thought_focus(mode, lang, has_context)` | Guide de réflexion interne (mode think) |
+| `mode_reaction_meanings(mode, lang)` | Sémantique des likes/dislikes selon le mode |
+| `mode_key_constraint(mode, lang)` | Contrainte clé insérée en dernière ligne (biais de récence LLM) |
+| `user_observer_clause(lang, user_name)` | Rappel « observateur » (modes non-UserDriven) |
+
+**Également** : `SpeechAct::describe_fiction(lang)` — remap des 10 actes de parole en actions narratives pour la fiction collaborative (Challenge → conflit, SteelMan → profondeur personnage, etc.).
 
 | Mode | Posture |
 |---|---|
@@ -411,7 +454,7 @@ Instructions spécifiques pour les 8 modes de discussion :
 | Socratic | Questions, introspection |
 | Tutorial | Enseignement, pédagogie |
 | CritiqueReview | Critique équilibrée (forces + améliorations) |
-| CollaborativeFiction | Co-création narrative |
+| CollaborativeFiction | Co-création narrative en relais |
 
 #### Gestionnaire de mémoire (`engine/memory_manager.rs`)
 
@@ -503,6 +546,14 @@ pub struct Message {
     pub reactions: Vec<Reaction>,
     pub is_ban_notification: bool,
     pub timestamp: DateTime<Utc>,
+}
+
+pub struct Reaction {
+    pub from_speaker_id: String,
+    pub from_speaker_name: String,
+    pub reaction_type: ReactionType,      // Like | Dislike
+    pub target_message_id: String,
+    pub justification: Option<String>,    // Courte justification (1 phrase max)
 }
 ```
 
@@ -760,7 +811,7 @@ Paramètres globaux de l'application + profils + modèles Ollama.
 
 | Composant | Rôle |
 |---|---|
-| SimpleMd | Markdown léger : titres, gras, code, listes, tableaux |
+| SimpleMd | Rendu markdown riche (~250 lignes) : titres (h1-h3), **gras**, *italique*, `code inline`, blocs de code avec coloration, listes (bullet + numbered), tableaux pipe-delimited, règles horizontales, intégration MathText pour LaTeX |
 | MathText | Rendu LaTeX via KaTeX |
 | ErrorBoundary | Attrape les erreurs React ; UI de fallback |
 
@@ -781,7 +832,7 @@ const { flushed, pushToken, clearSpeaker, clearAll } = useTokenBuffer(60);
 | Fichier | Exports principaux |
 |---|---|
 | `lib/types.ts` | Toutes les interfaces TypeScript |
-| `lib/tauri-api.ts` | Wrappers IPC Tauri (20+ fonctions) |
+| `lib/tauri-api.ts` | Wrappers IPC Tauri (24 commandes + `downloadTextFile()` via plugin dialog/fs) |
 | `lib/utils.ts` | `cn()` — clsx + tailwind-merge |
 | `lib/logger.ts` | Logger singleton (buffer circulaire 500 entrées) |
 | `lib/profile-emoji.ts` | `getProfileEmoji(name, prompt)` — matching 3 niveaux (exact → regex → hash) |
@@ -961,8 +1012,12 @@ npx tsc --noEmit      # Vérification des types
 ```
 AIrena/
 ├── CLAUDE.md                  # Instructions pour Claude Code
-├── TECHNICAL.md               # ← Ce document
-├── FUNCTIONAL.md              # Documentation fonctionnelle
+├── docs/
+│   ├── Technique/
+│   │   └── TECHNICAL.md       # ← Ce document
+│   ├── Fonctionnel/
+│   │   └── FUNCTIONAL.md      # Documentation fonctionnelle
+│   └── Plans/                 # Plans d'implémentation
 ├── package.json               # Dépendances Node + scripts
 ├── vite.config.ts             # Configuration Vite 7
 ├── tsconfig.json              # Configuration TypeScript 5.8
@@ -993,6 +1048,7 @@ AIrena/
         ├── lib.rs             # Initialisation Tauri + commandes
         ├── state.rs           # AppState (Mutex)
         ├── error.rs           # CommandError enum
+        ├── constants.rs       # Constantes centralisées (limites, seuils, quotas)
         ├── commands/          # Handlers IPC (discussion, ollama, settings, history)
         ├── engine/            # Cœur métier
         │   ├── orchestrator.rs    # Boucle de discussion (~2800 lignes)
@@ -1015,13 +1071,41 @@ AIrena/
 
 ## 15. Changelog
 
-### v1.6-dev (2026-02-11) — Modes de discussion & Documents collaboratifs
+### v1.6 (2026-02-13) — Types de discussions
 
-- 8 modes de discussion (Debate, Ideation, Co-Construction, UserDriven, Socratic, Tutorial, CritiqueReview, CollaborativeFiction)
-- Format de document collaboratif (None, Txt, Md, Csv) pour le mode Co-Construction
-- Sidebar document avec rendu markdown et tableau CSV
-- Instructions trilingues par mode (`mode_prompts.rs`)
-- Rendu LaTeX via KaTeX (`MathText.tsx`)
+**Nouveaux fichiers** :
+- `constants.rs` — constantes centralisées (limites mémoire, tailles de troncature, seuils, quotas Tavily/Wikipedia)
+- `engine/mode_prompts.rs` (~940 lignes) — instructions trilingues par mode (7 fonctions)
+- `components/document/DocumentSidebar.tsx` — sidebar de document collaboratif
+- `components/shared/MathText.tsx` — rendu LaTeX via KaTeX
+
+**Backend** :
+- 8 modes de discussion (`DiscussionMode` enum) avec comportement orchestrateur distinct
+- 4 formats de document (`DocumentFormat` enum) pour le mode Co-Construction
+- Nouvel événement `DocumentUpdated` (ArenaEvent)
+- `Reaction.justification: Option<String>` — les réactions incluent désormais une justification courte
+- `mode_prompts.rs` : 7 fonctions mode-aware (descriptor, introduction, preamble, thought_focus, reaction_meanings, key_constraint, observer_clause)
+- `directive_builder.rs` mode-aware : `discussion_mode` dans `SpeakerTurnContext`, `build_fiction_emotion_behavior()`, `SpeechAct::describe_fiction()`, rappels utilisateur contextuels
+- `prompt_builder.rs` : introduction, réactions et pensée adaptés au mode
+- Flux orchestrateur spécifiques : UserDriven (input forcé + opt-in gladiateurs), CollaborativeFiction (ouverture utilisateur + séquentiel), Socratic (question IArbitre chaque tour)
+- 3 migrations DB : `discussion_mode`, `document_content`, `document_format`
+
+**Frontend** :
+- Sélecteur de mode (grille 2×4) + sélecteur de format document dans SetupPage
+- Distribution des tours conditionnelle (grisée pour UserDriven/Fiction)
+- Badge de mode dans l'ArenaPage + sidebar document
+- `SimpleMd` réécrit (~250 lignes) : titres h1-h3, italique, code blocks, tableaux, règles horizontales, intégration MathText
+- `downloadTextFile()` dans tauri-api.ts (via plugin dialog + fs)
+- Sidebar de navigation : bouton Setup désactivé pendant la discussion, bouton Arena pulse si discussion active
+- Résumé : badge de mode + bouton téléchargement document
+- 50+ clés i18n ajoutées (modes, formats, document, navigation)
+
+**Dépendances ajoutées** :
+- Backend : `tauri-plugin-dialog`, `tauri-plugin-fs`
+- Frontend : `@tauri-apps/plugin-dialog`, `@tauri-apps/plugin-fs`, `katex`, `@types/katex`
+
+**Permissions Tauri** :
+- `dialog:default`, `fs:default`, `fs:allow-write-text-file`
 
 ### v1.5 — Wikipedia
 

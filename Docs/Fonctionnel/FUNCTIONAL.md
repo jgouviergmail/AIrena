@@ -1,7 +1,7 @@
 # AIrena — Documentation Fonctionnelle
 
-> **Version** : 1.6-dev
-> **Dernière mise à jour** : 2026-02-11
+> **Version** : 1.6
+> **Dernière mise à jour** : 2026-02-13
 > **Auteur** : jgouv
 
 ---
@@ -252,12 +252,13 @@ Le fil de discussion affiche en temps réel :
 - **Messages utilisateur** (intervention directe)
 - **Bulle de streaming** : pendant qu'un orateur parle, son texte apparaît progressivement
 
-#### Indicateur de tour
+#### Indicateur de tour et mode
 
 En haut du fil, un indicateur affiche :
 - Le numéro de tour courant
 - L'état (en cours, pause, détermination de l'ordre…)
 - Le nombre de recherches web/Wikipedia effectuées
+- Le **badge du mode de discussion** courant (si différent de « Débat »)
 
 ### 6.2 Contrôles de discussion
 
@@ -328,11 +329,13 @@ Mode collaboratif : les participants convergent vers un livrable commun. Chacun 
 
 ### Guidé par l'utilisateur
 
-L'utilisateur oriente chaque tour. Les participants répondent librement aux questions ou orientations données. Idéal pour explorer un sujet de manière dirigée.
+L'utilisateur oriente chaque tour en donnant obligatoirement son input au début. Chaque GladIAteur décide ensuite individuellement (via LLM) s'il souhaite répondre ou passer. Seuls les participants répondants prennent la parole. Si tous passent, le tour est automatiquement sauté. Idéal pour explorer un sujet de manière dirigée.
+
+> **Note** : En mode Guidé par l'utilisateur, le mode de distribution des tours est automatiquement désactivé (chaque GladIAteur choisit librement de répondre).
 
 ### Socratique
 
-Mode philosophique : l'accent est sur les questions plutôt que les réponses. Les participants pratiquent la maïeutique, explorent les présupposés et approfondissent la réflexion.
+Mode philosophique : l'accent est sur les questions plutôt que les réponses. Les participants pratiquent la maïeutique, explorent les présupposés et approfondissent la réflexion. L'IArbitre pose une nouvelle question d'approfondissement à chaque tour (à partir du tour 2), guidant progressivement vers les dimensions les plus profondes du sujet.
 
 ### Tutoriel
 
@@ -344,7 +347,9 @@ Mode analytique : chaque participant évalue un sujet ou une proposition en iden
 
 ### Fiction collaborative
 
-Mode créatif narratif : les participants co-créent une histoire. Chacun développe des personnages, des rebondissements et l'univers narratif. Le modérateur maintient la cohérence de l'intrigue.
+Mode créatif narratif : les participants co-créent une histoire en relais. L'utilisateur écrit l'ouverture de l'histoire au premier tour, puis chaque GladIAteur développe la suite à tour de rôle (toujours en ordre séquentiel, pas de randomisation). Le modérateur maintient la cohérence de l'intrigue, des personnages et de l'univers narratif.
+
+> **Note** : En mode Fiction collaborative, le mode de distribution des tours est automatiquement forcé en séquentiel. Les actes de parole sont remappés en actions narratives (ex. Challenge → introduction de conflit, SteelMan → développement de profondeur personnage, Anecdote → scène vivante).
 
 ---
 
@@ -536,9 +541,17 @@ Après chaque intervention d'un GladIAteur, les autres participants émettent un
 | **Like** 👍 | Accord, approbation, intérêt |
 | **Dislike** 👎 | Désaccord, critique, rejet |
 
+Chaque réaction est accompagnée d'une **justification courte** (1 phrase maximum) expliquant la raison du like ou dislike.
+
+La **sémantique des réactions varie selon le mode** de discussion :
+- **Débat** : like = « argument pertinent/convaincant », dislike = « argument faible/hors-sujet »
+- **Brainstorming** : like = « idée originale/prometteuse », dislike = « idée déjà vue/hors-sujet »
+- **Fiction** : like = « récit captivant/cohérent », dislike = « rupture de continuité/incohérence »
+- etc.
+
 Les réactions sont :
 - Générées par le LLM pour chaque participant non-orateur
-- Affichées sous le message correspondant
+- Affichées sous le message correspondant avec la justification
 - Utilisées pour mettre à jour les émotions
 - Utilisées pour évaluer les relations entre participants
 - Sauvegardées dans l'historique
@@ -565,8 +578,10 @@ Après la synthèse, l'utilisateur accède à la page de résumé avec :
 |---|---|
 | **Onglet Synthèse** | Texte complet de la synthèse |
 | **Onglet Discussion** | Fil complet en lecture seule |
+| **Badge de mode** | Mode de discussion affiché (si différent de « Débat ») |
 | **Statistiques** | Nombre de tours, modèle utilisé, participants |
-| **Téléchargement** | Export du texte en fichier |
+| **Téléchargement** | Export de la synthèse ou discussion en fichier texte |
+| **Téléchargement document** | Export du document collaboratif (si co-construction) |
 | **Nouvelle discussion** | Retour à la configuration |
 | **Voir dans l'historique** | Navigation vers l'historique |
 
@@ -774,6 +789,7 @@ Les exports utilisent le sélecteur de fichier natif Windows (dialogue « Enregi
 | **Mode think** | Capacité du LLM à « réfléchir » en interne avant de répondre |
 | **Directive** | Instruction comportementale générée pour chaque tour (acte de parole) |
 | **Acte de parole** | Stratégie discursive choisie (Challenge, SteelMan, Anecdote…) |
+| **Justification** | Courte explication (1 phrase) accompagnant chaque réaction like/dislike |
 | **Pool** | Quota de recherches (web ou Wikipedia) disponible pour une discussion |
 | **Co-Construction** | Mode où les participants élaborent un document collaboratif |
 | **Vote Borda** | Méthode de vote par classement utilisée en mode démocratique |
@@ -787,14 +803,23 @@ Les exports utilisent le sélecteur de fichier natif Windows (dialogue « Enregi
 
 ## 23. Changelog
 
-### v1.6-dev (2026-02-11) — Modes de discussion & Documents collaboratifs
+### v1.6 (2026-02-13) — Types de discussions
 
 **Nouvelles fonctionnalités** :
-- Ajout de 8 modes de discussion : Débat, Brainstorming, Co-Construction, Guidé par l'utilisateur, Socratique, Tutoriel, Revue critique, Fiction collaborative
+- 8 modes de discussion : Débat, Brainstorming, Co-Construction, Guidé par l'utilisateur, Socratique, Tutoriel, Revue critique, Fiction collaborative
 - Chaque mode définit des instructions spécifiques pour l'introduction, les interventions, la synthèse et la modération
-- Mode Co-Construction avec document collaboratif partagé (texte, markdown, CSV)
-- Sidebar document avec rendu en temps réel
+- Mode **Guidé par l'utilisateur** : input obligatoire + chaque GladIAteur choisit de répondre ou passer
+- Mode **Fiction collaborative** : ouverture par l'utilisateur au tour 1, relais séquentiel, actes de parole narratifs
+- Mode **Socratique** : l'IArbitre pose une nouvelle question d'approfondissement chaque tour
+- Mode **Co-Construction** avec document collaboratif partagé (texte, markdown, CSV) et sidebar dédiée
+- Réactions enrichies : chaque like/dislike est accompagné d'une justification courte
+- Sémantique des réactions adaptée au mode (débat ≠ brainstorming ≠ fiction)
+- Rendu markdown enrichi : titres, italique, blocs de code, tableaux, règles horizontales
 - Support du rendu LaTeX (formules mathématiques) via KaTeX
+- Téléchargement de documents via dialogue natif Windows « Enregistrer sous »
+- Badge de mode affiché dans l'Arena et le résumé
+- Navigation sécurisée : bouton Setup désactivé pendant la discussion active
+- 50+ nouvelles traductions (FR/EN/ZH) pour les modes, formats et documents
 
 ### v1.5 — Wikipedia
 
