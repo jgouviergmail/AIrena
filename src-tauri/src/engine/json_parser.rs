@@ -221,6 +221,20 @@ pub struct ParsedReaction {
     pub justification: Option<String>,
 }
 
+/// Normalize Unicode dash variants (en-dash, em-dash, non-breaking hyphen, etc.) to ASCII hyphen.
+/// LLMs often output U+2011 (non-breaking hyphen) instead of U+002D (ASCII hyphen).
+fn normalize_dashes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+            | '\u{2212}' => result.push('-'),
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
 /// Strip leading French articles: "Le ", "La ", "L'", "Les "
 fn strip_french_article(name: &str) -> &str {
     let trimmed = name.trim();
@@ -237,20 +251,21 @@ fn strip_french_article(name: &str) -> &str {
 
 /// Match a LLM-returned name against a list of known names.
 /// 4 layers: exact case-insensitive → article-stripped → prefix (min 3 chars) → contains (min 4 chars)
+/// Normalizes Unicode dashes so "Le Psycho‑rigide" (U+2011) matches "Le Psycho-rigide" (U+002D).
 pub fn match_speaker_name<'a>(llm_name: &str, known_names: &'a [String]) -> Option<&'a String> {
-    let llm_lower = llm_name.to_lowercase().trim().to_string();
+    let llm_lower = normalize_dashes(&llm_name.to_lowercase().trim().to_string());
     let llm_stripped = strip_french_article(&llm_lower);
 
-    // 1. Exact match (case-insensitive, trimmed)
+    // 1. Exact match (case-insensitive, trimmed, dash-normalized)
     known_names
         .iter()
-        .find(|s| s.to_lowercase().trim() == llm_lower)
+        .find(|s| normalize_dashes(&s.to_lowercase().trim().to_string()) == llm_lower)
         // 2. Article-stripped match: "Scientifique" matches "Le Scientifique"
         .or_else(|| {
             if llm_stripped.len() >= 3 {
                 known_names
                     .iter()
-                    .find(|s| strip_french_article(&s.to_lowercase()) == llm_stripped)
+                    .find(|s| strip_french_article(&normalize_dashes(&s.to_lowercase())) == llm_stripped)
             } else {
                 None
             }
@@ -260,7 +275,7 @@ pub fn match_speaker_name<'a>(llm_name: &str, known_names: &'a [String]) -> Opti
             if llm_lower.len() >= 3 {
                 known_names
                     .iter()
-                    .find(|s| s.to_lowercase().starts_with(&llm_lower))
+                    .find(|s| normalize_dashes(&s.to_lowercase()).starts_with(&llm_lower))
             } else {
                 None
             }
@@ -269,7 +284,7 @@ pub fn match_speaker_name<'a>(llm_name: &str, known_names: &'a [String]) -> Opti
         .or_else(|| {
             if llm_stripped.len() >= 4 {
                 known_names.iter().find(|s| {
-                    let s_lower = s.to_lowercase();
+                    let s_lower = normalize_dashes(&s.to_lowercase());
                     let s_stripped = strip_french_article(&s_lower);
                     s_stripped.contains(llm_stripped) || llm_stripped.contains(s_stripped)
                 })
@@ -877,6 +892,29 @@ mod tests {
         let known = vec!["Alice".to_string()];
         assert_eq!(match_speaker_name("Charlie", &known), None);
         assert_eq!(match_speaker_name("a", &known), None); // too short
+    }
+
+    #[test]
+    fn test_match_speaker_name_unicode_hyphen() {
+        // LLM outputs U+2011 (non-breaking hyphen), seed has ASCII U+002D
+        let known = vec!["Le Psycho-rigide".to_string()];
+        assert_eq!(
+            match_speaker_name("Le Psycho\u{2011}rigide", &known),
+            Some(&known[0])
+        );
+        // Also test reverse: seed has unicode, LLM has ASCII
+        let known2 = vec!["Le Psycho\u{2011}rigide".to_string()];
+        assert_eq!(
+            match_speaker_name("Le Psycho-rigide", &known2),
+            Some(&known2[0])
+        );
+    }
+
+    #[test]
+    fn test_normalize_dashes() {
+        assert_eq!(normalize_dashes("Psycho\u{2011}rigide"), "Psycho-rigide");
+        assert_eq!(normalize_dashes("en\u{2013}dash"), "en-dash");
+        assert_eq!(normalize_dashes("no dashes"), "no dashes");
     }
 
     #[test]

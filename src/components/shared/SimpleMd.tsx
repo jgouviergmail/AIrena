@@ -1,24 +1,59 @@
 import type { ReactElement, ReactNode } from "react";
 import { MathText } from "./MathText";
+import type { DiffResult } from "@/lib/document-diff";
 
 /** Lightweight markdown: headings (#/##/###), **bold**, *italic*, `code`, ```code blocks```,
  *  bullet/numbered lists (- item / 1. item), horizontal rules (---), tables, paragraphs.
- *  Uses line-by-line block detection to handle mixed content correctly. */
-export function SimpleMd({ text }: { text: string }) {
+ *  Uses line-by-line block detection to handle mixed content correctly.
+ *  Optional diffResult prop enables line-level highlighting of changed blocks. */
+export function SimpleMd({ text, diffResult }: { text: string; diffResult?: DiffResult | null }) {
+  // Normalize HTML <br> tags to newlines (LLMs sometimes output them instead of \n)
+  const normalized = text.replace(/<br\s*\/?>/gi, "\n");
+
   // Split code blocks first, then process each segment
-  const segments = text.split(/(```[\s\S]*?```)/g);
+  const segments = normalized.split(/(```[\s\S]*?```)/g);
 
   const elements: ReactElement[] = [];
   let key = 0;
 
-  for (const segment of segments) {
+  // Diff: extract changedLines set if applicable
+  const changedLines = diffResult?.format === "md" ? diffResult.changedLines : null;
+
+  // Pre-compute line offsets for each segment via cumulative newline counting.
+  // This correctly maps local line indices to global line indices despite
+  // boundary artifacts from the code block regex split.
+  const segmentLineOffsets: number[] = [];
+  let newlinesSoFar = 0;
+  for (const seg of segments) {
+    segmentLineOffsets.push(newlinesSoFar);
+    newlinesSoFar += (seg.match(/\n/g) || []).length;
+  }
+
+  // Helper: wrap an element with a highlight background if any of its source lines changed
+  function wrapHighlight(el: ReactElement, lineIndices: number[]): ReactElement {
+    if (!changedLines) return el;
+    if (!lineIndices.some((idx) => changedLines.has(idx))) return el;
+    return (
+      <div key={el.key} className="rounded-sm bg-diff-highlight -mx-1 px-1">
+        {el}
+      </div>
+    );
+  }
+
+  for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+    const segment = segments[segIdx];
+    const offset = segmentLineOffsets[segIdx];
+
     if (segment.startsWith("```") && segment.endsWith("```")) {
       const code = segment.slice(3, -3).replace(/^\w*\n/, ""); // strip optional language hint
-      elements.push(
+      const nbLines = segment.split("\n").length;
+      const lineRange = Array.from({ length: nbLines }, (_, idx) => offset + idx);
+      const el = (
         <pre key={key++} className="overflow-auto rounded-md bg-muted px-3 py-2 font-mono text-xs text-foreground">
           {code}
-        </pre>,
+        </pre>
       );
+      elements.push(wrapHighlight(el, lineRange));
       continue;
     }
 
@@ -38,95 +73,110 @@ export function SimpleMd({ text }: { text: string }) {
 
       // Horizontal rule
       if (/^-{3,}$/.test(trimmed) || /^\*{3,}$/.test(trimmed)) {
-        elements.push(<hr key={key++} className="my-2 border-border" />);
+        const el = <hr key={key++} className="my-2 border-border" />;
+        elements.push(wrapHighlight(el, [offset + i]));
         i++;
         continue;
       }
 
       // Headings (### before ## before #)
       if (trimmed.startsWith("### ")) {
-        elements.push(
+        const el = (
           <h4 key={key++} className="text-sm font-semibold text-foreground">
             <InlineMarkdown text={trimmed.slice(4)} />
-          </h4>,
+          </h4>
         );
+        elements.push(wrapHighlight(el, [offset + i]));
         i++;
         continue;
       }
       if (trimmed.startsWith("## ")) {
-        elements.push(
+        const el = (
           <h3 key={key++} className="text-sm font-semibold text-foreground">
             <InlineMarkdown text={trimmed.slice(3)} />
-          </h3>,
+          </h3>
         );
+        elements.push(wrapHighlight(el, [offset + i]));
         i++;
         continue;
       }
       if (trimmed.startsWith("# ")) {
-        elements.push(
+        const el = (
           <h2 key={key++} className="text-base font-bold text-foreground">
             <InlineMarkdown text={trimmed.slice(2)} />
-          </h2>,
+          </h2>
         );
+        elements.push(wrapHighlight(el, [offset + i]));
         i++;
         continue;
       }
 
       // Table: collect consecutive pipe-delimited lines
       if (isTableLine(trimmed)) {
+        const startI = i;
         const tableLines: string[] = [];
         while (i < lines.length && lines[i].trim() && isTableLine(lines[i].trim())) {
           tableLines.push(lines[i].trim());
           i++;
         }
+        const lineRange = Array.from({ length: i - startI }, (_, idx) => offset + startI + idx);
         if (tableLines.length >= 2) {
-          elements.push(<MdTable key={key++} lines={tableLines} />);
+          const el = <MdTable key={key++} lines={tableLines} />;
+          elements.push(wrapHighlight(el, lineRange));
         } else {
           // Single pipe line — treat as paragraph
-          elements.push(
+          const el = (
             <p key={key++} className="leading-relaxed">
               <InlineMarkdown text={tableLines[0]} />
-            </p>,
+            </p>
           );
+          elements.push(wrapHighlight(el, lineRange));
         }
         continue;
       }
 
       // Bullet list: collect consecutive bullet lines (- or * prefix)
       if (/^[-*]\s/.test(trimmed)) {
+        const startI = i;
         const items: string[] = [];
         while (i < lines.length && /^[-*]\s/.test(lines[i].trim())) {
           items.push(lines[i].trim().replace(/^[-*]\s+/, ""));
           i++;
         }
-        elements.push(
+        const lineRange = Array.from({ length: i - startI }, (_, idx) => offset + startI + idx);
+        const el = (
           <ul key={key++} className="list-disc space-y-1 pl-5">
             {items.map((item, j) => (
               <li key={j}><InlineMarkdown text={item} /></li>
             ))}
-          </ul>,
+          </ul>
         );
+        elements.push(wrapHighlight(el, lineRange));
         continue;
       }
 
       // Numbered list: collect consecutive numbered lines (1. / 2. etc.)
       if (/^\d+[.)]\s/.test(trimmed)) {
+        const startI = i;
         const items: string[] = [];
         while (i < lines.length && /^\d+[.)]\s/.test(lines[i].trim())) {
           items.push(lines[i].trim().replace(/^\d+[.)]\s+/, ""));
           i++;
         }
-        elements.push(
+        const lineRange = Array.from({ length: i - startI }, (_, idx) => offset + startI + idx);
+        const el = (
           <ol key={key++} className="list-decimal space-y-1 pl-5">
             {items.map((item, j) => (
               <li key={j}><InlineMarkdown text={item} /></li>
             ))}
-          </ol>,
+          </ol>
         );
+        elements.push(wrapHighlight(el, lineRange));
         continue;
       }
 
       // Paragraph: collect consecutive non-special lines
+      const startI = i;
       const paraLines: string[] = [];
       while (
         i < lines.length &&
@@ -137,11 +187,13 @@ export function SimpleMd({ text }: { text: string }) {
         i++;
       }
       if (paraLines.length > 0) {
-        elements.push(
+        const lineRange = Array.from({ length: i - startI }, (_, idx) => offset + startI + idx);
+        const el = (
           <p key={key++} className="leading-relaxed">
             <InlineMarkdown text={paraLines.join("\n")} />
-          </p>,
+          </p>
         );
+        elements.push(wrapHighlight(el, lineRange));
       }
     }
   }

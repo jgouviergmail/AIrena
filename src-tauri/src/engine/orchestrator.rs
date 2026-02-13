@@ -1412,7 +1412,12 @@ impl DiscussionEngine {
         dynamic_directive: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> Option<String> {
-        let all_names: Vec<String> = self.gladiateurs.iter().map(|g| g.config.name.clone()).collect();
+        // Exclude current speaker from participant names to prevent self-addressing
+        let other_names: Vec<String> = self.gladiateurs.iter()
+            .enumerate()
+            .filter(|(i, _)| *i != glad_idx)
+            .map(|(_, g)| g.config.name.clone())
+            .collect();
         let (sys, usr) = prompt_builder::build_intervention_prompt(
             &self.gladiateurs[glad_idx].config.system_prompt,
             &self.config.topic,
@@ -1426,7 +1431,7 @@ impl DiscussionEngine {
             self.current_turn,
             self.config.max_turns,
             search_results,
-            &all_names,
+            &other_names,
             dynamic_directive,
             &self.config.discussion_mode,
         );
@@ -1602,7 +1607,12 @@ impl DiscussionEngine {
         dynamic_directive: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> (Option<String>, Option<String>) {
-        let all_names: Vec<String> = self.gladiateurs.iter().map(|g| g.config.name.clone()).collect();
+        // Exclude current speaker from participant names to prevent self-addressing
+        let other_names: Vec<String> = self.gladiateurs.iter()
+            .enumerate()
+            .filter(|(i, _)| *i != glad_idx)
+            .map(|(_, g)| g.config.name.clone())
+            .collect();
         let (sys, usr) = prompt_builder::build_intervention_prompt(
             &self.gladiateurs[glad_idx].config.system_prompt,
             &self.config.topic,
@@ -1616,7 +1626,7 @@ impl DiscussionEngine {
             self.current_turn,
             self.config.max_turns,
             search_results,
-            &all_names,
+            &other_names,
             dynamic_directive,
             &self.config.discussion_mode,
         );

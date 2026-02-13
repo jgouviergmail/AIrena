@@ -47,6 +47,7 @@ interface ArenaState {
   wikiArticleUrlsPerMessage: Record<string, string[]>;
   _pendingWikiUrls: string[];
   documentContent: string;
+  previousDocumentContent: string | null;
   documentFormat: DocumentFormat;
   documentLastEditor: string | null;
   directives: Map<string, DirectiveData>;
@@ -83,6 +84,7 @@ const initialState = {
   wikiArticleUrlsPerMessage: {} as Record<string, string[]>,
   _pendingWikiUrls: [] as string[],
   documentContent: "",
+  previousDocumentContent: null as string | null,
   documentFormat: "none" as DocumentFormat,
   documentLastEditor: null as string | null,
   directives: new Map<string, DirectiveData>(),
@@ -291,11 +293,12 @@ export const useArenaStore = create<ArenaState>((set) => ({
         break;
 
       case "documentUpdated":
-        set({
+        set((s) => ({
+          previousDocumentContent: s.documentContent || null,
           documentContent: event.data.content,
           documentFormat: event.data.format as DocumentFormat,
           documentLastEditor: event.data.speakerName,
-        });
+        }));
         break;
 
       case "directiveGenerated":
@@ -439,6 +442,7 @@ export const useArenaStore = create<ArenaState>((set) => ({
       emotionHistory: new Map<string, EmotionSnapshot[]>(),
       moodSummary: new Map<string, string>(),
       documentContent: "",
+      previousDocumentContent: null,
       documentFormat: "none" as DocumentFormat,
       documentLastEditor: null,
       directives: new Map<string, DirectiveData>(),

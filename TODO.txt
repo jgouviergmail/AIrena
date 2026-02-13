@@ -417,3 +417,45 @@ Esnuite, ajoute les nouveaux profils suivants, selon le même modèle que les pr
 - personnalités : Napoléon Bonaparte, Charles de Gaulle,  Louis Pasteur, Confucius, Pablo Picasso, Mahatma Gandhi, Martin Luther King Jr., Nelson Mandela, Simone Veil, Alfred Hitchcock
 
 Pour les personnalités, aide toi de recherches internet sur des sites reconnus et fiables afin de définir fidèlement leur personnalité et leur profil psychologique
+
+-------------------------------------------------------------------
+
+Personnalités à ajouter
+- RH 
+- 
+
+--------------------------------------------------------------------
+
+RAG (Retrieval-Augmented Generation) Local : 
+Permettre à l'utilisateur d'importer des fichiers (PDF, Code, Docx) dans une nouvelle sidebar "Docs RAG" non pas pour écrire, mais comme base de connaissances.
+Cas d'usage : Charger un contrat de 50 pages et demander à "L'Avocat du Diable" et au "Fiscaliste" d'en débattre les failles.
+
+--------------------------------------------------------------------
+
+Cartographie d'Arguments : 
+Générer une "Mind Map" en temps réel dans une nouvelle sidebar "Mindmap" qui structure visuellement les arguments, contre-arguments et preuves, exportable en image.
+
+--------------------------------------------------------------------
+
+Alliances Dynamiques : 
+Visualiser graphiquement dans une nouvelle sidebar "Relations" les relations (Allié/Rival) sous forme de graphe de réseau. 
+Permettre des "coalitions" où deux IA fusionnent leurs temps de parole pour un argument commun.
+
+--------------------------------------------------------------------
+
+Code Interpreter (Sandbox) [option à activer dans le paramétrage de la discussion] 
+Donner la capacité d'exécuter réellement du code Python pour générer des graphiques ou calculer des données, plutôt que de simplement en parler.
+
+--------------------------------------------------------------------
+
+Mémoire à Long Terme (Vectorielle) : 
+Créer une base de données vectorielle (ex: ChromaDB local) pour que chaque GladIAteurs se "souviennent" des discussions passées.
+Si la discussion est supprimée de l'historique alors elle est supprimée de la base de base de données vectorielle.
+Effet : Si vous relancez une discussion avec "Napoléon", il pourrait dire : "Comme je vous l'ai dit lors de notre débat sur la stratégie militaire le mois dernier..."
+
+--------------------------------------------------------------------
+
+Mode "Arène Réseau" (LAN) + système de points par galdiateur déterminé par un vote majoritaire à chaque tour en fonction des like, dislike, etc...
+Permettre à deux instances d'AIrena sur le même réseau local de se connecter.
+Concept : Tu es sur ton PC avec ton équipe de GladIAteurs, ton frère Alexandre (à Mulhouse) est sur le sien avec la sienne. Les deux équipes débattent dans une arène commune.
+

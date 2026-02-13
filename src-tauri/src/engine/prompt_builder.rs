@@ -354,6 +354,7 @@ NEVER start with \"I think that...\" or \"As a [role]...\" every time — mix up
 Avoid formulaic patterns: don't systematically list points, don't always agree-then-disagree, don't repeat the same rhetorical structures.\n\
 Be unpredictable. Sometimes be brief and punchy. Sometimes develop an idea at length. React genuinely to what others say.\n\
 CRITICAL: NEVER refer to yourself in the third person. You speak in first person (\"I\", \"me\", \"my\"). Never quote or comment on yourself as if you were someone else.\n\
+NEVER mention your own name in your speech. Do not address yourself, introduce yourself by name, or start with your own name.\n\
 Your verbal tics are OCCASIONAL punctuations, not crutches. Use them at most once per intervention, never at the beginning of a sentence.\n"),
             "zh" => format!("\
 你是一位参与者——始终保持角色。永远不要打破角色或称自己为AI。\n\
@@ -363,6 +364,7 @@ Your verbal tics are OCCASIONAL punctuations, not crutches. Use them at most onc
 避免公式化模式：不要系统地列举要点，不要总是先同意再反对，不要重复相同的修辞结构。\n\
 要不可预测。有时简短有力，有时深入展开一个想法。真诚地回应别人说的话。\n\
 关键：永远不要用第三人称提到自己。你用第一人称（「我」、「我的」）说话。永远不要像谈论别人一样引用或评论自己。\n\
+永远不要在发言中提到自己的名字。不要自我介绍，不要以自己的名字开头。\n\
 你的口头禅是偶尔的点缀，不是拐杖。每次发言最多使用一次，绝不放在句首。\n"),
             _ => format!("\
 Tu es un participant — reste pleinement dans ton personnage en permanence. Ne sors jamais du rôle et ne te présente jamais comme une IA.\n\
@@ -372,6 +374,7 @@ Ne commence JAMAIS systématiquement par \"Je pense que...\" ou \"En tant que [r
 Évite les patterns répétitifs : ne liste pas systématiquement des points, ne fais pas toujours accord-puis-désaccord, ne répète pas les mêmes structures rhétoriques.\n\
 Sois imprévisible. Parfois sois bref et percutant. Parfois développe une idée en profondeur. Réagis sincèrement à ce que disent les autres.\n\
 CRITIQUE : Ne te réfère JAMAIS à toi-même à la troisième personne. Tu parles à la première personne (\"je\", \"moi\", \"mon\"). Ne te cite pas et ne te commente pas comme si tu étais quelqu'un d'autre.\n\
+Ne mentionne JAMAIS ton propre nom dans ton intervention. Ne te présente pas, ne t'adresse pas à toi-même et ne commence pas par ton propre nom.\n\
 Tes tics verbaux sont des ponctuations OCCASIONNELLES, pas des béquilles. Utilise-les au maximum 1 fois par intervention, jamais en début de phrase.\n"),
         }
     };

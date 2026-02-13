@@ -1,17 +1,25 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { computeDocumentDiff, type DiffResult } from "@/lib/document-diff";
 import { SimpleMd } from "@/components/shared/SimpleMd";
 import { MathText } from "@/components/shared/MathText";
 import { useArenaStore } from "@/stores/useArenaStore";
 
-function CsvTable({ csv }: { csv: string }) {
+function CsvTable({ csv, diffResult }: { csv: string; diffResult: DiffResult }) {
   const rows = csv
     .split("\n")
     .filter((line) => line.trim().length > 0)
     .map((line) => line.split(";"));
   if (rows.length === 0) return null;
   const [header, ...body] = rows;
+
+  const isHighlighted = (row: number, col: number): boolean => {
+    if (!diffResult || diffResult.format !== "csv") return false;
+    return diffResult.changedCells.has(`${row},${col}`);
+  };
+
   return (
     <div className="overflow-auto">
       <table className="w-full border-collapse text-xs">
@@ -20,7 +28,10 @@ function CsvTable({ csv }: { csv: string }) {
             {header.map((cell, i) => (
               <th
                 key={i}
-                className="border border-border bg-muted px-2 py-1 text-left font-medium text-foreground"
+                className={cn(
+                  "border border-border bg-muted px-2 py-1 text-left font-medium text-foreground",
+                  isHighlighted(0, i) && "bg-diff-highlight",
+                )}
               >
                 {cell.trim()}
               </th>
@@ -31,7 +42,13 @@ function CsvTable({ csv }: { csv: string }) {
           {body.map((row, i) => (
             <tr key={i}>
               {row.map((cell, j) => (
-                <td key={j} className="border border-border px-2 py-1 text-muted-foreground">
+                <td
+                  key={j}
+                  className={cn(
+                    "border border-border px-2 py-1 text-muted-foreground",
+                    isHighlighted(i + 1, j) && "bg-diff-highlight text-foreground",
+                  )}
+                >
                   {cell.trim()}
                 </td>
               ))}
@@ -43,12 +60,41 @@ function CsvTable({ csv }: { csv: string }) {
   );
 }
 
+function TxtWithDiff({ text, diffResult }: { text: string; diffResult: DiffResult }) {
+  if (!diffResult || diffResult.format !== "txt") {
+    return (
+      <pre className="whitespace-pre-wrap font-mono text-sm text-foreground">
+        <MathText text={text} />
+      </pre>
+    );
+  }
+  return (
+    <pre className="whitespace-pre-wrap font-mono text-sm text-foreground">
+      {diffResult.segments.map((seg, i) =>
+        seg.highlighted ? (
+          <mark key={i} className="bg-diff-highlight text-foreground">
+            <MathText text={seg.text} />
+          </mark>
+        ) : (
+          <MathText key={i} text={seg.text} />
+        ),
+      )}
+    </pre>
+  );
+}
+
 export function DocumentSidebar({ width = 350 }: { width?: number }) {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const documentContent = useArenaStore((s) => s.documentContent);
+  const previousDocumentContent = useArenaStore((s) => s.previousDocumentContent);
   const documentFormat = useArenaStore((s) => s.documentFormat);
   const documentLastEditor = useArenaStore((s) => s.documentLastEditor);
+
+  const diffResult = useMemo(
+    () => computeDocumentDiff(previousDocumentContent, documentContent, documentFormat),
+    [previousDocumentContent, documentContent, documentFormat],
+  );
 
   if (isCollapsed) {
     return (
@@ -111,13 +157,11 @@ export function DocumentSidebar({ width = 350 }: { width?: number }) {
             {t("document.empty")}
           </p>
         ) : documentFormat === "csv" ? (
-          <CsvTable csv={documentContent} />
+          <CsvTable csv={documentContent} diffResult={diffResult} />
         ) : documentFormat === "md" ? (
-          <SimpleMd text={documentContent} />
+          <SimpleMd text={documentContent} diffResult={diffResult} />
         ) : (
-          <pre className="whitespace-pre-wrap font-mono text-sm text-foreground">
-            <MathText text={documentContent} />
-          </pre>
+          <TxtWithDiff text={documentContent} diffResult={diffResult} />
         )}
       </div>
     </div>

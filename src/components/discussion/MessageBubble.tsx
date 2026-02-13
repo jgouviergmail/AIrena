@@ -9,6 +9,13 @@ import type { Message, SpeakerRole } from "@/lib/types";
 /** Stable empty array to avoid re-creating [] on every render (breaks useMemo deps). */
 const EMPTY_NAMES: string[] = [];
 
+/** Normalize Unicode dash variants (en-dash, em-dash, non-breaking hyphen, etc.) to ASCII hyphen.
+ *  LLMs often output U+2011 (non-breaking hyphen) instead of U+002D (ASCII hyphen). */
+const DASH_RE = /[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g;
+function normalizeDashes(s: string): string {
+  return s.replace(DASH_RE, "-");
+}
+
 /** Extract short forms from names for better matching.
  *  "Le Scientifique" → ["Scientifique"]
  *  "Napoléon Bonaparte" → ["Napoléon", "Bonaparte"]
@@ -45,18 +52,27 @@ function highlightNames(
   const validNames = participantNames.filter((n) => n && n.length > 1);
   if (validNames.length === 0) return [<MathText key={0} text={text} />];
   // Build expanded list: full names + short forms (article-stripped)
+  // Normalize dashes so "Le Psycho‑rigide" (U+2011) matches "Le Psycho-rigide" (U+002D)
   const allForms = new Set<string>();
   for (const n of validNames) {
-    allForms.add(n);
-    for (const short of extractShortForms(n)) {
+    allForms.add(normalizeDashes(n));
+    for (const short of extractShortForms(normalizeDashes(n))) {
       allForms.add(short);
     }
   }
   // Sort longest-first so "Le Scientifique" matches before "Scientifique"
   const sorted = [...allForms].sort((a, b) => b.length - a.length);
-  const escaped = sorted.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
-  const parts = text.split(regex);
+  // Escape regex special chars, then replace literal hyphens with a dash character class
+  // so the pattern matches both ASCII hyphen and Unicode dash variants
+  const escaped = sorted.map((n) =>
+    n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+     .replace(/-/g, "[-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]"),
+  );
+  // Use \b word boundaries to prevent matching "bar" inside "barrières"
+  const regex = new RegExp(`\\b(${escaped.join("|")})\\b`, "gi");
+  // Normalize dashes in input text so that lookup in lowerNames works
+  const normalizedText = normalizeDashes(text);
+  const parts = normalizedText.split(regex);
   const lowerNames = new Set(sorted.map((n) => n.toLowerCase()));
   return parts.map((part, i) => {
     if (lowerNames.has(part.toLowerCase())) {
