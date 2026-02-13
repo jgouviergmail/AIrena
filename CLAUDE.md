@@ -165,6 +165,10 @@ SQLite at `{app_data_dir}/airena.db`. Tables: `settings` (key-value), `predefine
 
 ## Good practices
 
+Tu peux te documenter sur le fonctionnement actuelle de l'application en consultant :
+- claude.md
+- les documents techniques et fonctionnels dans le répertoire docs
+
 Es tu intellectuellement (logique fonctionnelle), fonctionnellement (bonne exécution fonctionnelle) et techniquement (implémentaion correcte, conforme aux bonnes pratiques, optimale) pleinement satisfait et convaincu de ton plan ou implémentation du plan ?
 
 Vérifie sur le fond et la forme, notamment, mais sans être exhaustif :

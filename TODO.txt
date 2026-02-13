@@ -427,8 +427,10 @@ Personnalités à ajouter
 --------------------------------------------------------------------
 
 RAG (Retrieval-Augmented Generation) Local : 
-Permettre à l'utilisateur d'importer des fichiers (PDF, Code, Docx) dans une nouvelle sidebar "Docs RAG" non pas pour écrire, mais comme base de connaissances.
-Cas d'usage : Charger un contrat de 50 pages et demander à "L'Avocat du Diable" et au "Fiscaliste" d'en débattre les failles.
+Lors du paramétrage de la discussion permettre à l'utilisateur d'importer des fichiers (TXT, PDF, Code, Docx, PPTX, ...) qui serviront de base de connaissances commune à tous les gladiateur.
+Cas d'usage (exemples non exhausdtifs) : 
+- Charger un contrat de 50 pages et demander à "L'Avocat du Diable" et au "Fiscaliste" d'en débattre les failles.
+- Charger des documents afin d'enrichir la connaissance des gladiateur pour une discussion
 
 --------------------------------------------------------------------
 
