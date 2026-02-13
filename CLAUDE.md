@@ -68,8 +68,14 @@ The Rust backend is a single library crate (`airena_lib`). `main.rs` just calls 
 - **pages/** — 7 pages: Home, Setup (multi-step wizard), Arena (live discussion), Summary, History, HistoryDetail, Settings
 - **stores/** — Zustand 5 stores: `useArenaStore` (discussion state + event dispatch), `useSetupStore` (config including mode/format/wiki), `useSettingsStore` (app prefs)
 - **lib/tauri-api.ts** — All Tauri command wrappers. `startDiscussion()` creates a `Channel<ArenaEvent>` for event streaming.
-- **components/discussion/** — DiscussionFeed, MessageBubble, SpeakerBadge, UserInputArea, DiscussionControls
-- **components/emotion/** — EmotionSidebar with ParticipantEmotionCard (6-axis display + sparklines)
+- **lib/persona-\*** — Persona system: `persona-types.ts` (OCEAN, Posture, Identity, Psychology, Voice, Dynamics types), `persona-parser.ts` (parses `<system_kernel>` XML → PersonaData), `persona-serializer.ts` (PersonaData → XML), `persona-labels.ts` (trilingual field labels)
+- **lib/profile-emoji.ts** — Maps predefined profile names → emojis, keyword regex → emojis, hash fallback
+- **components/discussion/** — DiscussionFeed, MessageBubble, SpeakerBadge, UserInputArea, DiscussionControls, ReadOnlyFeed
+- **components/emotion/** — EmotionSidebar, ParticipantEmotionCard (6-axis display), EmotionSparkline, EmotionAxisSlider
+- **components/document/** — DocumentSidebar: real-time document co-editing panel with format-specific rendering (txt, md via SimpleMd, csv as table)
+- **components/shared/** — MathText (KaTeX LaTeX rendering), SimpleMd (lightweight markdown renderer)
+- **components/setup/** — LlmParamsForm, EmojiPicker, PersonaEditor (visual `<system_kernel>` editor), OceanSliders (Big Five sliders)
+- **components/layout/** — AppShell, TopBar, Sidebar, ResizeDivider (draggable panel divider)
 - **hooks/useTokenBuffer.ts** — 60ms token batching to prevent WebView crash from per-token React re-renders
 - **i18n/** — i18next with FR (default), EN, ZH locales
 - **providers/ThemeProvider** — Dark/light theme via CSS variables
@@ -82,7 +88,18 @@ The engine runs in a Tauri-spawned tokio task. It emits `ArenaEvent` variants th
 
 8 modes in `DiscussionMode` enum: `Debate` (default), `Ideation`, `CoConstruction`, `UserDriven`, `Socratic`, `Tutorial`, `CritiqueReview`, `CollaborativeFiction`. Each mode has tailored instructions in `mode_prompts.rs` covering introduction, speaker posture, thought focus, synthesis, and moderation criteria. `CoConstruction` mode supports output in `DocumentFormat` (None, Txt, Md, Csv).
 
-### Cognitive Personality System
+### Persona System (`<system_kernel>` XML)
+
+Each AI personality is defined as a `<system_kernel>` XML prompt embedding a "Neuro-Cognitive Persona" architecture:
+- **OCEAN Big Five** (`<big_five_matrix>`) — 5 personality axes scored 1-10 (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism)
+- **Transactional Analysis** (`<ego_state>`) — Posture: ADULTE, PARENT_CRITIQUE, PARENT_NOURRICIER, ENFANT_LIBRE, ENFANT_ADAPTÉ
+- **Cognitive Biases** — Primary bias + blind spot per persona
+- **Identity** — Name/role, core philosophy, background, communication style (register, sentence structure, tic)
+- **Dynamic Rendering Engine** (`<dynamics>`) — Emotional state → syntax/content/relational behavior rules
+
+Frontend: `persona-parser.ts` parses XML → `PersonaData`, `persona-serializer.ts` does the reverse. `PersonaEditor` provides a visual form editor with `OceanSliders`.
+
+### Cognitive Personality System (Runtime)
 
 `directive_builder.rs` generates behavioral directives per turn based on:
 - Emotional state of the speaker
@@ -93,6 +110,15 @@ The engine runs in a Tauri-spawned tokio task. It emits `ArenaEvent` variants th
 
 `dynamics_parser.rs` extracts personality fields from `<dynamics>` XML in system prompts.
 
+### Web Search (Tavily)
+
+`TavilyClient` in `tavily/client.rs` provides internet search via Tavily API:
+- Requires API key (configured in Settings, free tier: 1000 credits/month)
+- Per-agent quota enforcement: per-discussion limit + per-turn limit (max 1/turn)
+- Credit counter tracked in DB settings, auto-resets on monthly rolling period
+- Forced first-search for IArbitre introduction (mirrors wiki architecture)
+- Results emitted as `WebSearchPerformed` events
+
 ### Wikipedia Integration
 
 `WikiClient` in `wikipedia/client.rs` performs knowledge lookups:
@@ -102,6 +128,8 @@ The engine runs in a Tauri-spawned tokio task. It emits `ArenaEvent` variants th
 - Forced first-search pattern per gladiateur (mirrors web search architecture)
 - Results emitted as `WikiSearchPerformed` events with article URLs
 - Uses `tokio::select!` for cancellation support
+
+Both web search and Wikipedia can be enabled independently or together per discussion.
 
 ## Critical Implementation Patterns
 
