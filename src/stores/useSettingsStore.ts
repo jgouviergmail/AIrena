@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { logger } from "@/lib/logger";
+import { extractErrorMessage } from "@/lib/error-utils";
+import { toast } from "@/stores/useToastStore";
 import type { AppSettings, ModelInfo, PredefinedProfile } from "@/lib/types";
 import * as api from "@/lib/tauri-api";
 
@@ -42,6 +44,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     tavilyPeriodStart: "",
     tavilyUsageCount: 0,
     tavilyUsageHistory: "[]",
+    embeddingModel: "",
   },
   profiles: [],
   arbitreProfiles: [],
@@ -77,12 +80,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   saveSettings: async () => {
-    try {
-      const { settings } = get();
-      await api.saveSettings(settings);
-    } catch (e) {
-      console.error("Failed to save settings:", e);
-    }
+    const { settings } = get();
+    await api.saveSettings(settings);
   },
 
   checkOllama: async () => {
@@ -124,7 +123,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     } catch (e) {
       logger.error("settings", `Failed to preload model: ${model}`, e);
       if (gen === preloadGeneration) {
-        set({ preloading: false, preloadError: String(e) });
+        set({ preloading: false, preloadError: extractErrorMessage(e) });
       }
     }
   },
@@ -143,7 +142,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       await api.saveProfile(profile);
       await get().refreshProfiles();
     } catch (e) {
-      console.error("Failed to save profile:", e);
+      toast.error("Failed to save profile", extractErrorMessage(e));
     }
   },
 
@@ -152,7 +151,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       await api.deleteProfile(id);
       await get().refreshProfiles();
     } catch (e) {
-      console.error("Failed to delete profile:", e);
+      toast.error("Failed to delete profile", extractErrorMessage(e));
     }
   },
 
@@ -170,7 +169,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       await api.saveProfile(profile);
       await get().refreshArbitreProfiles();
     } catch (e) {
-      console.error("Failed to save arbitre profile:", e);
+      toast.error("Failed to save arbitre profile", extractErrorMessage(e));
     }
   },
 
@@ -179,7 +178,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       await api.deleteProfile(id);
       await get().refreshArbitreProfiles();
     } catch (e) {
-      console.error("Failed to delete arbitre profile:", e);
+      toast.error("Failed to delete arbitre profile", extractErrorMessage(e));
     }
   },
 }));

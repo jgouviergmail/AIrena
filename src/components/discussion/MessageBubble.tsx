@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { BookOpen, Brain, Globe } from "lucide-react";
+import { BookOpen, Brain, Database, Globe } from "lucide-react";
 import { SpeakerBadge } from "./SpeakerBadge";
 import { MathText } from "@/components/shared/MathText";
 import { cn } from "@/lib/utils";
-import type { Message, SpeakerRole } from "@/lib/types";
+import type { Message, RagChunkInfo, SpeakerRole } from "@/lib/types";
 
 /** Stable empty array to avoid re-creating [] on every render (breaks useMemo deps). */
 const EMPTY_NAMES: string[] = [];
@@ -94,6 +94,8 @@ export function MessageBubble({
   searchCount,
   wikiSearchCount,
   wikiArticleUrls,
+  ragChunkCount,
+  ragChunkDetails,
   participantNames = EMPTY_NAMES,
   emojiMap,
 }: {
@@ -104,6 +106,8 @@ export function MessageBubble({
   searchCount?: number;
   wikiSearchCount?: number;
   wikiArticleUrls?: string[];
+  ragChunkCount?: number;
+  ragChunkDetails?: RagChunkInfo[];
   participantNames?: string[];
   emojiMap?: Map<string, string>;
 }) {
@@ -153,6 +157,19 @@ export function MessageBubble({
               onClick={() => wikiArticleUrls?.[0] && window.open(wikiArticleUrls[0], "_blank")}
             >
               <BookOpen className="h-3 w-3" />
+            </span>
+          )}
+          {(ragChunkCount ?? 0) > 0 && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-purple-500/10 px-1.5 py-0.5 text-[10px] font-medium text-purple-500"
+              title={
+                ragChunkDetails?.length
+                  ? ragChunkDetails.map((c) => `${c.fileName} #${c.chunkIndex + 1}: ${c.preview}`).join("\n")
+                  : `RAG: ${ragChunkCount} chunk(s)`
+              }
+            >
+              <Database className="h-3 w-3" />
+              {ragChunkCount}
             </span>
           )}
         </div>

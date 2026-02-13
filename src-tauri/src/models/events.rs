@@ -129,6 +129,13 @@ pub enum ArenaEvent {
         content: String,
         format: String,
     },
+    /// RAG knowledge base context injected for a speaker
+    #[serde(rename_all = "camelCase")]
+    RagContextInjected {
+        speaker_id: String,
+        speaker_name: String,
+        chunks: Vec<crate::rag::RagChunkInfo>,
+    },
     /// Discussion ended
     DiscussionEnded,
     /// Non-fatal error (displayed in feed)

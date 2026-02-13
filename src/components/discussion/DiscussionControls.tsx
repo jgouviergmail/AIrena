@@ -8,6 +8,7 @@ import {
   Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { extractErrorMessage } from "@/lib/error-utils";
 import { useArenaStore } from "@/stores/useArenaStore";
 import * as api from "@/lib/tauri-api";
 
@@ -24,8 +25,7 @@ export function DiscussionControls({
   const [confirmHardStop, setConfirmHardStop] = useState(false);
 
   const handleError = (e: unknown) => {
-    const msg = e instanceof Error ? e.message : String(e);
-    dispatchEvent({ type: "error", data: { message: msg } });
+    dispatchEvent({ type: "error", data: { message: extractErrorMessage(e) } });
   };
 
   const handlePauseResume = async () => {

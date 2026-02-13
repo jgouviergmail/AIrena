@@ -28,6 +28,7 @@ pub async fn get_settings(db: &Connection) -> Result<AppSettings, tokio_rusqlite
                 "tavily_period_start" => settings.tavily_period_start = value,
                 "tavily_usage_count" => settings.tavily_usage_count = value.parse().unwrap_or(0),
                 "tavily_usage_history" => settings.tavily_usage_history = value,
+                "embedding_model" => settings.embedding_model = value,
                 _ => {}
             }
         }
@@ -60,6 +61,7 @@ pub async fn save_settings(
             ("tavily_period_start", settings.tavily_period_start.clone()),
             ("tavily_usage_count", settings.tavily_usage_count.to_string()),
             ("tavily_usage_history", settings.tavily_usage_history.clone()),
+            ("embedding_model", settings.embedding_model.clone()),
         ];
         for (key, value) in &pairs {
             tx.execute(

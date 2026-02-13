@@ -240,3 +240,43 @@ pub const TEMP_MAX: f32 = 2.0;
 
 /// Low temperature used for voting, ordering, and other structured JSON responses.
 pub const TEMP_VOTING: f32 = 0.3;
+
+// ── RAG ──────────────────────────────────────────────────────────────
+
+/// Maximum file size for RAG import (bytes). 10 MB.
+pub const RAG_MAX_FILE_SIZE_BYTES: usize = 10 * 1024 * 1024;
+
+/// Target chunk size (characters). ~512 tokens ≈ 2000 chars.
+/// Benchmark-validated optimal for general-purpose RAG (2025-2026).
+pub const RAG_CHUNK_TARGET_CHARS: usize = 2000;
+
+/// Overlap between consecutive chunks (characters). ~10% of target.
+pub const RAG_CHUNK_OVERLAP_CHARS: usize = 200;
+
+/// Candidates from vector similarity search (Stage 1a).
+pub const RAG_RETRIEVAL_TOP_K: usize = 30;
+
+/// Candidates after RRF fusion (Stage 1c).
+pub const RAG_RRF_TOP_K: usize = 10;
+
+/// RRF constant k (standard value from original paper).
+pub const RAG_RRF_K: f32 = 60.0;
+
+/// Maximum chunks the LLM selects (Stage 2).
+pub const RAG_LLM_SELECT_MAX: usize = 5;
+
+/// BM25 parameter k1 (term frequency saturation).
+pub const RAG_BM25_K1: f32 = 1.2;
+
+/// BM25 parameter b (document length normalization).
+pub const RAG_BM25_B: f32 = 0.75;
+
+/// Batch size for embedding API calls (texts per request).
+pub const RAG_EMBED_BATCH_SIZE: usize = 32;
+
+/// HTTP timeout for embedding API calls (seconds).
+/// First call may load the model — needs extra time.
+pub const RAG_EMBED_TIMEOUT_SECS: u64 = 60;
+
+/// Maximum characters for RAG context injected into prompts.
+pub const RAG_MAX_CONTEXT_LEN: usize = 5000;

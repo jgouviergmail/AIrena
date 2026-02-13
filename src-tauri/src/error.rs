@@ -14,4 +14,6 @@ pub enum CommandError {
     NoActiveDiscussion,
     #[error("History error: {0}")]
     History(String),
+    #[error("RAG error: {0}")]
+    Rag(String),
 }

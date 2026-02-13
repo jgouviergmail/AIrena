@@ -106,6 +106,7 @@ export interface AppSettings {
   tavilyPeriodStart: string;
   tavilyUsageCount: number;
   tavilyUsageHistory: string;
+  embeddingModel: string;
 }
 
 export interface TavilyPeriodHistory {
@@ -275,8 +276,32 @@ export type ArenaEvent =
         relationshipSummary: string;
       };
     }
+  | {
+      type: "ragContextInjected";
+      data: {
+        speakerId: string;
+        speakerName: string;
+        chunks: RagChunkInfo[];
+      };
+    }
   | { type: "discussionEnded"; data: null }
   | { type: "error"; data: { message: string } };
+
+// RAG types
+export interface RagDocumentInfo {
+  docId: string;
+  fileName: string;
+  format: string;
+  chunkCount: number;
+  charCount: number;
+}
+
+export interface RagChunkInfo {
+  fileName: string;
+  chunkIndex: number;
+  preview: string;
+  relevanceScore: number;
+}
 
 // Directive data for UI visualization
 export interface DirectiveData {

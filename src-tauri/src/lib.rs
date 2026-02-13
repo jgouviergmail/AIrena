@@ -5,6 +5,7 @@ mod engine;
 mod error;
 mod models;
 mod ollama;
+mod rag;
 mod state;
 mod tavily;
 mod wikipedia;
@@ -79,6 +80,7 @@ pub fn run() {
                 engine_cmd_tx: Arc::new(Mutex::new(None)),
                 cancel_token: Arc::new(Mutex::new(None)),
                 db,
+                rag_store: Arc::new(Mutex::new(None)),
             };
             app.manage(state);
 
@@ -113,6 +115,11 @@ pub fn run() {
             commands::history::get_discussion_history,
             commands::history::delete_discussion_history,
             commands::history::delete_all_discussion_history,
+            // RAG commands
+            commands::rag::import_rag_document,
+            commands::rag::remove_rag_document,
+            commands::rag::get_rag_status,
+            commands::rag::clear_rag_store,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

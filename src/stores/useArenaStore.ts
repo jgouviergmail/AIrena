@@ -13,6 +13,7 @@ import type {
   EmotionSnapshot,
   Message,
   ParticipantInfo,
+  RagChunkInfo,
   SpeakerRole,
 } from "@/lib/types";
 
@@ -46,6 +47,11 @@ interface ArenaState {
   wikiSearchesPerMessage: Record<string, number>;
   wikiArticleUrlsPerMessage: Record<string, string[]>;
   _pendingWikiUrls: string[];
+  ragChunkCount: number;
+  _pendingRagCount: number;
+  _pendingRagChunks: RagChunkInfo[];
+  ragChunksPerMessage: Record<string, number>;
+  ragChunkDetailsPerMessage: Record<string, RagChunkInfo[]>;
   documentContent: string;
   previousDocumentContent: string | null;
   documentFormat: DocumentFormat;
@@ -83,6 +89,11 @@ const initialState = {
   wikiSearchesPerMessage: {} as Record<string, number>,
   wikiArticleUrlsPerMessage: {} as Record<string, string[]>,
   _pendingWikiUrls: [] as string[],
+  ragChunkCount: 0,
+  _pendingRagCount: 0,
+  _pendingRagChunks: [] as RagChunkInfo[],
+  ragChunksPerMessage: {} as Record<string, number>,
+  ragChunkDetailsPerMessage: {} as Record<string, RagChunkInfo[]>,
   documentContent: "",
   previousDocumentContent: null as string | null,
   documentFormat: "none" as DocumentFormat,
@@ -177,14 +188,24 @@ export const useArenaStore = create<ArenaState>((set) => ({
           const wkUrls = s._pendingWikiUrls.length > 0
             ? { ...s.wikiArticleUrlsPerMessage, [msg.id]: [...s._pendingWikiUrls] }
             : s.wikiArticleUrlsPerMessage;
+          const ragPerMsg = s._pendingRagCount > 0
+            ? { ...s.ragChunksPerMessage, [msg.id]: s._pendingRagCount }
+            : s.ragChunksPerMessage;
+          const ragDetails = s._pendingRagChunks.length > 0
+            ? { ...s.ragChunkDetailsPerMessage, [msg.id]: [...s._pendingRagChunks] }
+            : s.ragChunkDetailsPerMessage;
           return {
             messages: [...s.messages, msg],
             webSearchesPerMessage: wsPerMsg,
             wikiSearchesPerMessage: wkPerMsg,
             wikiArticleUrlsPerMessage: wkUrls,
+            ragChunksPerMessage: ragPerMsg,
+            ragChunkDetailsPerMessage: ragDetails,
             _pendingSearchCount: 0,
             _pendingWikiCount: 0,
             _pendingWikiUrls: [],
+            _pendingRagCount: 0,
+            _pendingRagChunks: [],
           };
         });
         break;
@@ -251,6 +272,8 @@ export const useArenaStore = create<ArenaState>((set) => ({
           _pendingSearchCount: 0,
           _pendingWikiCount: 0,
           _pendingWikiUrls: [],
+          _pendingRagCount: 0,
+          _pendingRagChunks: [],
         });
         break;
 
@@ -266,6 +289,14 @@ export const useArenaStore = create<ArenaState>((set) => ({
           wikiSearchCount: s.wikiSearchCount + event.data.queries.length,
           _pendingWikiCount: s._pendingWikiCount + event.data.queries.length,
           _pendingWikiUrls: [...s._pendingWikiUrls, ...event.data.articleUrls],
+        }));
+        break;
+
+      case "ragContextInjected":
+        set((s) => ({
+          ragChunkCount: s.ragChunkCount + event.data.chunks.length,
+          _pendingRagCount: s._pendingRagCount + event.data.chunks.length,
+          _pendingRagChunks: [...s._pendingRagChunks, ...event.data.chunks],
         }));
         break;
 

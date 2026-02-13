@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::CommandError;
 use crate::models::engine_command::EngineCommand;
 use crate::models::settings::AppSettings;
+use crate::rag::RagStore;
 
 /// Global application state managed by Tauri
 /// Uses std::sync::Mutex (NOT tokio::sync::Mutex) because the lock
@@ -14,6 +15,8 @@ pub struct AppState {
     pub engine_cmd_tx: Arc<Mutex<Option<mpsc::Sender<EngineCommand>>>>,
     pub cancel_token: Arc<Mutex<Option<CancellationToken>>>,
     pub db: tokio_rusqlite::Connection,
+    /// In-memory RAG store (populated during setup, taken by engine at discussion start)
+    pub rag_store: Arc<Mutex<Option<RagStore>>>,
 }
 
 impl AppState {

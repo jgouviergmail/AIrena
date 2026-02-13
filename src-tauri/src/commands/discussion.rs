@@ -89,10 +89,13 @@ pub async fn start_discussion(
     };
     let db_clone = state.db.clone();
 
+    // Take RAG store from AppState (ownership transfer to engine)
+    let rag_store = AppState::lock_or_recover(&state.rag_store).take();
+
     tauri::async_runtime::spawn(async move {
         let mut engine = DiscussionEngine::new(
             config, id_clone, &ollama_url, &ollama_model,
-            tavily_key.as_deref(), db_clone,
+            tavily_key.as_deref(), db_clone, rag_store,
         );
         engine.set_cancel_token(engine_cancel);
         engine.set_emotion_driven(emotion_driven);

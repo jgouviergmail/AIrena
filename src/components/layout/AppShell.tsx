@@ -1,5 +1,6 @@
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
+import { ToastContainer } from "@/components/shared/ToastContainer";
 
 export function AppShell() {
   return (
@@ -8,6 +9,7 @@ export function AppShell() {
       <main className="flex flex-1 flex-col overflow-hidden">
         <Outlet />
       </main>
+      <ToastContainer />
     </div>
   );
 }

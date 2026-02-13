@@ -11,6 +11,8 @@ export function DiscussionFeed() {
   const webSearchesPerMessage = useArenaStore((s) => s.webSearchesPerMessage);
   const wikiSearchesPerMessage = useArenaStore((s) => s.wikiSearchesPerMessage);
   const wikiArticleUrlsPerMessage = useArenaStore((s) => s.wikiArticleUrlsPerMessage);
+  const ragChunksPerMessage = useArenaStore((s) => s.ragChunksPerMessage);
+  const ragChunkDetailsPerMessage = useArenaStore((s) => s.ragChunkDetailsPerMessage);
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
   const arbitre = useSetupStore((s) => s.arbitre);
 
@@ -74,6 +76,8 @@ export function DiscussionFeed() {
           searchCount={webSearchesPerMessage[msg.id]}
           wikiSearchCount={wikiSearchesPerMessage[msg.id]}
           wikiArticleUrls={wikiArticleUrlsPerMessage[msg.id]}
+          ragChunkCount={ragChunksPerMessage[msg.id]}
+          ragChunkDetails={ragChunkDetailsPerMessage[msg.id]}
           participantNames={participantNames}
           emojiMap={emojiMap}
         />

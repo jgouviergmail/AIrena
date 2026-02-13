@@ -7,8 +7,10 @@ import type {
   GladIAteurConfig,
   IArbitreConfig,
   LlmParams,
+  RagDocumentInfo,
 } from "@/lib/types";
 import { DEFAULT_LLM_PARAMS } from "@/lib/types";
+import { clearRagStore } from "@/lib/tauri-api";
 
 interface SetupState {
   step: number;
@@ -22,6 +24,7 @@ interface SetupState {
   documentFormat: DocumentFormat;
   webSearchPool: number;
   wikiSearchPool: number;
+  ragDocuments: RagDocumentInfo[];
 
   setDiscussionMode: (mode: DiscussionMode) => void;
   setDocumentFormat: (fmt: DocumentFormat) => void;
@@ -38,6 +41,9 @@ interface SetupState {
   setUserTimeout: (val: number) => void;
   setWebSearchPool: (val: number) => void;
   setWikiSearchPool: (val: number) => void;
+  addRagDocument: (doc: RagDocumentInfo) => void;
+  removeRagDocument: (docId: string) => void;
+  clearRagDocuments: () => void;
   reorderGladiateurs: (fromIndex: number, toIndex: number) => void;
   buildConfig: (userName: string) => DiscussionConfig;
   reset: () => void;
@@ -63,6 +69,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   userInterventionTimeoutSecs: 120,
   webSearchPool: 0,
   wikiSearchPool: 0,
+  ragDocuments: [],
 
   setDiscussionMode: (mode) => set({ discussionMode: mode }),
   setDocumentFormat: (fmt) => set({ documentFormat: fmt }),
@@ -118,6 +125,14 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       return { wikiSearchPool: Math.min(val, poolMax) };
     }),
 
+  addRagDocument: (doc) =>
+    set((s) => ({ ragDocuments: [...s.ragDocuments, doc] })),
+  removeRagDocument: (docId) =>
+    set((s) => ({
+      ragDocuments: s.ragDocuments.filter((d) => d.docId !== docId),
+    })),
+  clearRagDocuments: () => set({ ragDocuments: [] }),
+
   reorderGladiateurs: (fromIndex, toIndex) =>
     set((s) => {
       const list = [...s.gladiateurs];
@@ -146,7 +161,9 @@ export const useSetupStore = create<SetupState>((set, get) => ({
     };
   },
 
-  reset: () =>
+  reset: () => {
+    // Fire-and-forget: clear backend RAG store if it exists
+    clearRagStore().catch(() => {});
     set({
       step: 0,
       topic: "",
@@ -159,5 +176,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       userInterventionTimeoutSecs: 120,
       webSearchPool: 0,
       wikiSearchPool: 0,
-    }),
+      ragDocuments: [],
+    });
+  },
 }));

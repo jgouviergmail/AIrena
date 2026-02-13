@@ -7,6 +7,7 @@ import type {
   DiscussionSummary,
   ModelInfo,
   PredefinedProfile,
+  RagDocumentInfo,
   SaveDiscussionRequest,
 } from "./types";
 
@@ -130,6 +131,26 @@ export async function deleteDiscussionHistory(id: string): Promise<void> {
 
 export async function deleteAllDiscussionHistory(): Promise<void> {
   return await invoke("delete_all_discussion_history");
+}
+
+// -- RAG commands --
+
+export async function importRagDocument(
+  filePath: string,
+): Promise<RagDocumentInfo> {
+  return await invoke<RagDocumentInfo>("import_rag_document", { filePath });
+}
+
+export async function removeRagDocument(docId: string): Promise<boolean> {
+  return await invoke<boolean>("remove_rag_document", { docId });
+}
+
+export async function getRagStatus(): Promise<RagDocumentInfo[]> {
+  return await invoke<RagDocumentInfo[]>("get_rag_status");
+}
+
+export async function clearRagStore(): Promise<void> {
+  return await invoke("clear_rag_store");
 }
 
 // -- File utilities --

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Send, X } from "lucide-react";
 import * as api from "@/lib/tauri-api";
+import { extractErrorMessage } from "@/lib/error-utils";
+import { toast } from "@/stores/useToastStore";
 import { useArenaStore } from "@/stores/useArenaStore";
 
 export function UserInputArea({
@@ -35,7 +37,7 @@ export function UserInputArea({
       setMessage("");
       useArenaStore.setState({ userTurnActive: false });
     } catch (e) {
-      console.error("Failed to submit user message:", e);
+      toast.error("Failed to submit message", extractErrorMessage(e));
     }
   };
 
@@ -44,7 +46,7 @@ export function UserInputArea({
       await api.skipUserTurn();
       useArenaStore.setState({ userTurnActive: false });
     } catch (e) {
-      console.error("Failed to skip turn:", e);
+      toast.error("Failed to skip turn", extractErrorMessage(e));
     }
   };
 

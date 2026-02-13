@@ -37,6 +37,8 @@ pub struct AppSettings {
     pub tavily_period_start: String,
     pub tavily_usage_count: u32,
     pub tavily_usage_history: String,
+    #[serde(default)]
+    pub embedding_model: String,
 }
 
 impl Default for AppSettings {
@@ -52,6 +54,7 @@ impl Default for AppSettings {
             tavily_period_start: String::new(),
             tavily_usage_count: 0,
             tavily_usage_history: "[]".to_string(),
+            embedding_model: String::new(),
         }
     }
 }

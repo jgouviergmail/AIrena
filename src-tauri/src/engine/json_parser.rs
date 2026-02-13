@@ -253,13 +253,13 @@ fn strip_french_article(name: &str) -> &str {
 /// 4 layers: exact case-insensitive → article-stripped → prefix (min 3 chars) → contains (min 4 chars)
 /// Normalizes Unicode dashes so "Le Psycho‑rigide" (U+2011) matches "Le Psycho-rigide" (U+002D).
 pub fn match_speaker_name<'a>(llm_name: &str, known_names: &'a [String]) -> Option<&'a String> {
-    let llm_lower = normalize_dashes(&llm_name.to_lowercase().trim().to_string());
+    let llm_lower = normalize_dashes(llm_name.to_lowercase().trim());
     let llm_stripped = strip_french_article(&llm_lower);
 
     // 1. Exact match (case-insensitive, trimmed, dash-normalized)
     known_names
         .iter()
-        .find(|s| normalize_dashes(&s.to_lowercase().trim().to_string()) == llm_lower)
+        .find(|s| normalize_dashes(s.to_lowercase().trim()) == llm_lower)
         // 2. Article-stripped match: "Scientifique" matches "Le Scientifique"
         .or_else(|| {
             if llm_stripped.len() >= 3 {

@@ -10,11 +10,13 @@ import {
   ChevronRight,
   ChevronUp,
   Clock,
+  Database,
   FileText,
   Globe,
   GripVertical,
   Heart,
   Info,
+  Loader2,
   MessageSquare,
   Play,
   Plus,
@@ -25,8 +27,10 @@ import {
   Sliders,
   Tag,
   Trash2,
+  Upload,
   UserCircle,
   Users,
+  X,
 } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { LlmParamsForm } from "@/components/setup/LlmParamsForm";
@@ -40,6 +44,8 @@ import { cn } from "@/lib/utils";
 import { DEFAULT_LLM_PARAMS } from "@/lib/types";
 import type { DiscussionMode, DocumentFormat, GladIAteurConfig, PredefinedProfile } from "@/lib/types";
 import * as api from "@/lib/tauri-api";
+import { extractErrorMessage } from "@/lib/error-utils";
+import { toast } from "@/stores/useToastStore";
 
 const TOTAL_STEPS = 4;
 
@@ -93,8 +99,9 @@ export default function SetupPage() {
       });
       navigate("/arena");
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = extractErrorMessage(e);
       setError(msg || t("errors.generic"));
+      toast.error(t("setup.startError"), msg);
       setStarting(false);
       startingRef.current = false;
     }
@@ -220,6 +227,13 @@ const DISCUSSION_MODES: DiscussionMode[] = [
 
 const DOCUMENT_FORMATS: DocumentFormat[] = ["none", "txt", "md", "csv"];
 
+const RAG_SUPPORTED_EXTENSIONS = new Set([
+  "txt", "pdf", "docx", "pptx",
+  "py", "rs", "ts", "tsx", "js", "jsx", "java", "c", "cpp", "go", "rb", "php",
+  "swift", "kt", "cs", "yaml", "yml", "json", "xml", "html", "css", "sql",
+  "md", "csv", "toml", "sh", "log",
+]);
+
 function StepTopic() {
   const { t } = useTranslation();
   const topic = useSetupStore((s) => s.topic);
@@ -234,6 +248,102 @@ function StepTopic() {
   const setMaxTurns = useSetupStore((s) => s.setMaxTurns);
   const userInterventionTimeoutSecs = useSetupStore((s) => s.userInterventionTimeoutSecs);
   const setUserTimeout = useSetupStore((s) => s.setUserTimeout);
+  const ragDocuments = useSetupStore((s) => s.ragDocuments);
+  const addRagDocument = useSetupStore((s) => s.addRagDocument);
+  const removeRagDocument = useSetupStore((s) => s.removeRagDocument);
+  const ollamaModel = useSettingsStore((s) => s.settings.ollamaModel);
+  const embeddingModel = useSettingsStore((s) => s.settings.embeddingModel);
+  const [ragImporting, setRagImporting] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  const importFiles = async (paths: string[]) => {
+    setRagImporting(true);
+    try {
+      for (const filePath of paths) {
+        try {
+          const doc = await api.importRagDocument(filePath);
+          addRagDocument(doc);
+        } catch (e: unknown) {
+          const detail = extractErrorMessage(e);
+          const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
+          toast.error(t("setup.ragImportError", { file: fileName }), detail);
+        }
+      }
+    } finally {
+      setRagImporting(false);
+    }
+  };
+
+  const handleRagImport = async () => {
+    const effectiveModel = embeddingModel || ollamaModel;
+    if (!effectiveModel) {
+      toast.warning(t("setup.ragNoModel"));
+      return;
+    }
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: true,
+        filters: [{
+          name: "Documents",
+          extensions: [...RAG_SUPPORTED_EXTENSIONS],
+        }],
+      });
+      if (!selected || selected.length === 0) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      await importFiles(paths);
+    } catch (e: unknown) {
+      toast.error(t("setup.ragImportError", { file: "" }), extractErrorMessage(e));
+    }
+  };
+
+  // Ref to always call the latest drop handler without re-subscribing
+  const dropHandlerRef = useRef<(paths: string[]) => void>(() => {});
+  dropHandlerRef.current = (paths: string[]) => {
+    const effectiveModel = embeddingModel || ollamaModel;
+    if (!effectiveModel) {
+      toast.warning(t("setup.ragNoModel"));
+      return;
+    }
+    const validPaths = paths.filter((p) => {
+      const ext = p.split(".").pop()?.toLowerCase() ?? "";
+      return RAG_SUPPORTED_EXTENSIONS.has(ext);
+    });
+    if (validPaths.length === 0) {
+      toast.warning(t("setup.ragUnsupportedFormat"));
+      return;
+    }
+    importFiles(validPaths);
+  };
+
+  // Subscribe to Tauri drag-drop events (global webview-level)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+    (async () => {
+      const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const unsub = await getCurrentWebviewWindow().onDragDropEvent((event) => {
+        if (!mounted) return;
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          setDragOver(true);
+        } else if (event.payload.type === "leave") {
+          setDragOver(false);
+        } else if (event.payload.type === "drop") {
+          setDragOver(false);
+          dropHandlerRef.current(event.payload.paths);
+        }
+      });
+      if (mounted) {
+        unlisten = unsub;
+      } else {
+        unsub();
+      }
+    })();
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -259,6 +369,24 @@ function StepTopic() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Repeat className="h-4 w-4 text-primary" />
+          {t("setup.maxTurns")}
+        </label>
+        <input
+          type="number"
+          min={1}
+          max={100}
+          value={maxTurns ?? ""}
+          onChange={(e) =>
+            setMaxTurns(e.target.value ? parseInt(e.target.value) : null)
+          }
+          placeholder={t("setup.maxTurnsPlaceholder")}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        />
       </div>
 
       {/* Discussion mode selector */}
@@ -300,37 +428,75 @@ function StepTopic() {
         />
       </div>
 
-      <div className="space-y-1.5">
+      {/* RAG Knowledge Base */}
+      <div className="space-y-2">
         <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
-          <Repeat className="h-4 w-4 text-primary" />
-          {t("setup.maxTurns")}
+          <Database className="h-4 w-4 text-purple-500" />
+          {t("setup.ragKnowledgeBase")}
         </label>
-        <input
-          type="number"
-          min={1}
-          max={100}
-          value={maxTurns ?? ""}
-          onChange={(e) =>
-            setMaxTurns(e.target.value ? parseInt(e.target.value) : null)
-          }
-          placeholder={t("setup.maxTurnsPlaceholder")}
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-        />
-      </div>
+        <p className="text-xs text-muted-foreground">{t("setup.ragDesc")}</p>
 
-      <div className="space-y-1.5">
-        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
-          <Clock className="h-4 w-4 text-primary" />
-          {t("setup.userTimeout")}
-        </label>
-        <input
-          type="number"
-          min={30}
-          max={600}
-          value={userInterventionTimeoutSecs}
-          onChange={(e) => setUserTimeout(parseInt(e.target.value) || 120)}
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-        />
+        {!embeddingModel && ollamaModel && (
+          <div className="flex items-start gap-2 rounded-md border border-purple-500/20 bg-purple-500/5 px-3 py-2 text-xs text-muted-foreground">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-purple-500" />
+            <span>{t("setup.ragRecommendModel")}</span>
+          </div>
+        )}
+
+        {dragOver && (
+          <div className="flex flex-col items-center justify-center rounded-md border-2 border-dashed border-purple-500/50 bg-purple-500/5 py-6">
+            <Upload className="h-8 w-8 text-purple-500" />
+            <p className="mt-2 text-sm font-medium text-purple-500">{t("setup.ragDropFiles")}</p>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRagImport}
+            disabled={ragImporting}
+            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {ragImporting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            {ragImporting ? t("setup.ragImporting") : t("setup.ragImportFiles")}
+          </button>
+          <span className="text-xs text-muted-foreground">{t("setup.ragDropHint")}</span>
+        </div>
+
+        {ragDocuments.length > 0 && (
+          <div className="space-y-1.5">
+            {ragDocuments.map((doc) => (
+              <div
+                key={doc.docId}
+                className="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2"
+              >
+                <div className="flex items-center gap-2 text-sm">
+                  <Database className="h-3.5 w-3.5 text-purple-500" />
+                  <span className="font-medium text-foreground">{doc.fileName}</span>
+                  <span className="text-xs text-muted-foreground">
+                    .{doc.format} — {doc.chunkCount} {t("setup.ragChunks")}, {doc.charCount.toLocaleString()} {t("setup.ragChars")}
+                  </span>
+                </div>
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.removeRagDocument(doc.docId);
+                      removeRagDocument(doc.docId);
+                    } catch (e: unknown) {
+                      toast.error(t("setup.ragRemoveError"), extractErrorMessage(e));
+                    }
+                  }}
+                  className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Document format selector */}
@@ -356,6 +522,21 @@ function StepTopic() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Clock className="h-4 w-4 text-primary" />
+          {t("setup.userTimeout")}
+        </label>
+        <input
+          type="number"
+          min={30}
+          max={600}
+          value={userInterventionTimeoutSecs}
+          onChange={(e) => setUserTimeout(parseInt(e.target.value) || 120)}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        />
       </div>
     </div>
   );
@@ -420,6 +601,104 @@ function StepArbitre() {
 
   return (
     <div className="space-y-4">
+      {/* Optional web search for introduction */}
+      {hasTavilyKey && (
+        <div className="space-y-2">
+          <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+            <Globe className="h-4 w-4 text-primary" />
+            {t("setup.arbitreWebSearchTitle")}
+          </label>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={arbitre.webSearchIntro ?? false}
+              onClick={() => updateArbitre({ webSearchIntro: !(arbitre.webSearchIntro ?? false) })}
+              className={cn(
+                "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+                (arbitre.webSearchIntro ?? false) ? "bg-primary" : "bg-muted",
+              )}
+            >
+              <span
+                className={cn(
+                  "pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
+                  (arbitre.webSearchIntro ?? false) ? "translate-x-4" : "translate-x-0",
+                )}
+              />
+            </button>
+            <span className="text-sm text-muted-foreground">
+              {(arbitre.webSearchIntro ?? false) ? t("setup.switchYes") : t("setup.switchNo")}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Optional Wikipedia search for introduction (always available — free) */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <BookOpen className="h-4 w-4 text-green-600" />
+          {t("setup.arbitreWikiSearchTitle")}
+        </label>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={arbitre.wikiSearchIntro ?? false}
+            onClick={() => updateArbitre({ wikiSearchIntro: !(arbitre.wikiSearchIntro ?? false) })}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+              (arbitre.wikiSearchIntro ?? false) ? "bg-green-600" : "bg-muted",
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
+                (arbitre.wikiSearchIntro ?? false) ? "translate-x-4" : "translate-x-0",
+              )}
+            />
+          </button>
+          <span className="text-sm text-muted-foreground">
+            {(arbitre.wikiSearchIntro ?? false) ? t("setup.switchYes") : t("setup.switchNo")}
+          </span>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Shuffle className="h-4 w-4 text-primary" />
+          {t("setup.turnDistribution")}
+        </label>
+        {discussionMode === "userDriven" || discussionMode === "collaborativeFiction" ? (
+          <p className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+            {discussionMode === "userDriven"
+              ? t("setup.userDrivenNoTurnDist")
+              : t("setup.fictionNoTurnDist")}
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              ["sequential", "random", "democratic", "authoritarian"] as const
+            ).map((dist) => (
+              <button
+                key={dist}
+                onClick={() => updateArbitre({ turnDistribution: dist })}
+                className={cn(
+                  "rounded-md border px-3 py-2 text-left transition-colors",
+                  arbitre.turnDistribution === dist
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:bg-accent",
+                )}
+              >
+                <div className="text-sm font-medium">{t(`setup.${dist}`)}</div>
+                <div className="mt-0.5 text-xs opacity-70">
+                  {t(`setup.${dist}Desc`)}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Profile selector */}
       <div className="space-y-2">
         <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
@@ -520,104 +799,6 @@ function StepArbitre() {
           )}
         </>
       )}
-
-      <div className="space-y-2">
-        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
-          <Shuffle className="h-4 w-4 text-primary" />
-          {t("setup.turnDistribution")}
-        </label>
-        {discussionMode === "userDriven" || discussionMode === "collaborativeFiction" ? (
-          <p className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
-            {discussionMode === "userDriven"
-              ? t("setup.userDrivenNoTurnDist")
-              : t("setup.fictionNoTurnDist")}
-          </p>
-        ) : (
-          <div className="grid grid-cols-2 gap-2">
-            {(
-              ["sequential", "random", "democratic", "authoritarian"] as const
-            ).map((dist) => (
-              <button
-                key={dist}
-                onClick={() => updateArbitre({ turnDistribution: dist })}
-                className={cn(
-                  "rounded-md border px-3 py-2 text-left transition-colors",
-                  arbitre.turnDistribution === dist
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border text-muted-foreground hover:bg-accent",
-                )}
-              >
-                <div className="text-sm font-medium">{t(`setup.${dist}`)}</div>
-                <div className="mt-0.5 text-xs opacity-70">
-                  {t(`setup.${dist}Desc`)}
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Optional web search for introduction */}
-      {hasTavilyKey && (
-        <div className="space-y-2">
-          <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
-            <Globe className="h-4 w-4 text-primary" />
-            {t("setup.arbitreWebSearchTitle")}
-          </label>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={arbitre.webSearchIntro ?? false}
-              onClick={() => updateArbitre({ webSearchIntro: !(arbitre.webSearchIntro ?? false) })}
-              className={cn(
-                "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
-                (arbitre.webSearchIntro ?? false) ? "bg-primary" : "bg-muted",
-              )}
-            >
-              <span
-                className={cn(
-                  "pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
-                  (arbitre.webSearchIntro ?? false) ? "translate-x-4" : "translate-x-0",
-                )}
-              />
-            </button>
-            <span className="text-sm text-muted-foreground">
-              {(arbitre.webSearchIntro ?? false) ? t("setup.switchYes") : t("setup.switchNo")}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Optional Wikipedia search for introduction (always available — free) */}
-      <div className="space-y-2">
-        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
-          <BookOpen className="h-4 w-4 text-green-600" />
-          {t("setup.arbitreWikiSearchTitle")}
-        </label>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={arbitre.wikiSearchIntro ?? false}
-            onClick={() => updateArbitre({ wikiSearchIntro: !(arbitre.wikiSearchIntro ?? false) })}
-            className={cn(
-              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
-              (arbitre.wikiSearchIntro ?? false) ? "bg-green-600" : "bg-muted",
-            )}
-          >
-            <span
-              className={cn(
-                "pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
-                (arbitre.wikiSearchIntro ?? false) ? "translate-x-4" : "translate-x-0",
-              )}
-            />
-          </button>
-          <span className="text-sm text-muted-foreground">
-            {(arbitre.wikiSearchIntro ?? false) ? t("setup.switchYes") : t("setup.switchNo")}
-          </span>
-        </div>
-      </div>
 
       <button
         onClick={() => setShowLlm(!showLlm)}
@@ -1090,6 +1271,7 @@ function StepSummary() {
   const documentFormat = useSetupStore((s) => s.documentFormat);
   const webSearchPool = useSetupStore((s) => s.webSearchPool);
   const wikiSearchPool = useSetupStore((s) => s.wikiSearchPool);
+  const ragDocuments = useSetupStore((s) => s.ragDocuments);
   const emotionDriven = useSettingsStore((s) => s.settings.emotionDriven);
 
   return (
@@ -1159,6 +1341,18 @@ function StepSummary() {
             label={t("setup.summaryWikiPool")}
             value={t("setup.wikiSearchBudget", { count: wikiSearchPool })}
           />
+        )}
+        {ragDocuments.length > 0 && (
+          <div>
+            <p className="text-xs text-muted-foreground">{t("setup.summaryRag")}</p>
+            <div className="mt-1 space-y-0.5">
+              {ragDocuments.map((doc) => (
+                <p key={doc.docId} className="text-sm font-medium text-foreground">
+                  {doc.fileName} ({doc.chunkCount} {t("setup.ragChunks")})
+                </p>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     </div>

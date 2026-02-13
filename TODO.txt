@@ -426,21 +426,22 @@ Personnalités à ajouter
 
 --------------------------------------------------------------------
 
-RAG (Retrieval-Augmented Generation) Local : 
+RAG (Retrieval-Augmented Generation) pour la discussion : 
 Lors du paramétrage de la discussion permettre à l'utilisateur d'importer des fichiers (TXT, PDF, Code, Docx, PPTX, ...) qui serviront de base de connaissances commune à tous les gladiateur.
 Cas d'usage (exemples non exhausdtifs) : 
 - Charger un contrat de 50 pages et demander à "L'Avocat du Diable" et au "Fiscaliste" d'en débattre les failles.
 - Charger des documents afin d'enrichir la connaissance des gladiateur pour une discussion
+Le RAG est purgé en fin de discussion.
 
 --------------------------------------------------------------------
 
 Cartographie d'Arguments : 
-Générer une "Mind Map" en temps réel dans une nouvelle sidebar "Mindmap" qui structure visuellement les arguments, contre-arguments et preuves, exportable en image.
+Générer graphiquement une "Mind Map" en temps réel dans une nouvelle sidebar "Mindmap" qui structure visuellement les arguments, contre-arguments et preuves de chaque gladIAteur
 
 --------------------------------------------------------------------
 
 Alliances Dynamiques : 
-Visualiser graphiquement dans une nouvelle sidebar "Relations" les relations (Allié/Rival) sous forme de graphe de réseau. 
+Générer graphiquement les relations (Allié/Rival) sous forme de graphe de réseau en temps réel dans une nouvelle sidebar "Relations". 
 Permettre des "coalitions" où deux IA fusionnent leurs temps de parole pour un argument commun.
 
 --------------------------------------------------------------------

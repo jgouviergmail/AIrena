@@ -24,6 +24,7 @@ use crate::models::message::{Message, Reaction, ReactionType, SpeakerRole};
 use crate::models::settings::LlmParams;
 use crate::ollama::client::OllamaClient;
 use crate::ollama::error::OllamaError;
+use crate::rag::RagStore;
 use crate::tavily::client::TavilyClient;
 use crate::tavily::error::TavilyError;
 use crate::wikipedia::client::WikiClient;
@@ -103,6 +104,8 @@ pub struct DiscussionEngine {
     forced_wiki_done: HashSet<usize>,
     /// Co-construction document content (accumulated across turns)
     document_content: String,
+    /// In-memory RAG store (taken from AppState, dropped with engine)
+    rag_store: Option<RagStore>,
 }
 
 impl DiscussionEngine {
@@ -113,6 +116,7 @@ impl DiscussionEngine {
         ollama_model: &str,
         tavily_api_key: Option<&str>,
         db: tokio_rusqlite::Connection,
+        rag_store: Option<RagStore>,
     ) -> Self {
         let ollama_client = OllamaClient::new(ollama_url, ollama_model);
         let arbitre = IArbitreState::new(config.arbitre.clone());
@@ -156,6 +160,7 @@ impl DiscussionEngine {
             forced_web_done: HashSet::new(),
             forced_wiki_done: HashSet::new(),
             document_content: String::new(),
+            rag_store,
         }
     }
 
@@ -331,12 +336,49 @@ impl DiscussionEngine {
         };
 
         // Combine intro search contexts
-        let intro_search_context: Option<String> = match (&intro_web_ctx, &intro_wiki_ctx) {
+        let mut intro_search_context: Option<String> = match (&intro_web_ctx, &intro_wiki_ctx) {
             (Some(w), Some(wiki)) => Some(format!("{w}\n\n{wiki}")),
             (Some(w), None) => Some(w.clone()),
             (None, Some(wiki)) => Some(wiki.clone()),
             (None, None) => None,
         };
+
+        // RAG knowledge base for introduction
+        if let Some(ref rag_store) = self.rag_store {
+            if !rag_store.is_empty() {
+                let lang = &self.config.discussion_language;
+                match rag_store
+                    .query(
+                        &self.config.topic,
+                        lang,
+                        &self.ollama_client,
+                        &self.arbitre.config.llm_params,
+                        self.cancel_token.clone(),
+                    )
+                    .await
+                {
+                    Ok((ctx_text, chunks)) if !chunks.is_empty() => {
+                        tracing::info!(
+                            chunk_count = chunks.len(),
+                            "RAG context injected for introduction"
+                        );
+                        let _ = channel.send(ArenaEvent::RagContextInjected {
+                            speaker_id: self.arbitre.config.id.clone(),
+                            speaker_name: self.arbitre.config.name.clone(),
+                            chunks,
+                        });
+                        intro_search_context = Some(match intro_search_context {
+                            Some(existing) => format!("{existing}\n\n{ctx_text}"),
+                            None => ctx_text,
+                        });
+                    }
+                    Ok(_) => {} // Empty results
+                    Err(e) => {
+                        tracing::warn!(error = %e, "RAG query failed for introduction — continuing");
+                    }
+                }
+            }
+        }
 
         let participant_names: Vec<String> = self
             .gladiateurs
@@ -774,12 +816,25 @@ impl DiscussionEngine {
                     }
 
                     // Combine web + wiki contexts
-                    match (web_ctx, wiki_ctx) {
+                    let mut search_ctx: Option<String> = match (web_ctx, wiki_ctx) {
                         (Some(w), Some(wiki)) => Some(format!("{w}\n\n{wiki}")),
                         (Some(w), None) => Some(w),
                         (None, Some(wiki)) => Some(wiki),
                         (None, None) => None,
+                    };
+
+                    // RAG knowledge base query (after web + wiki)
+                    let rag_ctx = self.process_rag_query(
+                        &speaker_id, &speaker_name, glad_idx, &channel,
+                    ).await;
+                    if let Some(rag) = rag_ctx {
+                        search_ctx = Some(match search_ctx {
+                            Some(existing) => format!("{existing}\n\n{rag}"),
+                            None => rag,
+                        });
                     }
+
+                    search_ctx
                 };
 
                 if let Some(ref ctx) = search_context {
@@ -2337,6 +2392,67 @@ impl DiscussionEngine {
             "Wikipedia context injected into prompt"
         );
         (Some(ctx), 1)
+    }
+
+    // ── RAG knowledge base query ──────────────────────────────────────
+
+    /// Query the RAG store for relevant chunks and emit event.
+    /// Returns formatted context string for prompt injection, or None.
+    async fn process_rag_query(
+        &self,
+        speaker_id: &str,
+        speaker_name: &str,
+        glad_idx: usize,
+        channel: &Channel<ArenaEvent>,
+    ) -> Option<String> {
+        let rag_store = self.rag_store.as_ref()?;
+        if rag_store.is_empty() {
+            return None;
+        }
+
+        // Build query context: topic + recent exchanges (reuse existing helpers)
+        let topic = truncate_str(&self.config.topic, constants::ORCH_TOPIC_FOR_SEARCH);
+        let recent_raw = self.build_recent_exchanges(glad_idx);
+        let recent = truncate_str(&recent_raw, constants::ORCH_RECENT_FOR_SEARCH);
+        let context = format!("{topic}\n\n{recent}");
+        let lang = &self.config.discussion_language;
+
+        match rag_store
+            .query(
+                &context,
+                lang,
+                &self.ollama_client,
+                &self.gladiateurs[glad_idx].config.llm_params,
+                self.cancel_token.clone(),
+            )
+            .await
+        {
+            Ok((ctx_text, chunks)) if !chunks.is_empty() => {
+                tracing::info!(
+                    speaker = %speaker_name,
+                    turn = self.current_turn,
+                    chunk_count = chunks.len(),
+                    ctx_len = ctx_text.len(),
+                    "RAG context injected"
+                );
+                let _ = channel.send(ArenaEvent::RagContextInjected {
+                    speaker_id: speaker_id.to_string(),
+                    speaker_name: speaker_name.to_string(),
+                    chunks,
+                });
+                Some(ctx_text)
+            }
+            Ok(_) => None, // Empty results
+            Err(crate::ollama::error::OllamaError::Cancelled) => None,
+            Err(e) => {
+                tracing::warn!(
+                    speaker = %speaker_name,
+                    error = %e,
+                    "RAG query failed — continuing without knowledge base"
+                );
+                None
+            }
+        }
     }
 
     // ── Emotion analysis, contagion, history ──────────────────────────

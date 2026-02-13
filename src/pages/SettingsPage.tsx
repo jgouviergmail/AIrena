@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   AlertCircle,
   Check,
+  Database,
   Eye,
   EyeOff,
   Globe,
@@ -20,6 +21,8 @@ import { TopBar } from "@/components/layout/TopBar";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useTheme } from "@/providers/ThemeProvider";
 import { cn } from "@/lib/utils";
+import { extractErrorMessage } from "@/lib/error-utils";
+import { toast } from "@/stores/useToastStore";
 import type { TavilyPeriodHistory } from "@/lib/types";
 
 export default function SettingsPage() {
@@ -58,7 +61,7 @@ export default function SettingsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      console.error("Failed to save settings:", e);
+      toast.error(t("settings.saveError"), extractErrorMessage(e));
     }
   };
 
@@ -254,25 +257,28 @@ export default function SettingsPage() {
 
             {ollamaConnected && models.length > 0 && (
               <Field label={t("settings.ollamaModel")}>
-                <select
-                  value={settings.ollamaModel}
-                  onChange={(e) => {
-                    const model = e.target.value;
-                    updateSettings({ ollamaModel: model });
-                    if (model) {
-                      preloadModel(model);
-                    }
-                  }}
-                  disabled={preloading}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-                >
-                  <option value="">--</option>
-                  {models.map((m) => (
-                    <option key={m.name} value={m.name}>
-                      {m.name} ({(m.size / 1e9).toFixed(1)} GB)
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-2">
+                  <Server className="h-4 w-4 text-primary" />
+                  <select
+                    value={settings.ollamaModel}
+                    onChange={(e) => {
+                      const model = e.target.value;
+                      updateSettings({ ollamaModel: model });
+                      if (model) {
+                        preloadModel(model);
+                      }
+                    }}
+                    disabled={preloading}
+                    className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                  >
+                    <option value="">--</option>
+                    {models.map((m) => (
+                      <option key={m.name} value={m.name}>
+                        {m.name} ({(m.size / 1e9).toFixed(1)} GB)
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 {preloading && (
                   <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -291,6 +297,44 @@ export default function SettingsPage() {
                     {t("settings.modelPreloadError")}
                   </div>
                 )}
+              </Field>
+            )}
+
+            {ollamaConnected && models.length > 0 && (
+              <Field label={t("settings.embeddingModel")}>
+                <div className="flex items-center gap-2">
+                  <Database className="h-4 w-4 text-purple-500" />
+                  <select
+                    value={settings.embeddingModel}
+                    onChange={(e) => updateSettings({ embeddingModel: e.target.value })}
+                    className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  >
+                    <option value="">{t("settings.embeddingModelAuto")}</option>
+                    {/* Embedding-oriented models first */}
+                    {models
+                      .filter((m) => /embed|nomic/i.test(m.name))
+                      .map((m) => (
+                        <option key={m.name} value={m.name}>
+                          {m.name} ({(m.size / 1e9).toFixed(1)} GB)
+                        </option>
+                      ))}
+                    {/* Separator if there are embedding models */}
+                    {models.some((m) => /embed|nomic/i.test(m.name)) && (
+                      <option disabled>───</option>
+                    )}
+                    {/* Other models */}
+                    {models
+                      .filter((m) => !/embed|nomic/i.test(m.name))
+                      .map((m) => (
+                        <option key={m.name} value={m.name}>
+                          {m.name} ({(m.size / 1e9).toFixed(1)} GB)
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t("settings.embeddingModelDesc")}
+                </p>
               </Field>
             )}
 
