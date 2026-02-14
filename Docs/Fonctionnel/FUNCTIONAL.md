@@ -1,7 +1,7 @@
 # AIrena — Documentation Fonctionnelle
 
-> **Version** : 1.6
-> **Dernière mise à jour** : 2026-02-13
+> **Version** : 1.10
+> **Dernière mise à jour** : 2026-02-14
 > **Auteur** : jgouv
 
 ---
@@ -23,6 +23,8 @@
    - 6.3 [Intervention utilisateur](#63-intervention-utilisateur)
    - 6.4 [Sidebar émotionnelle](#64-sidebar-émotionnelle)
    - 6.5 [Sidebar document](#65-sidebar-document)
+   - 6.6 [Sidebar carte des arguments](#66-sidebar-carte-des-arguments)
+   - 6.7 [Indicateur d'activité](#67-indicateur-dactivité)
 7. [Modes de discussion](#7-modes-de-discussion)
 8. [Système émotionnel](#8-système-émotionnel)
 9. [Personnalités cognitives](#9-personnalités-cognitives)
@@ -38,8 +40,11 @@
 19. [Internationalisation](#19-internationalisation)
 20. [Thème et apparence](#20-thème-et-apparence)
 21. [Export et téléchargement](#21-export-et-téléchargement)
-22. [Glossaire](#22-glossaire)
-23. [Changelog](#23-changelog)
+22. [RAG — Enrichissement par documents](#22-rag--enrichissement-par-documents)
+23. [Surlignage des modifications (document collaboratif)](#23-surlignage-des-modifications-document-collaboratif)
+24. [Carte des arguments (Mindmap)](#24-carte-des-arguments-mindmap)
+25. [Glossaire](#25-glossaire)
+26. [Changelog](#26-changelog)
 
 ---
 
@@ -152,14 +157,16 @@ Si une discussion est en cours, un indicateur visuel le signale et le bouton « 
 
 ## 5. Configuration d'une discussion (Setup)
 
-L'assistant de configuration guide l'utilisateur en 4 étapes avec navigation avant/arrière.
+L'assistant de configuration guide l'utilisateur en 4 étapes avec navigation avant/arrière. Chaque étape affiche un titre descriptif (ex. « Étape 1 / 4 — Paramétrage général de la discussion »).
 
-### 5.1 Étape 1 — Sujet & Langue
+### 5.1 Étape 1 — Paramétrage général
 
 | Champ | Type | Description |
 |---|---|---|
 | **Sujet** | Texte libre | Le thème de la discussion (obligatoire) |
 | **Langue de discussion** | Sélecteur | Français, Anglais ou Chinois — détermine la langue des prompts et des instructions internes |
+| **Nombre max de tours** | Nombre | Limite le nombre de tours (illimité si vide) |
+| **Carte des arguments** | Toggle | Active la génération automatique d'une mindmap des thèses et arguments (voir [section 24](#24-carte-des-arguments-mindmap)) |
 
 ### 5.2 Étape 2 — Le modérateur (IArbitre)
 
@@ -228,7 +235,6 @@ L'utilisateur ajoute entre 2 et N GladIAteurs depuis les profils prédéfinis ou
 
 | Option | Type | Description |
 |---|---|---|
-| **Nombre max de tours** | Nombre | Limite le nombre de tours (illimité si vide) |
 | **Timeout intervention** | Secondes | Temps accordé à l'utilisateur pour intervenir |
 | **Pool recherche web** | Nombre | Nombre total de recherches Tavily autorisées dans la discussion (0 = désactivé) |
 | **Pool recherche Wikipedia** | Nombre | Nombre total de recherches Wikipedia autorisées (0 = désactivé) |
@@ -310,6 +316,37 @@ Visible uniquement en mode **Co-Construction** avec un format de document sélec
 - Repliable/dépliable
 
 Le document est mis à jour par chaque GladIAteur à son tour, qui contribue au livrable commun.
+
+### 6.6 Sidebar carte des arguments
+
+Visible uniquement si la **carte des arguments** est activée dans le setup :
+
+- Affiche une **mindmap interactive** (arbre de thèses et d'arguments) générée automatiquement à partir des interventions
+- **Badge de compteurs** : nombre de thèses (T) et d'arguments (A) extraits
+- **Légende** : ✅ Pour (soutien), ❌ Contre (opposition), 📊 Preuves
+- Repliable/dépliable (texte vertical quand replié)
+- Redimensionnable via séparateur draggable
+
+La carte est mise à jour après chaque tour. Voir la [section 24](#24-carte-des-arguments-mindmap) pour les détails fonctionnels.
+
+### 6.7 Indicateur d'activité
+
+La barre de titre de l'Arena affiche en temps réel l'activité du moteur de discussion :
+
+| Type d'activité | Indicateur |
+|---|---|
+| **Réflexion** | `[nom] réfléchit…` |
+| **Écriture** | `[nom] écrit…` |
+| **Réactions** | `Collecte des réactions…` |
+| **Recherche web** | `[nom] recherche sur le web…` |
+| **Recherche Wikipedia** | `[nom] recherche sur Wikipedia…` |
+| **RAG** | `[nom] consulte les documents…` |
+| **Émotions** | `Mise à jour des émotions…` |
+| **Carte des arguments** | `Analyse des arguments…` |
+| **Synthèse** | `Synthèse en cours…` |
+| **Ordre des tours** | `Détermination de l'ordre…` |
+
+Un point lumineux animé (pulse) accompagne le texte pour signaler visuellement l'activité en cours.
 
 ---
 
@@ -578,9 +615,11 @@ Après la synthèse, l'utilisateur accède à la page de résumé avec :
 |---|---|
 | **Onglet Synthèse** | Texte complet de la synthèse |
 | **Onglet Discussion** | Fil complet en lecture seule |
+| **Onglet Carte des arguments** | Mindmap interactive des thèses et arguments (si activée) |
 | **Badge de mode** | Mode de discussion affiché (si différent de « Débat ») |
 | **Statistiques** | Nombre de tours, modèle utilisé, participants |
 | **Téléchargement** | Export de la synthèse ou discussion en fichier texte |
+| **Téléchargement carte** | Export de la carte des arguments en SVG ou Markdown (si activée) |
 | **Téléchargement document** | Export du document collaboratif (si co-construction) |
 | **Nouvelle discussion** | Retour à la configuration |
 | **Voir dans l'historique** | Navigation vers l'historique |
@@ -604,8 +643,9 @@ La page d'historique affiche toutes les discussions sauvegardées avec :
 La vue détaillée permet de :
 - Relire l'intégralité de la discussion en mode lecture seule
 - Consulter la synthèse
+- Consulter la carte des arguments (si activée lors de la discussion)
 - Voir les réactions, les bans, les recherches
-- Télécharger le contenu
+- Télécharger le contenu (texte, SVG, markdown)
 - Consulter le document collaboratif (si co-construction)
 
 ### Sauvegarde automatique
@@ -615,6 +655,7 @@ Chaque discussion terminée est automatiquement sauvegardée dans la base de don
 - La synthèse
 - Les métadonnées (participants, mode, format, modèle)
 - Le document collaboratif (si applicable)
+- La carte des arguments en markdown (si activée)
 
 ---
 
@@ -627,6 +668,7 @@ Chaque discussion terminée est automatiquement sauvegardée dans la base de don
 | **Thème** | Toggle | Sombre ou clair |
 | **URL Ollama** | URL | Adresse du serveur Ollama (défaut : `http://localhost:11434`) |
 | **Modèle Ollama** | Sélecteur | Modèle LLM à utiliser (parmi ceux installés) |
+| **Modèle d'embeddings** | Sélecteur | Modèle Ollama pour les embeddings RAG (optionnel, défaut : modèle LLM principal) |
 | **Émotions influencent le comportement** | Toggle | Les émotions modifient-elles les directives ? |
 | **Clé API Tavily** | Texte | Clé pour la recherche web (optionnel) |
 
@@ -763,6 +805,8 @@ Le thème est persisté dans les paramètres et s'applique immédiatement au bas
 | Télécharger la synthèse | Exporte le texte de synthèse en fichier texte |
 | Télécharger la discussion | Exporte le fil complet en fichier texte |
 | Télécharger le document | Exporte le document collaboratif (si co-construction) |
+| Télécharger la carte (MD) | Exporte la carte des arguments en markdown (si activée) |
+| Télécharger la carte (SVG) | Exporte la carte des arguments en SVG vectoriel (si activée) |
 
 ### Depuis l'historique
 
@@ -770,11 +814,166 @@ Mêmes options de téléchargement disponibles depuis la vue détaillée d'une d
 
 ### Format d'export
 
-Les exports utilisent le sélecteur de fichier natif Windows (dialogue « Enregistrer sous »). Le format est du texte brut (.txt) ou le format du document collaboratif (.md, .csv).
+Les exports utilisent le sélecteur de fichier natif Windows (dialogue « Enregistrer sous »). Le format est du texte brut (.txt), le format du document collaboratif (.md, .csv), ou SVG pour la carte des arguments.
 
 ---
 
-## 22. Glossaire
+## 22. RAG — Enrichissement par documents
+
+**RAG (Retrieval-Augmented Generation)** permet aux participants d'accéder à des connaissances extraites de documents que vous importez dans l'application.
+
+### Fonctionnement
+
+1. **Import de documents** : vous importez vos documents (PDF, TXT, MD, CSV, Word) via les paramètres
+2. **Traitement automatique** : l'application découpe les documents en morceaux (chunks), génère des embeddings et construit un index de recherche
+3. **Recherche contextuelle** : pendant la discussion, les participants peuvent rechercher des informations pertinentes dans votre base documentaire
+4. **Injection dans le contexte** : les passages les plus pertinents sont automatiquement injectés dans le contexte de l'IA avant sa réponse
+
+### Formats supportés
+
+| Format | Extension | Notes |
+|---|---|---|
+| **PDF** | `.pdf` | Extraction de texte brut (pas d'images) |
+| **Texte** | `.txt` | UTF-8 |
+| **Markdown** | `.md` | UTF-8 |
+| **CSV** | `.csv` | Converti en tableau formaté |
+| **Word** | `.docx` | Extraction basique (pas de formatage complexe) |
+
+### Utilisation
+
+#### Import de documents
+
+1. Ouvrir les **Paramètres**
+2. Section **RAG** (en bas de page)
+3. Cliquer sur « **Importer un document** »
+4. Sélectionner un fichier (max 10 MB)
+5. Attendre le traitement (parsing → chunking → embeddings)
+
+La liste des documents importés s'affiche avec :
+- Nom du fichier
+- Format détecté
+- Nombre de morceaux (chunks)
+- Nombre de caractères
+- Bouton de suppression
+
+#### Utilisation pendant la discussion
+
+Une fois des documents importés, les participants peuvent automatiquement rechercher des informations pertinentes. Quand un participant utilise le RAG, un événement `RAG Context Injecté` apparaît dans le fil avec :
+- Le nom du participant
+- Les passages utilisés (nom de fichier, aperçu, score de pertinence)
+
+#### Gestion des documents
+
+- **Supprimer un document** : clic sur l'icône poubelle à côté du document
+- **Vider le store RAG** : bouton « Tout supprimer » en bas de la liste
+
+### Configuration
+
+| Paramètre | Valeur | Description |
+|---|---|---|
+| **Modèle d'embeddings** | (settings) | Modèle Ollama utilisé pour générer les embeddings. Par défaut, utilise le modèle LLM principal. |
+| **Taille max fichier** | 10 MB | Limite de taille pour l'import |
+| **Taille des chunks** | ~800 caractères | Taille cible d'un morceau de texte |
+| **Top résultats** | 5 | Nombre de passages retournés par recherche |
+
+### Points importants
+
+- **Mémoire** : les documents restent en mémoire pendant toute la session. À la fermeture de l'application, il faut les réimporter.
+- **Cohérence** : si vous changez le modèle d'embeddings, vous devez vider le store RAG et réimporter tous les documents.
+- **Performance** : le premier import peut prendre du temps (chargement du modèle). Les imports suivants sont plus rapides.
+- **Pertinence** : la qualité des résultats dépend du modèle d'embeddings utilisé et de la qualité des documents.
+
+---
+
+## 23. Surlignage des modifications (document collaboratif)
+
+En mode **Co-Construction**, chaque participant contribue à un document partagé. Le système de diff surligne visuellement les modifications apportées par chaque participant.
+
+### Fonctionnement
+
+Après chaque contribution :
+1. Le nouveau contenu du document est comparé avec la version précédente
+2. Les changements sont identifiés selon le format du document
+3. Les modifications sont surlignées dans la **Sidebar Document**
+
+### Stratégies de diff par format
+
+| Format | Niveau de diff | Rendu |
+|---|---|---|
+| **Texte (.txt)** | Mot par mot | Les mots ajoutés apparaissent en surbrillance jaune |
+| **Markdown (.md)** | Ligne par ligne | Les lignes ajoutées/modifiées apparaissent avec un fond coloré |
+| **CSV (.csv)** | Cellule par cellule | Les cellules modifiées sont surlignées dans le tableau |
+
+### Comportement
+
+- **Durée du surlignage** : permanent (visible jusqu'à la prochaine modification)
+- **Indication visuelle** : badge « Dernière modification par : [nom] » au-dessus du document
+- **Historique** : pas de diff cumulatif — seule la dernière modification est surlignée
+
+### Cas d'usage
+
+- **Suivi des contributions** : voir rapidement qui a ajouté quoi
+- **Validation collective** : identifier les sections à discuter
+- **Cohérence narrative** : repérer les incohérences entre contributions (fiction collaborative)
+
+---
+
+## 24. Carte des arguments (Mindmap)
+
+La **carte des arguments** est une fonctionnalité optionnelle qui génère automatiquement une visualisation en arbre (mindmap) des thèses et arguments avancés pendant la discussion.
+
+### Activation
+
+La carte des arguments est activée via un toggle dans l'étape 1 du setup (« Paramétrage général »). Quand elle est activée, le moteur extrait les thèses et arguments de chaque intervention à partir du tour 2.
+
+### Structure de la carte
+
+La carte est organisée hiérarchiquement :
+
+```
+# [Sujet de discussion]
+## [Orateur 1]
+### [Thèse 1]
+- ✅ [Argument de soutien]
+- 📊 [Preuve/Evidence]
+### → [Thèse d'un autre orateur]
+- ❌ [Contre-argument]
+## [Orateur 2]
+### [Thèse 2]
+...
+```
+
+### Types d'arguments
+
+| Type | Icône | Description |
+|---|---|---|
+| **Support** | ✅ | Argument en faveur d'une thèse |
+| **Counter** | ❌ | Contre-argument s'opposant à une thèse |
+| **Evidence** | 📊 | Preuve, donnée factuelle ou exemple concret |
+
+### Mécanisme d'extraction
+
+1. Après chaque tour (à partir du tour 2), le LLM analyse les interventions
+2. Il identifie les nouvelles thèses et arguments en les rattachant aux thèses existantes ou en en créant de nouvelles
+3. La carte est fusionnée avec la version précédente (les thèses existantes sont enrichies, pas dupliquées)
+4. Le résultat est converti en markdown hiérarchique pour le rendu mindmap
+
+### Affichage
+
+- **Arena** : sidebar droite avec rendu interactif via [markmap](https://markmap.js.org/)
+- **Résumé / Historique** : onglet dédié avec la même visualisation
+- **Export** : téléchargement en markdown (.md) ou en SVG (.svg)
+
+### Contraintes
+
+- Les labels sont courts (thèses ≤ 60 caractères, arguments ≤ 100 caractères)
+- Maximum 20 thèses et 100 arguments
+- Les labels sont en langage naturel dans la langue de discussion (pas d'identifiants techniques)
+- La carte est persistée dans l'historique sous forme markdown
+
+---
+
+## 25. Glossaire
 
 | Terme | Définition |
 |---|---|
@@ -798,10 +997,90 @@ Les exports utilisent le sélecteur de fichier natif Windows (dialogue « Enregi
 | **Token** | Unité de texte minimale traitée par un LLM |
 | **Streaming** | Affichage progressif du texte token par token |
 | **NDJSON** | Newline-Delimited JSON — format de streaming utilisé par Ollama |
+| **RAG** | Retrieval-Augmented Generation — enrichissement des réponses par recherche documentaire |
+| **Embedding** | Représentation vectorielle d'un texte pour la recherche sémantique |
+| **Chunk** | Morceau de texte découpé depuis un document (pour le RAG) |
+| **BM25** | Algorithme de recherche lexicale (tf-idf amélioré) |
+| **Similarité cosine** | Mesure de proximité sémantique entre deux embeddings |
+| **Diff** | Différence calculée entre deux versions d'un texte |
+| **Carte des arguments** | Visualisation arborescente (mindmap) des thèses et arguments d'une discussion |
+| **Mindmap** | Représentation graphique en arbre, utilisée pour la carte des arguments |
+| **Markmap** | Bibliothèque JavaScript de rendu de mindmaps depuis du markdown |
 
 ---
 
-## 23. Changelog
+## 26. Changelog
+
+### v1.10 (2026-02-14) — Carte des arguments & Améliorations UX
+
+**Nouvelles fonctionnalités** :
+- **Carte des arguments (Mindmap)** : visualisation interactive en arbre des thèses et arguments extraits automatiquement de la discussion
+  - Extraction LLM après chaque tour (fusion incrémentale)
+  - Sidebar dédiée dans l'Arena avec compteurs (thèses/arguments) et légende
+  - Onglet dans le Résumé et l'Historique
+  - Export en markdown (.md) et SVG (.svg)
+  - Persistance en base de données
+- **Indicateur d'activité** : affichage en temps réel de l'état du moteur (réflexion, écriture, recherche, émotions, synthèse…) dans la barre de titre
+- **Titres des étapes Setup** : chaque étape affiche un titre descriptif (ex. « Étape 1 / 4 — Paramétrage général de la discussion »)
+
+**Améliorations** :
+- Centralisation de toutes les constantes et magic numbers dans `constants.rs`
+- Labels de la carte en langage naturel dans la langue de discussion (pas d'identifiants techniques)
+- Réorganisation du setup : le toggle « Carte des arguments » et le « Nombre de tours » sont dans l'étape 1
+
+### v1.9.1 (2026-02-13) — RAG v2
+
+**Améliorations** :
+- Optimisation du parsing PDF (meilleure gestion des erreurs et des fichiers corrompus)
+- Amélioration de la pertinence des résultats de recherche RAG
+- Messages d'erreur plus clairs lors de l'import de documents
+
+### v1.9 (2026-02-13) — RAG (Enrichissement par documents)
+
+**Nouvelles fonctionnalités** :
+- **Système RAG complet** : importez vos documents (PDF, TXT, MD, CSV, DOCX) pour enrichir les discussions
+- Interface de gestion des documents RAG dans les Paramètres
+- Recherche hybride (lexicale BM25 + sémantique par embeddings)
+- Événement « RAG Context Injecté » dans le fil de discussion
+- Configuration du modèle d'embeddings (par défaut : modèle LLM principal)
+- Support de documents jusqu'à 10 MB
+- Découpage intelligent en chunks avec overlap
+
+**Expérience utilisateur** :
+- Indicateurs visuels des passages RAG utilisés (nom fichier, aperçu, score)
+- Gestion facile : import, suppression unitaire ou globale
+- Feedback temps réel pendant le traitement des documents
+
+### v1.8.1 (2026-02-13) — Surlignage des modifications
+
+**Nouvelles fonctionnalités** :
+- **Surlignage visuel des modifications** dans le document collaboratif (mode Co-Construction)
+- Diff intelligent par format :
+  - Texte : surlignage des mots ajoutés
+  - Markdown : surlignage des lignes modifiées
+  - CSV : surlignage des cellules modifiées
+- Badge « Dernière modification par : [nom] » au-dessus du document
+- Indication visuelle immédiate des contributions de chaque participant
+
+**Améliorations** :
+- Performance améliorée pour le rendu des gros documents markdown
+- Scroll automatique dans la sidebar document
+
+### v1.8 (2026-02-13) — Profils enrichis
+
+**Nouvelles fonctionnalités** :
+- 10 nouveaux profils GladIAteur (Sciences avancées, Arts, Sports)
+- 2 nouveaux profils IArbitre
+
+**Améliorations** :
+- Interface de sélection de profils avec filtrage par catégorie
+- Support des émotions initiales personnalisées par profil
+
+### v1.7 (2026-02-13) — Documentation
+
+**Documentation** :
+- Documentation technique complète (architecture, patterns, API)
+- Documentation fonctionnelle complète (guide utilisateur, modes, fonctionnalités)
 
 ### v1.6 (2026-02-13) — Types de discussions
 

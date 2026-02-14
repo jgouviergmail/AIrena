@@ -205,8 +205,8 @@ pub async fn save_discussion(
             .unwrap_or_else(|_| "[]".to_string());
 
         tx.execute(
-            "INSERT INTO discussions (id, topic, discussion_language, model_name, participants_json, total_turns, synthesis, created_at, discussion_mode, document_content, document_format)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            "INSERT INTO discussions (id, topic, discussion_language, model_name, participants_json, total_turns, synthesis, created_at, discussion_mode, document_content, document_format, argument_map_md)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(id) DO NOTHING",
             rusqlite::params![
                 request.id,
@@ -220,6 +220,7 @@ pub async fn save_discussion(
                 request.discussion_mode,
                 request.document_content,
                 request.document_format,
+                request.argument_map_md,
             ],
         )?;
 
@@ -264,13 +265,14 @@ pub async fn list_discussions(
 ) -> Result<Vec<DiscussionSummary>, tokio_rusqlite::Error> {
     db.call(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, topic, discussion_language, model_name, participants_json, total_turns, synthesis, created_at, discussion_mode, document_format
+            "SELECT id, topic, discussion_language, model_name, participants_json, total_turns, synthesis, created_at, discussion_mode, document_format, argument_map_md
              FROM discussions ORDER BY created_at DESC",
         )?;
         let rows = stmt
             .query_map([], |row| {
                 let participants_json: String = row.get(4)?;
                 let synthesis: String = row.get(6)?;
+                let argument_map_md: String = row.get::<_, String>(10).unwrap_or_default();
                 let participants: Vec<ParticipantInfo> =
                     serde_json::from_str(&participants_json).unwrap_or_default();
                 Ok(DiscussionSummary {
@@ -284,6 +286,7 @@ pub async fn list_discussions(
                     created_at: row.get(7)?,
                     discussion_mode: row.get::<_, String>(8).unwrap_or_else(|_| "debate".to_string()),
                     document_format: row.get::<_, String>(9).unwrap_or_else(|_| "none".to_string()),
+                    has_argument_map: !argument_map_md.is_empty(),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -301,7 +304,7 @@ pub async fn get_discussion(
         // Fetch discussion metadata
         let disc = conn
             .prepare(
-                "SELECT id, topic, discussion_language, model_name, participants_json, total_turns, synthesis, created_at, discussion_mode, document_content, document_format
+                "SELECT id, topic, discussion_language, model_name, participants_json, total_turns, synthesis, created_at, discussion_mode, document_content, document_format, argument_map_md
                  FROM discussions WHERE id = ?1",
             )?
             .query_row(rusqlite::params![id], |row| {
@@ -321,6 +324,7 @@ pub async fn get_discussion(
                     discussion_mode: row.get::<_, String>(8).unwrap_or_else(|_| "debate".to_string()),
                     document_content: row.get::<_, String>(9).unwrap_or_else(|_| String::new()),
                     document_format: row.get::<_, String>(10).unwrap_or_else(|_| "none".to_string()),
+                    argument_map_md: row.get::<_, String>(11).unwrap_or_default(),
                 })
             })
             .optional()?;

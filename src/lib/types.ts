@@ -51,6 +51,7 @@ export interface DiscussionConfig {
   wikiSearchPool: number;
   discussionMode: DiscussionMode;
   documentFormat: DocumentFormat;
+  argumentMapEnabled: boolean;
 }
 
 export type DiscussionMode = "debate" | "ideation" | "coConstruction" | "userDriven" | "socratic" | "tutorial" | "critiqueReview" | "collaborativeFiction";
@@ -154,6 +155,7 @@ export interface SaveDiscussionRequest {
   discussionMode: string;
   documentContent: string;
   documentFormat: string;
+  argumentMapMd: string;
 }
 
 export interface DiscussionSummary {
@@ -167,6 +169,7 @@ export interface DiscussionSummary {
   createdAt: string;
   discussionMode: string;
   documentFormat: string;
+  hasArgumentMap: boolean;
 }
 
 export interface DiscussionDetail {
@@ -182,6 +185,7 @@ export interface DiscussionDetail {
   discussionMode: string;
   documentContent: string;
   documentFormat: string;
+  argumentMapMd: string;
 }
 
 // ArenaEvent — tagged union (discriminated via "type" field)
@@ -282,6 +286,14 @@ export type ArenaEvent =
         speakerId: string;
         speakerName: string;
         chunks: RagChunkInfo[];
+      };
+    }
+  | {
+      type: "argumentMapUpdated";
+      data: {
+        markdown: string;
+        thesesCount: number;
+        argumentsCount: number;
       };
     }
   | { type: "discussionEnded"; data: null }

@@ -136,6 +136,13 @@ pub enum ArenaEvent {
         speaker_name: String,
         chunks: Vec<crate::rag::RagChunkInfo>,
     },
+    /// Argument map updated after turn analysis
+    #[serde(rename_all = "camelCase")]
+    ArgumentMapUpdated {
+        markdown: String,
+        theses_count: u32,
+        arguments_count: u32,
+    },
     /// Discussion ended
     DiscussionEnded,
     /// Non-fatal error (displayed in feed)

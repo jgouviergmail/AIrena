@@ -20,6 +20,7 @@ use crate::models::engine_command::EngineCommand;
 use crate::models::events::ArenaEvent;
 use crate::models::gladiateur::GladIAteurState;
 use crate::models::iarbitre::IArbitreState;
+use crate::models::argument_map::{ArgumentMap, ArgumentNode, ArgumentType, ThesisNode};
 use crate::models::message::{Message, Reaction, ReactionType, SpeakerRole};
 use crate::models::settings::LlmParams;
 use crate::ollama::client::OllamaClient;
@@ -106,6 +107,10 @@ pub struct DiscussionEngine {
     document_content: String,
     /// In-memory RAG store (taken from AppState, dropped with engine)
     rag_store: Option<RagStore>,
+    /// Whether to extract and track argument map
+    argument_map_enabled: bool,
+    /// Accumulated argument map across all turns
+    argument_map: ArgumentMap,
 }
 
 impl DiscussionEngine {
@@ -161,6 +166,8 @@ impl DiscussionEngine {
             forced_wiki_done: HashSet::new(),
             document_content: String::new(),
             rag_store,
+            argument_map_enabled: false,
+            argument_map: ArgumentMap::default(),
         }
     }
 
@@ -170,6 +177,11 @@ impl DiscussionEngine {
 
     pub fn set_emotion_driven(&mut self, enabled: bool) {
         self.emotion_driven = enabled;
+    }
+
+    pub fn set_argument_map_enabled(&mut self, enabled: bool) {
+        self.argument_map_enabled = enabled;
+        tracing::info!(argument_map_enabled = enabled, "Argument map feature configured");
     }
 
     /// Localized message when a speaker's LLM call fails
@@ -999,6 +1011,11 @@ impl DiscussionEngine {
 
             // E.4 Memory update (existing)
             self.update_memory_all().await;
+
+            // E.5 Argument map extraction (if enabled)
+            if self.argument_map_enabled {
+                self.extract_and_merge_arguments(&channel).await;
+            }
 
             // Decrement bans
             let unbanned = turn_manager::decrement_bans(&mut self.gladiateurs);
@@ -2763,11 +2780,11 @@ impl DiscussionEngine {
         );
 
         // Use speaker's LLM params with enough tokens for the full document.
-        // The document grows over turns — estimate current tokens (≈ chars/3 for multilingual)
+        // The document grows over turns — estimate current tokens (≈ chars/CHARS_PER_TOKEN_ESTIMATE for multilingual)
         // and set num_predict to 2× current size + padding, so the LLM can reproduce + extend.
         let mut params = llm_params.clone();
-        let estimated_doc_tokens = (self.document_content.len() / 3) as i32;
-        params.num_predict = params.num_predict.max(estimated_doc_tokens * 2 + 1024).max(4096);
+        let estimated_doc_tokens = (self.document_content.len() / constants::CHARS_PER_TOKEN_ESTIMATE) as i32;
+        params.num_predict = params.num_predict.max(estimated_doc_tokens * 2 + constants::ORCH_DOC_TOKEN_PADDING).max(constants::ORCH_DOC_MIN_NUM_PREDICT);
 
         let request = self.ollama_client.build_request(&sys, &usr, &params, false);
 
@@ -2810,7 +2827,7 @@ impl DiscussionEngine {
             &self.config.discussion_language,
         );
         let mut params = self.gladiateurs[glad_idx].config.llm_params.clone();
-        params.num_predict = 50; // Short response only
+        params.num_predict = constants::ORCH_NUM_PREDICT_RESPOND_PASS; // Short response only
         let request = self.ollama_client.build_request(
             &self.gladiateurs[glad_idx].config.system_prompt,
             &prompt,
@@ -2852,7 +2869,7 @@ impl DiscussionEngine {
             &self.config.discussion_language,
         );
         let mut params = self.arbitre.config.llm_params.clone();
-        params.num_predict = 200; // Short question
+        params.num_predict = constants::ORCH_NUM_PREDICT_SOCRATIC; // Short question
         let request = self.ollama_client.build_request(
             &self.arbitre.config.system_prompt,
             &prompt,
@@ -2872,6 +2889,216 @@ impl DiscussionEngine {
             Err(e) => {
                 tracing::warn!("Socratic question generation failed: {e}");
                 None
+            }
+        }
+    }
+
+    // ── Argument map extraction ────────────────────────────────────────
+
+    /// Extract arguments from the current turn's messages and merge into the accumulated map.
+    async fn extract_and_merge_arguments(&mut self, channel: &Channel<ArenaEvent>) {
+        tracing::info!(
+            turn = self.current_turn,
+            turn_messages = self.turn_messages.len(),
+            "Argument map extraction starting"
+        );
+        if self.turn_messages.is_empty() || self.cancel_token.is_cancelled() {
+            tracing::info!("Argument map extraction skipped (empty turn or cancelled)");
+            return;
+        }
+
+        // Build recent context from turn messages
+        let recent_context: String = self
+            .turn_messages
+            .iter()
+            .map(|m| {
+                format!(
+                    "[{}] {}",
+                    m.speaker_name,
+                    truncate_str(&m.content, constants::ARGMAP_CONTEXT_CHARS)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Collect existing thesis labels
+        let existing_theses: Vec<String> = self
+            .argument_map
+            .theses
+            .iter()
+            .map(|t| t.label.clone())
+            .collect();
+
+        let prompt = prompt_builder::build_argument_extraction_prompt(
+            &recent_context,
+            &existing_theses,
+            &self.config.topic,
+            &self.config.discussion_language,
+        );
+
+        let sys_prompt = match self.config.discussion_language.as_str() {
+            "en" => "You are an argument analyst. Extract theses, supporting arguments, counter-arguments and evidence from the exchanges. Respond only with JSON.",
+            "zh" => "你是论证分析师。从对话中提取论点、支持论据、反驳和证据。仅用JSON回复。",
+            _ => "Tu es un analyste d'argumentation. Extrais les thèses, arguments de soutien, contre-arguments et preuves des échanges. Réponds uniquement en JSON.",
+        };
+
+        // Use dedicated params: generous context + num_predict for the long extraction prompt
+        let mut params = self.arbitre.config.llm_params.clone();
+        params.num_predict = params.num_predict.max(constants::ARGMAP_NUM_PREDICT);
+        params.num_ctx = params.num_ctx.max(constants::ARGMAP_NUM_CTX);
+        params.temperature = constants::ARGMAP_TEMPERATURE;
+
+        let request = self.ollama_client.build_request(
+            sys_prompt,
+            &prompt,
+            &params,
+            true,
+        );
+        let cancel = self.cancel_token.clone();
+        let raw = match self.ollama_client.chat(&request, cancel).await {
+            Ok(raw) => {
+                tracing::info!(
+                    turn = self.current_turn,
+                    raw_len = raw.len(),
+                    raw_preview = %truncate_str(&raw, 300),
+                    "Argument map LLM response received"
+                );
+                raw
+            }
+            Err(OllamaError::Cancelled) => return,
+            Err(e) => {
+                tracing::warn!(error = %e, "Argument map extraction failed — skipping this turn");
+                return;
+            }
+        };
+
+        let known_names: Vec<String> = std::iter::once(self.arbitre.config.name.clone())
+            .chain(self.gladiateurs.iter().map(|g| g.config.name.clone()))
+            .collect();
+
+        let extractions = json_parser::parse_argument_extraction(&raw, &known_names);
+        if extractions.is_empty() {
+            tracing::info!(turn = self.current_turn, "No arguments extracted this turn (parse returned empty)");
+            return;
+        }
+
+        tracing::info!(
+            turn = self.current_turn,
+            extractions_count = extractions.len(),
+            "Argument map extractions parsed, merging"
+        );
+        self.merge_extractions(extractions);
+
+        let md = self.argument_map.to_markdown(&self.config.topic);
+        tracing::info!(
+            turn = self.current_turn,
+            theses = self.argument_map.theses_count(),
+            arguments = self.argument_map.arguments_count(),
+            md_len = md.len(),
+            "Argument map updated, emitting event"
+        );
+        let _ = channel.send(ArenaEvent::ArgumentMapUpdated {
+            markdown: md,
+            theses_count: self.argument_map.theses_count() as u32,
+            arguments_count: self.argument_map.arguments_count() as u32,
+        });
+    }
+
+    /// Merge parsed extractions into the accumulated argument map.
+    fn merge_extractions(&mut self, extractions: Vec<json_parser::ParsedArgumentExtraction>) {
+        for ext in extractions {
+            // Resolve speaker_id from speaker_name
+            let speaker_id = if self.arbitre.config.name == ext.speaker_name {
+                self.arbitre.config.id.clone()
+            } else {
+                self.gladiateurs
+                    .iter()
+                    .find(|g| g.config.name == ext.speaker_name)
+                    .map(|g| g.config.id.clone())
+                    .unwrap_or_default()
+            };
+            if speaker_id.is_empty() {
+                tracing::warn!(speaker_name = %ext.speaker_name, "merge_extractions: unresolved speaker name, skipping extraction");
+                continue;
+            }
+
+            // Add new theses (skip case-insensitive duplicates, respect cap)
+            for thesis_label in &ext.new_theses {
+                if self.argument_map.theses.len() >= constants::ARGMAP_MAX_THESES {
+                    break;
+                }
+                let label_lower = thesis_label.to_lowercase();
+                let is_duplicate = self
+                    .argument_map
+                    .theses
+                    .iter()
+                    .any(|t| t.label.to_lowercase() == label_lower);
+                if !is_duplicate {
+                    let thesis_id = format!("t-{}", self.argument_map.theses.len());
+                    self.argument_map.theses.push(ThesisNode {
+                        id: thesis_id,
+                        label: thesis_label.clone(),
+                        speaker_id: speaker_id.clone(),
+                        speaker_name: ext.speaker_name.clone(),
+                        arguments: Vec::new(),
+                    });
+                }
+            }
+
+            // Attach arguments to theses
+            for arg in &ext.arguments {
+                if self.argument_map.arguments_count() >= constants::ARGMAP_MAX_ARGUMENTS {
+                    break;
+                }
+
+                // Find target thesis by fuzzy label matching
+                let target_label = match arg.arg_type {
+                    ArgumentType::Counter => arg.against_thesis.as_deref(),
+                    _ => arg.for_thesis.as_deref(),
+                };
+
+                let target_idx = target_label.and_then(|label| {
+                    let label_lower = label.to_lowercase();
+                    self.argument_map
+                        .theses
+                        .iter()
+                        .position(|t| {
+                            let t_lower = t.label.to_lowercase();
+                            t_lower == label_lower
+                                || t_lower.contains(&label_lower)
+                                || label_lower.contains(&t_lower)
+                        })
+                });
+
+                // Fallback: for support/evidence, attach to last thesis from same speaker
+                let resolved_idx = target_idx.or_else(|| {
+                    if arg.arg_type == ArgumentType::Counter {
+                        None // Don't mis-attribute counter-arguments
+                    } else {
+                        self.argument_map
+                            .theses
+                            .iter()
+                            .rposition(|t| t.speaker_id == speaker_id)
+                    }
+                });
+
+                if let Some(idx) = resolved_idx {
+                    let thesis_id = self.argument_map.theses[idx].id.clone();
+                    let arg_count = self.argument_map.theses[idx].arguments.len();
+                    let arg_id = format!("a-{}-{}", idx, arg_count);
+                    self.argument_map.theses[idx].arguments.push(ArgumentNode {
+                        id: arg_id,
+                        label: arg.text.clone(),
+                        arg_type: arg.arg_type.clone(),
+                        speaker_id: speaker_id.clone(),
+                        speaker_name: ext.speaker_name.clone(),
+                        targets_thesis_id: if arg.arg_type == ArgumentType::Counter {
+                            Some(thesis_id)
+                        } else {
+                            None
+                        },
+                    });
+                }
             }
         }
     }

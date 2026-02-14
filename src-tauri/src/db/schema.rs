@@ -111,6 +111,16 @@ pub async fn initialize(db: &Connection) -> Result<(), tokio_rusqlite::Error> {
                 "ALTER TABLE discussions ADD COLUMN document_format TEXT NOT NULL DEFAULT 'none';"
             )?;
         }
+        // Migration: add argument_map_md column to discussions (idempotent)
+        let has_argument_map_md: bool = conn
+            .prepare("PRAGMA table_info(discussions)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .any(|col| col.as_deref() == Ok("argument_map_md"));
+        if !has_argument_map_md {
+            conn.execute_batch(
+                "ALTER TABLE discussions ADD COLUMN argument_map_md TEXT NOT NULL DEFAULT '';"
+            )?;
+        }
         Ok(())
     })
     .await

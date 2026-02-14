@@ -134,7 +134,7 @@ export function EmotionSidebar({ width = 280 }: { width?: number }) {
 
   if (isCollapsed) {
     return (
-      <div className="flex w-10 shrink-0 flex-col items-center border-l border-border bg-card/50 pt-2">
+      <div className="flex w-8 shrink-0 flex-col items-center border-l border-border bg-card/50 pt-2">
         <button
           onClick={() => setIsCollapsed(false)}
           className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -142,6 +142,9 @@ export function EmotionSidebar({ width = 280 }: { width?: number }) {
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
+        <span className="mt-2 text-xs [writing-mode:vertical-lr] text-muted-foreground">
+          {t("emotions.sidebar.title")}
+        </span>
       </div>
     );
   }

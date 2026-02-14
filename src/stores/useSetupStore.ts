@@ -24,8 +24,10 @@ interface SetupState {
   documentFormat: DocumentFormat;
   webSearchPool: number;
   wikiSearchPool: number;
+  argumentMapEnabled: boolean;
   ragDocuments: RagDocumentInfo[];
 
+  setArgumentMapEnabled: (v: boolean) => void;
   setDiscussionMode: (mode: DiscussionMode) => void;
   setDocumentFormat: (fmt: DocumentFormat) => void;
   setStep: (step: number) => void;
@@ -69,8 +71,10 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   userInterventionTimeoutSecs: 120,
   webSearchPool: 0,
   wikiSearchPool: 0,
+  argumentMapEnabled: false,
   ragDocuments: [],
 
+  setArgumentMapEnabled: (v) => set({ argumentMapEnabled: v }),
   setDiscussionMode: (mode) => set({ discussionMode: mode }),
   setDocumentFormat: (fmt) => set({ documentFormat: fmt }),
   setStep: (step) => set({ step }),
@@ -158,6 +162,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       documentFormat: s.documentFormat,
       webSearchPool: s.webSearchPool,
       wikiSearchPool: s.wikiSearchPool,
+      argumentMapEnabled: s.argumentMapEnabled,
     };
   },
 
@@ -176,6 +181,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       userInterventionTimeoutSecs: 120,
       webSearchPool: 0,
       wikiSearchPool: 0,
+      argumentMapEnabled: false,
       ragDocuments: [],
     });
   },

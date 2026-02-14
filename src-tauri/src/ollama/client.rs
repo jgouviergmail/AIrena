@@ -81,7 +81,7 @@ impl OllamaClient {
                         attempt + 1,
                         e
                     );
-                    tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
+                    tokio::time::sleep(Duration::from_secs(constants::OLLAMA_RETRY_BACKOFF_BASE_SECS.pow(attempt))).await;
                 }
                 Err(e) => return Err(e),
             }

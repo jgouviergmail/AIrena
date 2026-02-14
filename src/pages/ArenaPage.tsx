@@ -8,6 +8,7 @@ import { UserInputArea } from "@/components/discussion/UserInputArea";
 import { TurnIndicator } from "@/components/discussion/TurnIndicator";
 import { EmotionSidebar } from "@/components/emotion/EmotionSidebar";
 import { DocumentSidebar } from "@/components/document/DocumentSidebar";
+import { MindmapSidebar } from "@/components/mindmap/MindmapSidebar";
 import { ResizeDivider } from "@/components/layout/ResizeDivider";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { useSetupStore } from "@/stores/useSetupStore";
@@ -20,14 +21,17 @@ export default function ArenaPage() {
   const userTurnActive = useArenaStore((s) => s.userTurnActive);
   const determiningOrder = useArenaStore((s) => s.determiningOrder);
   const webSearchCount = useArenaStore((s) => s.webSearchCount);
+  const activityStatus = useArenaStore((s) => s.activityStatus);
   const error = useArenaStore((s) => s.error);
   const synthesisStreaming = useArenaStore((s) => s.synthesisStreaming);
   const userTimeout = useSetupStore((s) => s.userInterventionTimeoutSecs);
   const documentFormat = useSetupStore((s) => s.documentFormat);
   const discussionMode = useSetupStore((s) => s.discussionMode);
+  const argumentMapEnabled = useSetupStore((s) => s.argumentMapEnabled);
   const prevStatusRef = useRef(status);
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [docSidebarWidth, setDocSidebarWidth] = useState(350);
+  const [mindmapSidebarWidth, setMindmapSidebarWidth] = useState(350);
   const hasDocument = documentFormat !== "none";
 
   const handleResize = useCallback((delta: number) => {
@@ -35,6 +39,9 @@ export default function ArenaPage() {
   }, []);
   const handleDocResize = useCallback((delta: number) => {
     setDocSidebarWidth((w) => Math.max(200, Math.min(600, w + delta)));
+  }, []);
+  const handleMindmapResize = useCallback((delta: number) => {
+    setMindmapSidebarWidth((w) => Math.max(250, Math.min(600, w + delta)));
   }, []);
 
   // Navigate to summary only when status TRANSITIONS to "ended"
@@ -55,7 +62,15 @@ export default function ArenaPage() {
 
   return (
     <>
-      <TopBar title={`${t("arena.title")} — ${t(`setup.mode_${discussionMode}`)}`} />
+      <TopBar
+        title={`${t("arena.title")} — ${t(`setup.mode_${discussionMode}`)}`}
+        subtitle={activityStatus ? (
+          <span className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+            <span className={`h-1.5 w-1.5 shrink-0 animate-pulse rounded-full ${activityStatus.type === "synthesis" ? "bg-blue-500" : "bg-primary"}`} />
+            {t(`arena.activity.${activityStatus.type}`, { name: activityStatus.speakerName })}
+          </span>
+        ) : undefined}
+      />
 
       <div className="flex min-h-0 flex-1 flex-col">
         {/* Status bar */}
@@ -71,7 +86,7 @@ export default function ArenaPage() {
           <DiscussionControls status={status} userTurnActive={userTurnActive} />
         </div>
 
-        {/* Main content + emotion sidebar */}
+        {/* Main content + sidebars */}
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {/* Scrollable content area */}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -105,6 +120,14 @@ export default function ArenaPage() {
               </div>
             )}
           </div>
+
+          {/* Mindmap sidebar (if enabled) */}
+          {argumentMapEnabled && (
+            <>
+              <ResizeDivider onResize={handleMindmapResize} />
+              <MindmapSidebar width={mindmapSidebarWidth} />
+            </>
+          )}
 
           {/* Document sidebar (if format selected) */}
           {hasDocument && (

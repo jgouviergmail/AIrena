@@ -462,3 +462,6 @@ Mode "Arène Réseau" (LAN) + système de points par galdiateur déterminé par 
 Permettre à deux instances d'AIrena sur le même réseau local de se connecter.
 Concept : Tu es sur ton PC avec ton équipe de GladIAteurs, ton frère Alexandre (à Mulhouse) est sur le sien avec la sienne. Les deux équipes débattent dans une arène commune.
 
+--------------------------------------------------------------------
+
+serait il possible d'ajouter une section de paramétrage technique dans l'application avec lk'administration de toutes les valeurs dans constants ?

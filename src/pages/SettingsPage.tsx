@@ -180,31 +180,6 @@ export default function SettingsPage() {
                 ))}
               </div>
             </Field>
-            <Field label={t("settings.emotionDriven")}>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() =>
-                    updateSettings({ emotionDriven: !settings.emotionDriven })
-                  }
-                  className={cn(
-                    "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
-                    settings.emotionDriven ? "bg-primary" : "bg-muted",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform",
-                      settings.emotionDriven
-                        ? "translate-x-5"
-                        : "translate-x-0",
-                    )}
-                  />
-                </button>
-                <span className="text-sm text-muted-foreground">
-                  {t("settings.emotionDrivenDesc")}
-                </span>
-              </div>
-            </Field>
           </Section>
 
           {/* Ollama */}

@@ -31,6 +31,8 @@ pub struct SaveDiscussionRequest {
     pub document_content: String,
     #[serde(default)]
     pub document_format: String,
+    #[serde(default)]
+    pub argument_map_md: String,
 }
 
 /// Lightweight summary for listing discussions (no messages).
@@ -47,6 +49,7 @@ pub struct DiscussionSummary {
     pub created_at: String,
     pub discussion_mode: String,
     pub document_format: String,
+    pub has_argument_map: bool,
 }
 
 /// Full discussion detail with all messages.
@@ -65,4 +68,5 @@ pub struct DiscussionDetail {
     pub discussion_mode: String,
     pub document_content: String,
     pub document_format: String,
+    pub argument_map_md: String,
 }

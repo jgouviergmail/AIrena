@@ -315,7 +315,8 @@ pub fn build_socratic_question_prompt(
             The question should:\n\
             - Challenge assumptions made in previous exchanges\n\
             - Open new angles of reflection\n\
-            - Be concise and direct\n\n\
+            - Be concise and direct\n\
+            - Be asked in English\n\n\
             Respond with ONLY the question, nothing else."
         ),
         "zh" => format!(
@@ -325,7 +326,8 @@ pub fn build_socratic_question_prompt(
             这个问题应该：\n\
             - 挑战之前交流中的假设\n\
             - 开辟新的反思角度\n\
-            - 简洁直接\n\n\
+            - 简洁直接\n\
+            - 用中文提问\n\n\
             只回复问题本身，不要其他内容。"
         ),
         _ => format!(
@@ -335,7 +337,8 @@ pub fn build_socratic_question_prompt(
             La question doit :\n\
             - Remettre en question les hypothèses des échanges précédents\n\
             - Ouvrir de nouveaux angles de réflexion\n\
-            - Être concise et directe\n\n\
+            - Être concise et directe\n\
+            - Être posée en français\n\n\
             Réponds UNIQUEMENT avec la question, rien d'autre."
         ),
     }
@@ -551,6 +554,8 @@ pub fn mode_context_instruction(
             "=== YOUR TASK ===\n\
              This is the OPENING ROUND — share YOUR OWN perspective with a distinctive angle.\n\
              {opening}\n\
+             CRITICAL: Do NOT react to, quote, paraphrase, or reference what other speakers have said. \
+             Present YOUR OWN independent position as if you were the first to speak.\n\
              Focus on what YOU think — the interaction phase begins next round.\n\
              {constraint}\n\
              Keep it to one focused paragraph.\n\
@@ -562,6 +567,8 @@ pub fn mode_context_instruction(
             "=== 你的任务 ===\n\
              这是开场轮——以独特的角度分享你自己的观点。\n\
              {opening}\n\
+             关键：不要回应、引用、改述或提及其他发言者所说的内容。\
+             像你是第一个发言一样，展示你自己的独立立场。\n\
              专注于你自己的想法——互动阶段从下一轮开始。\n\
              {constraint}\n\
              保持一段集中的论述。\n\
@@ -573,6 +580,9 @@ pub fn mode_context_instruction(
             "=== VOTRE TÂCHE ===\n\
              C'est le TOUR D'OUVERTURE — partage TA PROPRE perspective avec un angle distinctif.\n\
              {opening}\n\
+             CRITIQUE : Ne réagis PAS à ce que les autres ont dit. Ne cite PAS, ne paraphrase PAS, \
+             ne fais PAS référence aux interventions précédentes. \
+             Présente TA PROPRE position indépendante comme si tu étais le premier à parler.\n\
              Concentre-toi sur ce que TU penses — la phase d'interaction commence au prochain tour.\n\
              {constraint}\n\
              Reste sur un paragraphe concentré.\n\

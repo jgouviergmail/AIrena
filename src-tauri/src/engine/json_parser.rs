@@ -221,14 +221,19 @@ pub struct ParsedReaction {
     pub justification: Option<String>,
 }
 
-/// Normalize Unicode dash variants (en-dash, em-dash, non-breaking hyphen, etc.) to ASCII hyphen.
-/// LLMs often output U+2011 (non-breaking hyphen) instead of U+002D (ASCII hyphen).
-fn normalize_dashes(s: &str) -> String {
+/// Normalize Unicode punctuation variants to ASCII equivalents.
+///
+/// - Dashes: en-dash, em-dash, non-breaking hyphen, etc. → ASCII hyphen (U+002D)
+/// - Apostrophes: right single quote, left single quote, modifier letter → ASCII apostrophe (U+0027)
+///
+/// LLMs often output typographic variants that break exact string matching.
+fn normalize_punctuation(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
             '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
             | '\u{2212}' => result.push('-'),
+            '\u{2019}' | '\u{2018}' | '\u{201A}' | '\u{02BC}' => result.push('\''),
             _ => result.push(ch),
         }
     }
@@ -253,19 +258,19 @@ fn strip_french_article(name: &str) -> &str {
 /// 4 layers: exact case-insensitive → article-stripped → prefix (min 3 chars) → contains (min 4 chars)
 /// Normalizes Unicode dashes so "Le Psycho‑rigide" (U+2011) matches "Le Psycho-rigide" (U+002D).
 pub fn match_speaker_name<'a>(llm_name: &str, known_names: &'a [String]) -> Option<&'a String> {
-    let llm_lower = normalize_dashes(llm_name.to_lowercase().trim());
+    let llm_lower = normalize_punctuation(llm_name.to_lowercase().trim());
     let llm_stripped = strip_french_article(&llm_lower);
 
     // 1. Exact match (case-insensitive, trimmed, dash-normalized)
     known_names
         .iter()
-        .find(|s| normalize_dashes(s.to_lowercase().trim()) == llm_lower)
+        .find(|s| normalize_punctuation(s.to_lowercase().trim()) == llm_lower)
         // 2. Article-stripped match: "Scientifique" matches "Le Scientifique"
         .or_else(|| {
             if llm_stripped.len() >= 3 {
                 known_names
                     .iter()
-                    .find(|s| strip_french_article(&normalize_dashes(&s.to_lowercase())) == llm_stripped)
+                    .find(|s| strip_french_article(&normalize_punctuation(&s.to_lowercase())) == llm_stripped)
             } else {
                 None
             }
@@ -275,7 +280,7 @@ pub fn match_speaker_name<'a>(llm_name: &str, known_names: &'a [String]) -> Opti
             if llm_lower.len() >= 3 {
                 known_names
                     .iter()
-                    .find(|s| normalize_dashes(&s.to_lowercase()).starts_with(&llm_lower))
+                    .find(|s| normalize_punctuation(&s.to_lowercase()).starts_with(&llm_lower))
             } else {
                 None
             }
@@ -284,7 +289,7 @@ pub fn match_speaker_name<'a>(llm_name: &str, known_names: &'a [String]) -> Opti
         .or_else(|| {
             if llm_stripped.len() >= 4 {
                 known_names.iter().find(|s| {
-                    let s_lower = normalize_dashes(&s.to_lowercase());
+                    let s_lower = normalize_punctuation(&s.to_lowercase());
                     let s_stripped = strip_french_article(&s_lower);
                     s_stripped.contains(llm_stripped) || llm_stripped.contains(s_stripped)
                 })
@@ -518,6 +523,170 @@ fn remove_trailing_commas(input: &str) -> String {
 
 fn safe_truncate(s: &str, max_bytes: usize) -> String {
     super::truncate_str(s, max_bytes).to_string()
+}
+
+// ── Argument map extraction ──────────────────────────────────────────
+
+use crate::constants;
+use crate::models::argument_map::ArgumentType;
+
+/// Parsed argument ready for merging into the argument map.
+#[derive(Debug)]
+pub struct ParsedArgument {
+    pub text: String,
+    pub arg_type: ArgumentType,
+    pub for_thesis: Option<String>,
+    pub against_thesis: Option<String>,
+}
+
+/// Parsed extraction result for one speaker.
+#[derive(Debug)]
+pub struct ParsedArgumentExtraction {
+    pub speaker_name: String,
+    pub new_theses: Vec<String>,
+    pub arguments: Vec<ParsedArgument>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawArgumentExtraction {
+    #[serde(default)]
+    speaker: String,
+    #[serde(default)]
+    new_theses: Vec<String>,
+    #[serde(default)]
+    arguments: Vec<RawArgument>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawArgument {
+    #[serde(default)]
+    text: String,
+    #[serde(default, alias = "type")]
+    arg_type: String,
+    #[serde(default)]
+    for_thesis: Option<String>,
+    #[serde(default)]
+    against_thesis: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WrappedExtractions {
+    #[serde(default, alias = "results")]
+    extractions: Vec<RawArgumentExtraction>,
+}
+
+/// Parse argument extraction JSON from an LLM response.
+/// Uses multi-layer JSON extraction and fuzzy speaker name matching.
+pub fn parse_argument_extraction(
+    raw: &str,
+    known_speakers: &[String],
+) -> Vec<ParsedArgumentExtraction> {
+    // Try wrapped format first, then bare array, then with escaped-quote cleanup
+    let raw_extractions = match parse_json_response::<WrappedExtractions>(raw) {
+        Ok(w) => {
+            tracing::debug!(count = w.extractions.len(), "Parsed as WrappedExtractions");
+            w.extractions
+        }
+        Err(e1) => match parse_json_response::<Vec<RawArgumentExtraction>>(raw) {
+            Ok(v) => {
+                tracing::debug!(count = v.len(), "Parsed as bare array");
+                v
+            }
+            Err(e2) => {
+                // Fallback: LLMs sometimes mix normal and escaped quotes in a single
+                // JSON response (e.g. `"speaker":"A"` then `"speaker\":\"B\"`).
+                // Strip stray backslash-escapes and retry.
+                let cleaned = raw.replace("\\\"", "\"");
+                match parse_json_response::<WrappedExtractions>(&cleaned)
+                    .map(|w| w.extractions)
+                    .or_else(|_| parse_json_response::<Vec<RawArgumentExtraction>>(&cleaned))
+                {
+                    Ok(v) if !v.is_empty() => {
+                        tracing::info!(
+                            count = v.len(),
+                            "Parsed after escaped-quote cleanup"
+                        );
+                        v
+                    }
+                    _ => {
+                        tracing::warn!(
+                            wrapped_err = %e1,
+                            array_err = %e2,
+                            raw_len = raw.len(),
+                            raw_tail = %super::truncate_tail(raw, 200),
+                            "Argument extraction: JSON parse failed all formats"
+                        );
+                        return vec![];
+                    }
+                }
+            }
+        },
+    };
+
+    if raw_extractions.is_empty() {
+        tracing::warn!("Argument extraction: parsed OK but extractions array is empty");
+        return vec![];
+    }
+
+    raw_extractions
+        .into_iter()
+        .filter_map(|ext| {
+            // Fuzzy match speaker name
+            let speaker = match match_speaker_name(&ext.speaker, known_speakers) {
+                Some(s) => s,
+                None => {
+                    tracing::warn!(
+                        llm_speaker = %ext.speaker,
+                        known = ?known_speakers,
+                        "Argument extraction: speaker name not matched, skipping"
+                    );
+                    return None;
+                }
+            };
+
+            let new_theses: Vec<String> = ext
+                .new_theses
+                .into_iter()
+                .map(|t| {
+                    super::truncate_str(&t, constants::ARGMAP_MAX_THESIS_LABEL).to_string()
+                })
+                .filter(|t| !t.is_empty())
+                .collect();
+
+            let arguments: Vec<ParsedArgument> = ext
+                .arguments
+                .into_iter()
+                .filter(|a| !a.text.trim().is_empty())
+                .map(|a| {
+                    let arg_type = match a.arg_type.to_lowercase().as_str() {
+                        "counter" | "contre" | "counterargument" | "counter-argument"
+                        | "opposition" | "réfutation" | "refutation" => ArgumentType::Counter,
+                        "evidence" | "preuve" | "proof" | "données" | "data" | "source" => {
+                            ArgumentType::Evidence
+                        }
+                        _ => ArgumentType::Support,
+                    };
+                    ParsedArgument {
+                        text: super::truncate_str(&a.text, constants::ARGMAP_MAX_ARGUMENT_LABEL)
+                            .to_string(),
+                        arg_type,
+                        for_thesis: a.for_thesis.filter(|s| !s.is_empty()),
+                        against_thesis: a.against_thesis.filter(|s| !s.is_empty()),
+                    }
+                })
+                .collect();
+
+            if new_theses.is_empty() && arguments.is_empty() {
+                return None;
+            }
+
+            Some(ParsedArgumentExtraction {
+                speaker_name: speaker.clone(),
+                new_theses,
+                arguments,
+            })
+        })
+        .collect()
 }
 
 /// Extract document content from `<document>...</document>` tags in a response.
@@ -911,10 +1080,31 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_dashes() {
-        assert_eq!(normalize_dashes("Psycho\u{2011}rigide"), "Psycho-rigide");
-        assert_eq!(normalize_dashes("en\u{2013}dash"), "en-dash");
-        assert_eq!(normalize_dashes("no dashes"), "no dashes");
+    fn test_normalize_punctuation() {
+        // Dashes
+        assert_eq!(normalize_punctuation("Psycho\u{2011}rigide"), "Psycho-rigide");
+        assert_eq!(normalize_punctuation("en\u{2013}dash"), "en-dash");
+        assert_eq!(normalize_punctuation("no dashes"), "no dashes");
+        // Apostrophes
+        assert_eq!(normalize_punctuation("L\u{2019}Adolescent"), "L'Adolescent");
+        assert_eq!(normalize_punctuation("L\u{2018}Humoriste"), "L'Humoriste");
+        assert_eq!(normalize_punctuation("L\u{02BC}Artiste"), "L'Artiste");
+    }
+
+    #[test]
+    fn test_match_speaker_typographic_apostrophe() {
+        // LLM outputs typographic apostrophe, seed has straight apostrophe
+        let known = vec!["L'Adolescent".to_string()];
+        assert_eq!(
+            match_speaker_name("L\u{2019}Adolescent", &known),
+            Some(&known[0])
+        );
+        // Reverse: seed has typographic, LLM has straight
+        let known2 = vec!["L\u{2019}Humoriste".to_string()];
+        assert_eq!(
+            match_speaker_name("L'Humoriste", &known2),
+            Some(&known2[0])
+        );
     }
 
     #[test]

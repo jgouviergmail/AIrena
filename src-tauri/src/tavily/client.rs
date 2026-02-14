@@ -4,6 +4,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::error::TavilyError;
 use super::TavilySearchResponse;
+use crate::constants;
 
 const TAVILY_API_URL: &str = "https://api.tavily.com/search";
 
@@ -17,7 +18,7 @@ impl TavilyClient {
     pub fn new(api_key: &str) -> Self {
         Self {
             http_client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(15))
+                .timeout(Duration::from_secs(constants::TAVILY_HTTP_TIMEOUT_SECS))
                 .build()
                 .expect("reqwest client builder should not fail with basic timeout config"),
             api_key: api_key.to_string(),
@@ -32,7 +33,7 @@ impl TavilyClient {
         let body = serde_json::json!({
             "query": query,
             "search_depth": "basic",
-            "max_results": 5,
+            "max_results": constants::TAVILY_MAX_RESULTS,
             "include_answer": true,
         });
 

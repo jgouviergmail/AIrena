@@ -1,7 +1,7 @@
 # AIrena — Documentation Technique
 
-> **Version** : 1.6
-> **Dernière mise à jour** : 2026-02-13
+> **Version** : 1.10
+> **Dernière mise à jour** : 2026-02-14
 > **Auteur** : jgouv
 > **Identifiant** : `com.jgouv.airena`
 
@@ -24,8 +24,10 @@
    - 6.7 [Base de données SQLite](#67-base-de-données-sqlite)
    - 6.8 [Client Ollama](#68-client-ollama)
    - 6.9 [Client Wikipedia](#69-client-wikipedia)
-   - 6.10 [Client Tavily (recherche web)](#610-client-tavily-recherche-web)
-   - 6.11 [Gestion des erreurs](#611-gestion-des-erreurs)
+   - 6.10 [Système RAG](#610-système-rag-retrieval-augmented-generation)
+   - 6.11 [Client Tavily (recherche web)](#611-client-tavily-recherche-web)
+   - 6.12 [Carte des arguments](#612-carte-des-arguments)
+   - 6.13 [Gestion des erreurs](#613-gestion-des-erreurs)
 7. [Frontend React (src/)](#7-frontend-react-src)
    - 7.1 [Routage & Layout](#71-routage--layout)
    - 7.2 [Pages](#72-pages)
@@ -89,6 +91,8 @@
 | urlencoding | 2.x | Encodage URL (Wikipedia) |
 | tauri-plugin-dialog | 2.x | Dialogues fichiers (backend bridge) |
 | tauri-plugin-fs | 2.x | Accès fichiers (backend bridge) |
+| lopdf | 0.x | Parsing de fichiers PDF (RAG) |
+| regex | 1.x | Expressions régulières (parsing RAG) |
 
 ### Frontend
 
@@ -110,6 +114,10 @@
 | @tauri-apps/plugin-dialog | 2.6 | Dialogues fichiers |
 | @tauri-apps/plugin-fs | 2.4 | Accès fichiers |
 | @tauri-apps/plugin-opener | 2.x | Ouverture URL externe |
+| diff | 8.x | Calcul de diff texte (surlignage document collaboratif) |
+| markmap-lib | 0.18 | Transformation markdown → arbre (carte des arguments) |
+| markmap-view | 0.18 | Rendu SVG interactif de mindmaps |
+| markmap-common | 0.18 | Types partagés markmap |
 
 ---
 
@@ -238,15 +246,16 @@ npm run build        # tsc + vite build
 
 **Modules** :
 ```
-commands/ — Handlers IPC (discussion, ollama, settings, history)
-constants.rs — Constantes centralisées (limites mémoire, tailles de troncature, seuils, quotas)
+commands/ — Handlers IPC (discussion, ollama, settings, history, rag)
+constants.rs — Constantes centralisées (limites mémoire, tailles de troncature, seuils, quotas RAG)
 db/       — SQLite (schema, repository, seed)
 engine/   — Cœur métier (orchestrator, turn_manager, prompt_builder, directive_builder,
              emotion_engine, memory_manager, json_parser, dynamics_parser, mode_prompts)
 error.rs  — CommandError enum
-models/   — Structures de données (11 fichiers)
+models/   — Structures de données (12 fichiers, incluant argument_map)
 ollama/   — Client HTTP streaming NDJSON
-state.rs  — AppState (Mutex)
+rag/      — Système RAG (parser, chunker, embedder, bm25, store)
+state.rs  — AppState (Mutex + rag_store)
 tavily/   — Client Tavily API
 wikipedia/ — Client Wikipedia API
 ```
@@ -260,6 +269,7 @@ pub struct AppState {
     pub engine_cmd_tx: Arc<Mutex<Option<mpsc::Sender<EngineCommand>>>>,
     pub cancel_token: Arc<Mutex<Option<CancellationToken>>>,
     pub db: tokio_rusqlite::Connection,
+    pub rag_store: Arc<Mutex<Option<RagStore>>>,
 }
 ```
 
@@ -268,6 +278,7 @@ pub struct AppState {
 | `engine_cmd_tx` | `Arc<Mutex<Option<mpsc::Sender>>>` | Canal de commandes vers le moteur actif |
 | `cancel_token` | `Arc<Mutex<Option<CancellationToken>>>` | Arrêt forcé immédiat |
 | `db` | `tokio_rusqlite::Connection` | Connexion SQLite asynchrone |
+| `rag_store` | `Arc<Mutex<Option<RagStore>>>` | Store RAG avec documents et embeddings |
 
 **Helpers** :
 - `lock_or_recover()` — Récupère un Mutex empoisonné
@@ -323,6 +334,15 @@ pub struct AppState {
 | `delete_discussion_history` | `(id) → Result<()>` | Supprime une discussion |
 | `delete_all_discussion_history` | `() → Result<()>` | Purge complète de l'historique |
 
+#### RAG (`commands/rag.rs`)
+
+| Commande | Signature | Description |
+|---|---|---|
+| `import_rag_document` | `(file_path) → Result<RagDocumentInfo>` | Importe un document (PDF, TXT, MD, CSV, DOCX), le chunk et l'embed |
+| `remove_rag_document` | `(doc_id) → Result<bool>` | Supprime un document du store RAG |
+| `get_rag_status` | `() → Result<Vec<RagDocumentInfo>>` | Liste tous les documents importés |
+| `clear_rag_store` | `() → Result<()>` | Vide complètement le store RAG |
+
 ### 6.4 Moteur de discussion (Engine)
 
 #### Orchestrateur (`engine/orchestrator.rs` — ~2800 lignes)
@@ -354,6 +374,8 @@ Le cœur de l'application. Exécute la boucle de discussion complète dans une t
    │   └── Traitement du message utilisateur
    ├── Mise à jour document (mode Co-Construction)
    │   └── Extraction <document> → LLM update → DocumentUpdated
+   ├── Extraction carte des arguments (si activée, tour ≥ 2)
+   │   └── LLM extraction → fusion → ArgumentMapUpdated
    └── Mise à jour mémoire (résumé + positions)
 4. Synthèse (SynthesisChunk + SynthesisComplete)
 5. DiscussionEnded
@@ -395,6 +417,7 @@ Construit les prompts contextuels pour chaque rôle et situation. **Toutes les i
 | `build_web_search_decision_prompt` | Décision de recherche web |
 | `build_wiki_search_decision_prompt` | Décision de recherche Wikipedia |
 | `build_document_update_prompt` | Mise à jour du document collaboratif |
+| `build_argument_extraction_prompt` | Extraction de thèses et arguments (carte des arguments) |
 
 #### Constructeur de directives (`engine/directive_builder.rs`)
 
@@ -490,6 +513,7 @@ pub struct DiscussionConfig {
     pub wiki_search_pool: u32,
     pub discussion_mode: DiscussionMode,
     pub document_format: DocumentFormat,
+    pub argument_map_enabled: bool,
 }
 ```
 
@@ -570,7 +594,7 @@ L'enum `ArenaEvent` (30+ variants) est sérialisé avec `tag = "type"` et `conte
 | **Émotions** | `EmotionUpdated`, `EmotionHistoryUpdate`, `EmotionalThresholdCrossed` |
 | **Réactions** | `ReactionEmitted` |
 | **Recherche** | `WebSearchPerformed`, `WikiSearchPerformed` |
-| **Cognition** | `DirectiveGenerated`, `DocumentUpdated` |
+| **Cognition** | `DirectiveGenerated`, `DocumentUpdated`, `ArgumentMapUpdated` |
 | **Modération** | `BanIssued`, `BanLifted` |
 | **Contrôle** | `PauseConfirmed`, `ResumeConfirmed` |
 
@@ -602,7 +626,8 @@ discussions (
     total_turns INTEGER, synthesis TEXT, created_at TEXT,
     discussion_mode TEXT DEFAULT 'debate',
     document_content TEXT DEFAULT '',
-    document_format TEXT DEFAULT 'none'
+    document_format TEXT DEFAULT 'none',
+    argument_map_md TEXT DEFAULT ''
 )
 
 -- Messages
@@ -666,7 +691,84 @@ pub struct OllamaClient {
 - **Timeout** : 15 secondes
 - **User-Agent** : `AIrena/{VERSION}`
 
-### 6.10 Client Tavily (recherche web)
+### 6.10 Système RAG (Retrieval-Augmented Generation)
+
+**Module** : `rag/` (5 fichiers)
+
+Le système RAG permet d'enrichir les interventions des participants avec des connaissances extraites de documents importés par l'utilisateur.
+
+#### Architecture RAG
+
+| Fichier | Rôle |
+|---|---|
+| **parser.rs** | Parse 5 formats de documents (PDF, TXT, MD, CSV, DOCX) → texte brut |
+| **chunker.rs** | Découpe le texte en chunks avec overlap configurable |
+| **embedder.rs** | Génère des embeddings via modèle Ollama |
+| **bm25.rs** | Recherche lexicale BM25 (tf-idf avec normalisation) |
+| **store.rs** | Stockage en mémoire (documents + chunks + embeddings + index BM25) |
+
+#### Flux d'import
+
+1. **Parsing** : extraction du texte depuis le fichier (PDF via lopdf, DOCX via regex, autres via UTF-8)
+2. **Chunking** : découpage en chunks de ~800 caractères avec 200 caractères d'overlap
+3. **Embedding** : génération d'embeddings pour chaque chunk via le modèle configuré
+4. **Stockage** : ajout au `RagStore` avec indexation BM25
+
+#### Recherche hybride (3 étapes)
+
+Lors d'une intervention, le moteur peut décider de rechercher des informations pertinentes dans le store RAG :
+
+1. **Stage 1a** : Recherche par similarité cosine → top 30 (`RAG_RETRIEVAL_TOP_K`)
+2. **Stage 1b** : Recherche lexicale BM25 → top 30
+3. **Stage 1c** : Fusion RRF (Reciprocal Rank Fusion, k=60) → top 10 (`RAG_RRF_TOP_K`)
+4. **Stage 2** : Le LLM sélectionne les chunks les plus pertinents → max 5 (`RAG_LLM_SELECT_MAX`), fallback top 3 (`RAG_FALLBACK_TOP_K`) si échec
+
+#### Configuration
+
+| Paramètre | Valeur | Description |
+|---|---|---|
+| `RAG_MAX_FILE_SIZE_BYTES` | 10 MB | Taille maximale d'un fichier importé |
+| `RAG_CHUNK_TARGET_CHARS` | 2000 | Taille cible d'un chunk (~512 tokens) |
+| `RAG_CHUNK_OVERLAP_CHARS` | 200 | Overlap entre chunks consécutifs |
+| `RAG_RETRIEVAL_TOP_K` | 30 | Candidats par recherche vectorielle (Stage 1a) |
+| `RAG_RRF_TOP_K` | 10 | Candidats après fusion RRF (Stage 1c) |
+| `RAG_LLM_SELECT_MAX` | 5 | Max chunks sélectionnés par le LLM (Stage 2) |
+| `RAG_FALLBACK_TOP_K` | 3 | Fallback si le LLM échoue |
+| `RAG_EMBED_BATCH_SIZE` | 32 | Textes par appel d'embedding |
+| `embedding_model` | (settings) | Modèle Ollama pour les embeddings (défaut : modèle LLM principal) |
+
+#### Formats supportés
+
+| Format | Extension | Parsing |
+|---|---|---|
+| PDF | `.pdf` | lopdf (extraction texte brut) |
+| Texte | `.txt` | UTF-8 direct |
+| Markdown | `.md` | UTF-8 direct |
+| CSV | `.csv` | Conversion en tableau formaté |
+| Word | `.docx` | Regex sur XML interne (fallback basique) |
+
+#### Événement RAG
+
+`ragContextInjected` — émis quand des chunks RAG sont injectés dans le contexte d'un orateur :
+```typescript
+{
+  type: "ragContextInjected",
+  data: {
+    speakerId: string,
+    speakerName: string,
+    chunks: RagChunkInfo[]  // [{ fileName, chunkIndex, preview, relevanceScore }]
+  }
+}
+```
+
+#### Limites et considérations
+
+- **Mémoire** : tous les documents et embeddings sont stockés en RAM
+- **Cohérence** : mélanger des modèles d'embedding différents provoque une erreur de dimension
+- **Lifetime** : le store RAG persiste pour toute la durée de vie de l'application (jusqu'à clearRagStore)
+- **Pas de persistance** : les documents doivent être réimportés à chaque lancement
+
+### 6.11 Client Tavily (recherche web)
 
 **Fichier** : `tavily/client.rs`
 
@@ -675,7 +777,77 @@ pub struct OllamaClient {
 - **Quota** : 1000 crédits/mois (tier gratuit), suivi dans AppSettings
 - **Erreurs** : 401 (clé invalide), 429 (rate limit), 432 (quota dépassé)
 
-### 6.11 Gestion des erreurs
+### 6.12 Carte des arguments
+
+**Module** : `models/argument_map.rs` + intégration dans `engine/orchestrator.rs`, `engine/prompt_builder.rs`, `engine/json_parser.rs`
+
+Le système de carte des arguments extrait automatiquement les thèses et arguments de la discussion pour produire une visualisation en mindmap.
+
+#### Modèle de données
+
+```rust
+pub enum ArgumentType { Support, Counter, Evidence }
+
+pub struct ThesisNode {
+    pub id: String,
+    pub label: String,
+    pub speaker_id: String,
+    pub speaker_name: String,
+    pub arguments: Vec<ArgumentNode>,
+}
+
+pub struct ArgumentNode {
+    pub id: String,
+    pub label: String,
+    pub arg_type: ArgumentType,
+    pub speaker_id: String,
+    pub speaker_name: String,
+    pub targets_thesis_id: Option<String>,
+}
+
+pub struct ArgumentMap {
+    pub theses: Vec<ThesisNode>,
+}
+```
+
+#### Flux d'extraction
+
+1. **Après chaque tour** (à partir du tour 2), l'orchestrateur appelle `build_argument_extraction_prompt()` avec le contexte des interventions récentes et la carte existante
+2. Le LLM retourne un JSON avec les nouvelles thèses/arguments
+3. `parse_argument_extraction()` dans `json_parser.rs` parse la réponse avec fuzzy matching des noms
+4. Les résultats sont fusionnés avec la carte existante (ajout uniquement, pas de suppression)
+5. `ArgumentMap::to_markdown()` convertit en markdown hiérarchique (structure `# Topic / ## Speaker / ### Thesis / - Arg`)
+6. L'événement `ArgumentMapUpdated` est émis avec le markdown, le nombre de thèses et d'arguments
+
+#### Rendu frontend
+
+- **MarkmapViewer** (`components/mindmap/MarkmapViewer.tsx`) : composant `forwardRef` wrappant `markmap-lib` + `markmap-view`
+  - `useImperativeHandle` expose `getSvgHtml()` pour l'export SVG
+  - Options markmap : `autoFit`, `maxWidth: 250`, `spacingHorizontal: 80`, `spacingVertical: 8`
+- **MindmapSidebar** (`components/mindmap/MindmapSidebar.tsx`) : sidebar droite avec header, badge compteurs, légende, collapse
+
+#### Configuration (constants.rs)
+
+| Constante | Valeur | Description |
+|---|---|---|
+| `ARGMAP_CONTEXT_CHARS` | 600 | Caractères par message dans le contexte d'extraction |
+| `ARGMAP_MAX_THESIS_LABEL` | 60 | Caractères max pour un label de thèse |
+| `ARGMAP_MAX_ARGUMENT_LABEL` | 100 | Caractères max pour un label d'argument |
+| `ARGMAP_MAX_THESES` | 20 | Nombre max de thèses |
+| `ARGMAP_MAX_ARGUMENTS` | 100 | Nombre total max d'arguments |
+| `ARGMAP_NUM_PREDICT` | 4096 | num_predict pour l'extraction |
+| `ARGMAP_NUM_CTX` | 16384 | Taille du contexte pour l'extraction |
+| `ARGMAP_TEMPERATURE` | 0.3 | Température basse pour un JSON structuré |
+
+#### Dépendances frontend
+
+| Package | Rôle |
+|---|---|
+| `markmap-common` | Types partagés markmap |
+| `markmap-lib` | Transformation markdown → arbre |
+| `markmap-view` | Rendu SVG interactif |
+
+### 6.13 Gestion des erreurs
 
 ```rust
 #[derive(Debug, thiserror::Error, Serialize)]
@@ -686,6 +858,7 @@ pub enum CommandError {
     AlreadyRunning,
     NoActiveDiscussion,
     History(String),
+    Rag(String),
 }
 ```
 
@@ -719,10 +892,10 @@ pub enum CommandError {
 |---|---|
 | **HomePage** | Point d'entrée ; actions « Nouvelle discussion » et « Historique » |
 | **SetupPage** | 4 étapes : sujet → IArbitre → GladIAteurs → modes/options → lancement |
-| **ArenaPage** | Feed temps réel + sidebar émotions + sidebar document + contrôles |
-| **SummaryPage** | Onglets synthèse/discussion, stats, téléchargement |
+| **ArenaPage** | Feed temps réel + sidebar émotions + sidebar document + sidebar mindmap + contrôles + indicateur d'activité |
+| **SummaryPage** | Onglets synthèse/discussion/carte des arguments, stats, téléchargement (texte, MD, SVG) |
 | **HistoryPage** | Liste avec emojis participants, timestamps, suppression |
-| **HistoryDetailPage** | Détail complet avec onglets et téléchargement |
+| **HistoryDetailPage** | Détail complet avec onglets (synthèse/discussion/carte) et téléchargement |
 | **SettingsPage** | Username, langue, thème, URL Ollama, modèle, Tavily API |
 
 ### 7.3 Stores Zustand
@@ -738,6 +911,8 @@ pub enum CommandError {
 | `emotions` | `Map<id, EmotionalProfile>` | Profils émotionnels courants |
 | `synthesis` | `string` | Texte de synthèse complété |
 | `documentContent` | `string` | Document collaboratif (co-construction) |
+| `argumentMapMarkdown` | `string` | Carte des arguments en markdown (pour markmap) |
+| `activityStatus` | `ActivityStatus \| null` | Activité en cours du moteur (type + speakerName) |
 
 **Méthode critique** : `handleEvent(event: ArenaEvent)` — dispatch des 30+ types d'événements.
 
@@ -798,6 +973,13 @@ Paramètres globaux de l'application + profils + modèles Ollama.
 |---|---|
 | DocumentSidebar | Sidebar document collaboratif (md/txt/csv) |
 
+#### Mindmap
+
+| Composant | Rôle |
+|---|---|
+| MarkmapViewer | Rendu SVG interactif (forwardRef + markmap-lib/view) |
+| MindmapSidebar | Sidebar carte des arguments (header, légende, collapse) |
+
 #### Layout
 
 | Composant | Rôle |
@@ -831,11 +1013,12 @@ const { flushed, pushToken, clearSpeaker, clearAll } = useTokenBuffer(60);
 
 | Fichier | Exports principaux |
 |---|---|
-| `lib/types.ts` | Toutes les interfaces TypeScript |
-| `lib/tauri-api.ts` | Wrappers IPC Tauri (24 commandes + `downloadTextFile()` via plugin dialog/fs) |
+| `lib/types.ts` | Toutes les interfaces TypeScript (+ types RAG) |
+| `lib/tauri-api.ts` | Wrappers IPC Tauri (28 commandes + `downloadTextFile()` via plugin dialog/fs) |
 | `lib/utils.ts` | `cn()` — clsx + tailwind-merge |
 | `lib/logger.ts` | Logger singleton (buffer circulaire 500 entrées) |
 | `lib/profile-emoji.ts` | `getProfileEmoji(name, prompt)` — matching 3 niveaux (exact → regex → hash) |
+| `lib/document-diff.ts` | `computeDocumentDiff()` — surlignage différentiel (word/line/cell) |
 
 ### 7.7 Internationalisation
 
@@ -915,6 +1098,27 @@ Toujours `#[serde(default)]` sur les structs de réponse LLM — les modèles re
 ### Sauvegarde depuis le frontend
 
 Sauvegarder depuis le handler `discussionEnded` du frontend (pas le moteur), car le `messages_history` du moteur n'inclut pas les réactions appliquées dans le store Zustand.
+
+### Document Diff (Co-Construction)
+
+Le système de diff permet de surligner les changements apportés au document collaboratif par chaque participant. Trois stratégies selon le format :
+
+**Format TXT** : diff au niveau des mots (`diffWords` de la lib `diff`)
+- Retourne des segments `{ text, highlighted }`
+- Seuls les mots ajoutés sont surlignés
+
+**Format MD** : diff au niveau des lignes (`diffLines`)
+- Retourne un Set d'indices de lignes modifiées (0-indexed)
+- Les lignes ajoutées sont surlignées dans le rendu markdown
+
+**Format CSV** : diff au niveau des cellules
+- Parse le CSV (séparateur `;`)
+- Retourne un Set de clés `"row,col"` (0-indexed)
+- Les cellules modifiées sont surlignées dans le tableau
+
+**Usage** : `computeDocumentDiff(previousContent, currentContent, format) → DiffResult | null`
+
+Le diff est recalculé à chaque `DocumentUpdated` event et appliqué visuellement dans la `DocumentSidebar`.
 
 ---
 
@@ -1030,12 +1234,13 @@ AIrena/
 │   │   ├── discussion/        # Feed, MessageBubble, Controls, UserInput
 │   │   ├── emotion/           # Sidebar, Cards, Sliders, Sparklines
 │   │   ├── document/          # DocumentSidebar
+│   │   ├── mindmap/           # MarkmapViewer, MindmapSidebar
 │   │   ├── layout/            # AppShell, Sidebar, TopBar, ResizeDivider
 │   │   ├── setup/             # LlmParamsForm, PersonaEditor, EmojiPicker
 │   │   ├── shared/            # SimpleMd, MathText
 │   │   └── common/            # ErrorBoundary
 │   ├── hooks/                 # useTokenBuffer
-│   ├── lib/                   # types, tauri-api, utils, logger, profile-emoji
+│   ├── lib/                   # types, tauri-api, utils, logger, profile-emoji, document-diff
 │   ├── i18n/                  # Locales FR/EN/ZH
 │   ├── providers/             # ThemeProvider
 │   └── styles/                # globals.css (Tailwind v4)
@@ -1046,10 +1251,10 @@ AIrena/
     └── src/
         ├── main.rs            # Point d'entrée (Windows)
         ├── lib.rs             # Initialisation Tauri + commandes
-        ├── state.rs           # AppState (Mutex)
+        ├── state.rs           # AppState (Mutex + rag_store)
         ├── error.rs           # CommandError enum
-        ├── constants.rs       # Constantes centralisées (limites, seuils, quotas)
-        ├── commands/          # Handlers IPC (discussion, ollama, settings, history)
+        ├── constants.rs       # Constantes centralisées (limites, seuils, quotas RAG)
+        ├── commands/          # Handlers IPC (discussion, ollama, settings, history, rag)
         ├── engine/            # Cœur métier
         │   ├── orchestrator.rs    # Boucle de discussion (~2800 lignes)
         │   ├── turn_manager.rs    # Distribution des tours
@@ -1060,9 +1265,10 @@ AIrena/
         │   ├── json_parser.rs     # Parsing robuste + matching flou
         │   ├── dynamics_parser.rs # Extraction XML <dynamics>
         │   └── mode_prompts.rs    # Instructions par mode
-        ├── models/            # Structures de données (11 fichiers)
+        ├── models/            # Structures de données (12 fichiers, incluant argument_map)
         ├── db/                # SQLite (schema, repository, seed)
         ├── ollama/            # Client HTTP + streaming NDJSON
+        ├── rag/               # Système RAG (parser, chunker, embedder, bm25, store)
         ├── wikipedia/         # Client Wikipedia API
         └── tavily/            # Client Tavily API
 ```
@@ -1070,6 +1276,118 @@ AIrena/
 ---
 
 ## 15. Changelog
+
+### v1.10 (2026-02-14) — Carte des arguments & Améliorations UX
+
+**Nouveaux fichiers** :
+- `models/argument_map.rs` — Modèle de données (ArgumentType, ThesisNode, ArgumentNode, ArgumentMap)
+- `components/mindmap/MarkmapViewer.tsx` — Rendu SVG interactif (forwardRef + markmap)
+- `components/mindmap/MindmapSidebar.tsx` — Sidebar carte des arguments
+
+**Backend** :
+- Système de carte des arguments : extraction LLM, fusion incrémentale, conversion markdown
+- `build_argument_extraction_prompt()` dans prompt_builder.rs — trilingual (FR/EN/ZH)
+- `parse_argument_extraction()` dans json_parser.rs — parsing avec fuzzy matching
+- Nouvel événement `ArgumentMapUpdated` (ArenaEvent) avec markdown, theses_count, arguments_count
+- `DiscussionConfig.argument_map_enabled` — nouvelle option de configuration
+- Migration DB : colonne `argument_map_md` sur la table `discussions`
+- 8 nouvelles constantes ARGMAP_* dans constants.rs
+- Centralisation de ~10 magic values restants dans constants.rs (Tavily, Ollama, Orchestrator, RAG)
+
+**Frontend** :
+- `MarkmapViewer` — composant forwardRef avec `useImperativeHandle` pour export SVG
+- `MindmapSidebar` — sidebar droite avec header, compteurs, légende, collapse
+- `ActivityStatus` dans useArenaStore — 10 types d'activité (thinking, writing, reacting, webSearch, wikiSearch, ragInjection, emotions, argumentMap, synthesis, determining)
+- Indicateur d'activité dans la barre de titre (ArenaPage)
+- Titres des étapes Setup (stepTitle_0..3)
+- Onglet carte des arguments dans SummaryPage et HistoryDetailPage
+- Export SVG via bouton conditionnel (onglet carte)
+- `argumentMapMarkdown`, `argumentMapThesesCount`, `argumentMapArgumentsCount` dans useArenaStore
+- `argumentMapEnabled` dans useSetupStore
+
+**Dépendances ajoutées** :
+- Frontend : `markmap-common`, `markmap-lib`, `markmap-view`
+
+**i18n** :
+- Clés mindmap.* (title, expand, collapse, empty, legendSupport, legendCounter, legendEvidence)
+- Clés setup.* (argumentMap, argumentMapDesc, summaryArgumentMap, stepTitle_0..3)
+- Clés summary.* (downloadArgumentMapMd, downloadArgumentMapSvg)
+- Clés arena.activity.* (10 types d'activité)
+
+### v1.9.1 (2026-02-13) — RAG v2
+
+**Améliorations** :
+- Optimisation du parsing PDF (gestion robuste des erreurs)
+- Amélioration de la recherche hybride BM25 + cosine
+- Fix : validation de la cohérence des dimensions d'embeddings
+- Fix : gestion mémoire améliorée pour les gros documents
+
+### v1.9 (2026-02-13) — RAG (Retrieval-Augmented Generation)
+
+**Nouveaux fichiers** :
+- `rag/parser.rs` — parsing multi-format (PDF, TXT, MD, CSV, DOCX)
+- `rag/chunker.rs` — découpage avec overlap
+- `rag/embedder.rs` — client embeddings Ollama
+- `rag/bm25.rs` — recherche lexicale BM25
+- `rag/store.rs` — stockage en mémoire (documents + chunks + embeddings)
+- `commands/rag.rs` — commandes IPC RAG
+
+**Backend** :
+- Système RAG complet avec recherche hybride (BM25 + similarité cosine)
+- Support de 5 formats de documents (PDF, TXT, MD, CSV, DOCX)
+- Chunking configurable avec overlap (800 chars, 200 overlap par défaut)
+- Embeddings via modèle Ollama configuré (ou modèle principal par défaut)
+- Nouvel événement `ragContextInjected` avec détails des chunks utilisés
+- 4 nouvelles commandes Tauri : `import_rag_document`, `remove_rag_document`, `get_rag_status`, `clear_rag_store`
+- `AppState.rag_store` — nouveau champ pour le store RAG
+- `CommandError::Rag` — nouvelle variante d'erreur
+- Constantes RAG dans `constants.rs` (max file size, chunk size, overlap, top-k)
+
+**Frontend** :
+- `AppSettings.embeddingModel` — nouveau champ pour le modèle d'embeddings
+- Types RAG : `RagDocumentInfo`, `RagChunkInfo`
+- 4 nouvelles fonctions dans `tauri-api.ts`
+
+**Dépendances ajoutées** :
+- Backend : `lopdf` (parsing PDF), `regex` (parsing DOCX)
+
+### v1.8.1 (2026-02-13) — Document Diff
+
+**Nouveaux fichiers** :
+- `lib/document-diff.ts` — calcul de diff pour surlignage des modifications
+
+**Frontend** :
+- Système de diff pour les documents collaboratifs (Co-Construction)
+- Surlignage visuel des changements :
+  - Format TXT : diff au niveau des mots (word-level)
+  - Format MD : diff au niveau des lignes (line-level)
+  - Format CSV : diff au niveau des cellules (cell-level)
+- `DocumentSidebar` — surlignage appliqué automatiquement à chaque mise à jour
+- Type `DiffResult` avec variantes par format
+
+**Dépendances ajoutées** :
+- Frontend : `diff` v8.x (bibliothèque de calcul de diff)
+
+**Fixes mineurs** :
+- Amélioration de la performance du rendu markdown pour les gros documents
+- Fix : scroll automatique dans la sidebar document
+
+### v1.8 (2026-02-13) — Profils améliorés
+
+**Backend** :
+- Expansion des profils prédéfinis (97 → 107 GladIAteurs, 10 → 12 IArbitres)
+- Nouvelles catégories de profils : Sciences avancées, Arts, Sports
+
+**Frontend** :
+- Amélioration de l'interface de sélection de profils (filtrage par catégorie)
+- Support de profils avec émotions initiales personnalisées
+
+### v1.7 (2026-02-13) — Documentation
+
+**Documentation** :
+- Création de `Docs/Technique/TECHNICAL.md` — documentation technique complète
+- Création de `Docs/Fonctionnel/FUNCTIONAL.md` — documentation fonctionnelle complète
+- Mise à jour de `CLAUDE.md` avec patterns et conventions du projet
 
 ### v1.6 (2026-02-13) — Types de discussions
 

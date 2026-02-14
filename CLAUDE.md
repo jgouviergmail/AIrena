@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AIrena is a Tauri v2 desktop app (Windows) that orchestrates AI discussions using local Ollama models. Participants (GladIAteurs) discuss a topic under an AI moderator (IArbitre), with real-time streaming, emotions, reactions, cognitive personalities, Wikipedia knowledge, multiple discussion modes, and think mode — all running 100% locally.
+AIrena is a Tauri v2 desktop app (Windows) that orchestrates AI discussions using local Ollama models. Participants (GladIAteurs) discuss a topic under an AI moderator (IArbitre), with real-time streaming, emotions, reactions, cognitive personalities, Wikipedia knowledge, RAG document enrichment, multiple discussion modes, and think mode — all running 100% locally.
 
 **Stack**: Tauri v2 + React 19 + TypeScript 5.8 + Vite 7 + Tailwind CSS 4 + shadcn/ui + Zustand 5 + i18next (FR/EN/ZH)
 
@@ -44,9 +44,9 @@ The Rust backend is a single library crate (`airena_lib`). `main.rs` just calls 
 
 **Core flow**: `lib.rs` initializes logging, SQLite DB, seeds profiles, creates `AppState`, and registers 20+ Tauri commands.
 
-- **state.rs** — `AppState` holds `engine_cmd_tx` (mpsc channel to running engine), `cancel_token`, and `db` connection. Uses `std::sync::Mutex` (not tokio) because locks are never held across `.await`. Helper methods: `get_settings()`, `clear_engine_slots()`.
-- **constants.rs** — Centralized tunable parameters (memory limits, truncation sizes, prompt thresholds). All magic numbers extracted here.
-- **commands/** — Tauri IPC handlers grouped by domain: `discussion.rs`, `ollama.rs`, `settings.rs`, `history.rs`
+- **state.rs** — `AppState` holds `engine_cmd_tx` (mpsc channel to running engine), `cancel_token`, `db` connection, and `rag_store` (RAG document store). Uses `std::sync::Mutex` (not tokio) because locks are never held across `.await`. Helper methods: `get_settings()`, `clear_engine_slots()`.
+- **constants.rs** — Centralized tunable parameters (memory limits, truncation sizes, prompt thresholds, RAG quotas). All magic numbers extracted here.
+- **commands/** — Tauri IPC handlers grouped by domain: `discussion.rs`, `ollama.rs`, `settings.rs`, `history.rs`, `rag.rs`
 - **engine/mod.rs** — Shared utilities: `truncate_str()`, `truncate_tail()` (UTF-8–safe), `apply_i8_clamped()` (emotion delta)
 - **engine/orchestrator.rs** — `DiscussionEngine`: the main discussion loop. Handles introduction → turn loop (speaker order → web/wiki search → directive → prompt → stream → reactions → emotions → memory → moderation) → synthesis → end.
 - **engine/turn_manager.rs** — Turn distribution: Sequential, Random, Democratic (masked Borda voting via parallel LLM calls), Authoritarian (IArbitre decides)
@@ -58,10 +58,12 @@ The Rust backend is a single library crate (`airena_lib`). `main.rs` just calls 
 - **engine/memory_manager.rs** — Maintains discussion summaries and participant position tracking
 - **engine/json_parser.rs** — Parses LLM JSON responses with fuzzy speaker name matching (exact → article-stripped → prefix → contains)
 - **ollama/client.rs** — `OllamaClient`: HTTP streaming via reqwest, supports think mode, 3-attempt retry. `stream_ndjson()` unified streaming function.
+- **rag/** — RAG system: `parser.rs` (PDF/TXT/MD/CSV/DOCX parsing), `chunker.rs` (text splitting with overlap), `embedder.rs` (Ollama embeddings), `bm25.rs` (lexical search), `store.rs` (in-memory document/chunk/embedding storage with hybrid search)
 - **tavily/client.rs** — `TavilyClient`: Tavily web search API (requires API key). Per-agent quota enforcement (per-discussion + per-turn). Credit tracking in settings.
 - **wikipedia/client.rs** — `WikiClient`: Wikipedia search with language mapping (fr/en/zh→en fallback), smart disambiguation filtering via keyword scoring
 - **db/** — SQLite via tokio-rusqlite: `schema.rs` (migrations), `repository.rs` (all queries with `row_to_profile()` + `PROFILE_COLUMNS` DRY helpers), `seed.rs` (predefined profiles)
-- **models/** — All data structures with `Serialize`/`Deserialize`. Key types: `ArenaEvent` (30+ variants), `SpeakerRole`, `EmotionalProfile`, `TurnDistribution`, `DiscussionMode` (8 variants), `DocumentFormat`
+- **models/** — All data structures with `Serialize`/`Deserialize`. Key types: `ArenaEvent` (30+ variants), `SpeakerRole`, `EmotionalProfile`, `TurnDistribution`, `DiscussionMode` (8 variants), `DocumentFormat`, `ArgumentMap`
+- **models/argument_map.rs** — `ArgumentMap`, `ThesisNode`, `ArgumentNode`, `ArgumentType` (Support/Counter/Evidence). `to_markdown()` converts to hierarchical markdown for markmap rendering.
 
 ### Frontend (src/)
 
@@ -73,6 +75,7 @@ The Rust backend is a single library crate (`airena_lib`). `main.rs` just calls 
 - **components/discussion/** — DiscussionFeed, MessageBubble, SpeakerBadge, UserInputArea, DiscussionControls, ReadOnlyFeed
 - **components/emotion/** — EmotionSidebar, ParticipantEmotionCard (6-axis display), EmotionSparkline, EmotionAxisSlider
 - **components/document/** — DocumentSidebar: real-time document co-editing panel with format-specific rendering (txt, md via SimpleMd, csv as table)
+- **components/mindmap/** — MarkmapViewer (forwardRef, SVG export via `getSvgHtml()`), MindmapSidebar (sidebar with legend, badge, collapse)
 - **components/shared/** — MathText (KaTeX LaTeX rendering), SimpleMd (lightweight markdown renderer)
 - **components/setup/** — LlmParamsForm, EmojiPicker, PersonaEditor (visual `<system_kernel>` editor), OceanSliders (Big Five sliders)
 - **components/layout/** — AppShell, TopBar, Sidebar, ResizeDivider (draggable panel divider)
@@ -131,6 +134,86 @@ Frontend: `persona-parser.ts` parses XML → `PersonaData`, `persona-serializer.
 
 Both web search and Wikipedia can be enabled independently or together per discussion.
 
+## RAG System
+
+`rag/` module provides Retrieval-Augmented Generation capabilities:
+
+### Architecture
+- **parser.rs** — Multi-format parsing (PDF via lopdf, TXT/MD via UTF-8, CSV as formatted table, DOCX via regex)
+- **chunker.rs** — Semantic text splitting with configurable target size (2000 chars) and overlap (200 chars)
+- **embedder.rs** — `EmbeddingClient` generates embeddings via Ollama model (uses `embedding_model` setting or falls back to main LLM model)
+- **bm25.rs** — Lexical search using BM25 algorithm (tf-idf with length normalization)
+- **store.rs** — `RagStore` holds documents, chunks, embeddings, and BM25 index in memory
+
+### Workflow
+1. **Import** (`import_rag_document`) — parse file → chunk text → generate embeddings → store
+2. **Search** (during discussion) — LLM decides to search → hybrid BM25 + cosine similarity → top-K chunks
+3. **Injection** — chunks injected into prompt context → `ragContextInjected` event emitted
+
+### Retrieval pipeline (3-stage)
+1. **Stage 1a** — Vector cosine similarity → top 30 (`RAG_RETRIEVAL_TOP_K`)
+2. **Stage 1b** — BM25 lexical search → top 30
+3. **Stage 1c** — RRF (Reciprocal Rank Fusion) merges both → top 10 (`RAG_RRF_TOP_K`)
+4. **Stage 2** — LLM selects most relevant → max 5 chunks (`RAG_LLM_SELECT_MAX`)
+
+### Configuration (constants.rs)
+- `RAG_MAX_FILE_SIZE_BYTES` — 10 MB limit
+- `RAG_CHUNK_TARGET_CHARS` — 2000 chars per chunk (~512 tokens)
+- `RAG_CHUNK_OVERLAP_CHARS` — 200 chars overlap
+- `RAG_EMBED_BATCH_SIZE` — 32 texts per embedding API call
+
+### Key constraints
+- **No persistence** — RAG store lives in memory only (cleared on app restart or explicit clear)
+- **Embedding dimension consistency** — mixing models with different embedding dimensions causes errors
+- **Memory usage** — all documents + embeddings stored in RAM
+
+## Document Diff (Co-Construction)
+
+`lib/document-diff.ts` provides visual diff highlighting for collaborative documents:
+
+### Strategies by format
+- **TXT** — word-level diff via `diffWords()` → segments with `highlighted` flag
+- **MD** — line-level diff via `diffLines()` → Set of changed line indices
+- **CSV** — cell-level diff → Set of `"row,col"` keys for changed cells
+
+### Usage
+- Called on every `DocumentUpdated` event
+- Returns `DiffResult | null` (null if no changes)
+- Applied visually in `DocumentSidebar` component
+
+## Argument Map (Carte des arguments)
+
+`models/argument_map.rs` + orchestrator integration provides automatic thesis/argument extraction:
+
+### Architecture
+- **Extraction** — After each turn (≥2), `build_argument_extraction_prompt()` sends recent context + existing map to LLM
+- **Parsing** — `parse_argument_extraction()` in `json_parser.rs` with fuzzy speaker name matching
+- **Merge** — New theses/arguments merged with existing map (additive only)
+- **Rendering** — `ArgumentMap::to_markdown()` → hierarchical markdown (`# Topic / ## Speaker / ### Thesis / - Arg`)
+- **Frontend** — `MarkmapViewer` (markmap-lib + markmap-view) renders interactive SVG mindmap
+
+### Configuration (constants.rs)
+- `ARGMAP_MAX_THESIS_LABEL` — 100 chars max per thesis label
+- `ARGMAP_MAX_ARGUMENT_LABEL` — 200 chars max per argument label
+- `ARGMAP_MAX_THESES` — 20 max theses
+- `ARGMAP_MAX_ARGUMENTS` — 100 max total arguments
+- `ARGMAP_NUM_PREDICT` — 4096 (generous for quality JSON)
+- `ARGMAP_TEMPERATURE` — 0.3 (low for structured output)
+
+### Key constraints
+- Labels must be natural language in discussion language (not technical IDs)
+- Extraction prompt includes explicit language instructions (FR/EN/ZH)
+- SVG export via `forwardRef` + `useImperativeHandle` on `MarkmapViewer`
+- Persisted as markdown in `discussions.argument_map_md` column
+
+## Logging
+
+File-based logging via `tracing` + `tracing-appender`:
+- Daily rotation to `{exe_dir}/logs/airena.log` (7-day retention)
+- Dual output: console + file (non-blocking writer)
+- Default filter: `airena=info,airena_lib=info` (override via `RUST_LOG` env var)
+- Guard leaked on startup to keep file writer alive until app shutdown
+
 ## Critical Implementation Patterns
 
 **Tauri v2 state**: Extract values from `State<'_>` BEFORE any `.await` — the lifetime doesn't cross await points.
@@ -140,6 +223,8 @@ Both web search and Wikipedia can be enabled independently or together per discu
 **serde defaults**: Always use `#[serde(default)]` on LLM response structs — models frequently return partial/invalid JSON. Also used on config structs for backward compatibility when adding new fields.
 
 **SpeakerRole serialization**: Uses per-variant `#[serde(rename)]` — serializes as `"IArbitre"`, `"GladIAteur"`, `"user"`. Not camelCase.
+
+**ArenaEvent serialization**: Uses `#[serde(rename_all = "camelCase", tag = "type", content = "data")]` on the enum, plus per-variant `#[serde(rename_all = "camelCase")]` on struct variants. When adding new events, always add the per-variant rename attribute for field names to match frontend expectations.
 
 **UTF-8 safety**: Never index a string by char position as a byte index. Use `str::floor_char_boundary()` (stable since Rust 1.82) or `char_indices()`. French names like "Singularité" trigger panics otherwise.
 
@@ -153,6 +238,8 @@ Both web search and Wikipedia can be enabled independently or together per discu
 
 **tokio-rusqlite 0.6**: Uses rusqlite 0.32 — must add `rusqlite = "0.32"` as a direct dependency for `params!` macro and error types.
 
+**Mutex poison recovery**: `AppState::lock_or_recover()` recovers from poisoned `std::sync::Mutex` — safe because AppState fields are always left in a consistent state. Use this instead of `.lock().unwrap()`.
+
 **Backward-compatible config evolution**: New config fields always use `#[serde(default)]` so existing serialized data deserializes without errors. DB migrations use idempotent `ALTER TABLE ADD COLUMN` with existence checks.
 
 ## i18n
@@ -161,28 +248,28 @@ Three languages: French (default), English, Chinese. Frontend uses `useTranslati
 
 ## Database
 
-SQLite at `{app_data_dir}/airena.db`. Tables: `settings` (key-value), `predefined_profiles`, `discussions` (with `discussion_mode`, `document_format`, `document_content` columns), `discussion_messages` (FK CASCADE). Schema uses idempotent `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE` migrations with column existence checks. Profile seeding runs on every startup with `ON CONFLICT DO NOTHING`.
+SQLite at `{app_data_dir}/airena.db`. Tables: `settings` (key-value, includes `embedding_model` for RAG), `predefined_profiles`, `discussions` (with `discussion_mode`, `document_format`, `document_content`, `argument_map_md` columns), `discussion_messages` (FK CASCADE). Schema uses idempotent `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE` migrations with column existence checks. Profile seeding runs on every startup with `ON CONFLICT DO NOTHING`.
 
 ## Good practices
 
-Tu peux te documenter sur le fonctionnement actuelle de l'application en consultant :
-- claude.md
-- les documents techniques et fonctionnels dans le répertoire docs
+- Privilégie toujours les fonctionnalité et la qualité à la consommation de tokens.
 
-Es tu intellectuellement (logique fonctionnelle), fonctionnellement (bonne exécution fonctionnelle) et techniquement (implémentaion correcte, conforme aux bonnes pratiques, optimale) pleinement satisfait et convaincu de ton plan ou implémentation du plan ?
+- Toutes les constants, magic string et magic number doivent être dans le fichier constants
 
-Vérifie sur le fond et la forme, notamment, mais sans être exhaustif :
-- assure toi bien de bien valider la complétude du plan d'implémentation
-- assure toi d'être conforme aux patterns techniques et fonctionnels de la code base
-- vérifie bien les nommages de imports, classes, méthodes, fonctions, variables, constantes que tous les aruguments soient bien définis et transmis
-- respect du Rust Style Guide,
-- respect du Node Style Guide,
-- respect du Tauri Style Guide,
-- respect DRY, YAGNI, KISS, SRP, SoC, Boy Scout Rule, Composition over Inheritance
-- mise en oeuvre des bonnes pratiques générales de développement moderne,
-- réutilisation au maximum des classe et méthodes existantes (helpers, classes, méthodes, variables et constantes),
-- pas de code dupliqué dans la base code,
-- code générique et évolutif,
-- respect des patterns techniques des Framework dans les versions utilisées par le projet, documente toi sur internet si besoin de te mettre à jour sur ces versions
-- respect des patterns techniques et fonctionnels de la code base,
-- gestion professionnelle des erreurs et exceptions
+- Es tu intellectuellement (logique fonctionnelle), fonctionnellement (bonne exécution fonctionnelle) et techniquement (implémentaion correcte, conforme aux bonnes pratiques, optimale) pleinement satisfait et convaincu de ton plan ou implémentation du plan ?
+
+- Vérifie sur le fond et la forme, notamment, mais sans être exhaustif :
+1. assure toi bien de bien valider la complétude du plan d'implémentation
+2. assure toi d'être conforme aux patterns techniques et fonctionnels de la code base
+3. vérifie bien les nommages de imports, classes, méthodes, fonctions, variables, constantes que tous les aruguments soient bien définis et transmis
+4. respect du Rust Style Guide,
+5. respect du Node Style Guide,
+6. respect du Tauri Style Guide,
+7. respect DRY, YAGNI, KISS, SRP, SoC, Boy Scout Rule, Composition over Inheritance
+8. mise en oeuvre des bonnes pratiques générales de développement moderne,
+9. réutilisation au maximum des classe et méthodes existantes (helpers, classes, méthodes, variables et constantes),
+10. pas de code dupliqué dans la base code,
+11. code générique et évolutif,
+12. respect des patterns techniques des Framework dans les versions utilisées par le projet, documente toi sur internet si besoin de te mettre à jour sur ces versions
+13. respect des patterns techniques et fonctionnels de la code base,
+14. gestion professionnelle des erreurs et exceptions

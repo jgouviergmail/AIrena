@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Bot, Calendar, Download, Repeat, Trash2, Users } from "lucide-react";
+import { ArrowLeft, Bot, Calendar, Download, Network, Repeat, Trash2, Users } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { ReadOnlyFeed } from "@/components/discussion/ReadOnlyFeed";
 import { SimpleMd } from "@/components/shared/SimpleMd";
+import { MarkmapViewer } from "@/components/mindmap/MarkmapViewer";
+import type { MarkmapViewerHandle } from "@/components/mindmap/MarkmapViewer";
 import { getDiscussionHistory, deleteDiscussionHistory, downloadTextFile } from "@/lib/tauri-api";
 import { cn } from "@/lib/utils";
 import type { DiscussionDetail } from "@/lib/types";
@@ -15,7 +17,8 @@ export default function HistoryDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [detail, setDetail] = useState<DiscussionDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"discussion" | "synthesis">("discussion");
+  const [tab, setTab] = useState<"discussion" | "synthesis" | "argumentMap">("discussion");
+  const markmapRef = useRef<MarkmapViewerHandle>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -139,12 +142,26 @@ export default function HistoryDetailPage() {
             >
               {t("summary.tabSynthesis")}
             </button>
+            {detail.argumentMapMd && (
+              <button
+                onClick={() => setTab("argumentMap")}
+                className={cn(
+                  "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+                  tab === "argumentMap"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Network className="mr-1.5 inline h-3.5 w-3.5" />
+                {t("summary.tabArgumentMap")}
+              </button>
+            )}
           </div>
 
           {/* Tab content */}
           {tab === "discussion" ? (
             <ReadOnlyFeed messages={detail.messages} participants={detail.participants} />
-          ) : (
+          ) : tab === "synthesis" ? (
             <div className="rounded-xl border border-border bg-card p-6">
               <h2 className="mb-4 text-lg font-semibold text-foreground">
                 {t("summary.tabSynthesis")}
@@ -154,6 +171,10 @@ export default function HistoryDetailPage() {
               ) : (
                 <p className="text-sm text-muted-foreground">{t("summary.noSynthesis")}</p>
               )}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-border bg-card p-2" style={{ height: 400 }}>
+              <MarkmapViewer ref={markmapRef} markdown={detail.argumentMapMd} />
             </div>
           )}
 
@@ -167,6 +188,33 @@ export default function HistoryDetailPage() {
                 <Download className="h-4 w-4" />
                 {t("summary.downloadDocument")} (.{detail.documentFormat})
               </button>
+            </div>
+          )}
+
+          {/* Argument map download */}
+          {detail.argumentMapMd && (
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={() => downloadTextFile(detail.argumentMapMd, "airena-argument-map.md").catch((e) => console.error("Download failed:", e))}
+                className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                <Download className="h-4 w-4" />
+                {t("summary.downloadArgumentMap")} (.md)
+              </button>
+              {tab === "argumentMap" && (
+                <button
+                  onClick={() => {
+                    const svgHtml = markmapRef.current?.getSvgHtml();
+                    if (svgHtml) {
+                      downloadTextFile(svgHtml, "airena-argument-map.svg").catch((e) => console.error("SVG download failed:", e));
+                    }
+                  }}
+                  className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                >
+                  <Download className="h-4 w-4" />
+                  {t("summary.downloadArgumentMapSvg")} (.svg)
+                </button>
+              )}
             </div>
           )}
 

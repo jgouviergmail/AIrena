@@ -227,6 +227,12 @@ pub fn build_thought_prompt(
 
     let end_thought = build_end_awareness_thought(current_turn, max_turns, discussion_language);
 
+    let lang_instruction = match discussion_language {
+        "en" => "\nIMPORTANT: Reflect in English.",
+        "zh" => "\n重要：请用中文进行反思。",
+        _ => "\nIMPÉRATIF : Réfléchis en français.",
+    };
+
     // Date/time context + recent exchanges
     let datetime = build_datetime_context(discussion_language);
     let context_block = if !recent_exchanges.is_empty() {
@@ -260,10 +266,10 @@ pub fn build_thought_prompt(
 
     if has_prior_context {
         format!(
-            "{}{}{}\n\n{}\n{}{}{}{}\n",
+            "{}{}{}\n\n{}\n{}{}{}{}{}\n",
             context_block, preamble, private_label,
             reflect_header, thought_focus,
-            end_thought, emotion_suffix, web_block
+            end_thought, emotion_suffix, web_block, lang_instruction
         )
     } else {
         let first_label = match discussion_language {
@@ -272,10 +278,10 @@ pub fn build_thought_prompt(
             _ => "Tu es le premier à prendre la parole sur ce sujet. Réfléchis en 2-4 phrases :",
         };
         format!(
-            "{}{}{}\n\n{}\n{}{}{}\n",
+            "{}{}{}\n\n{}\n{}{}{}{}\n",
             context_block, preamble, private_label,
             first_label, thought_focus,
-            emotion_suffix, web_block
+            emotion_suffix, web_block, lang_instruction
         )
     }
 }
@@ -305,9 +311,9 @@ pub fn build_intervention_prompt(
         .any(|m| m.role == SpeakerRole::User);
 
     let lang_instruction = match discussion_language {
-        "en" => "Respond in English.",
-        "zh" => "请用中文回答。",
-        _ => "Réponds en français.",
+        "en" => "IMPORTANT: You MUST respond entirely in English.",
+        "zh" => "重要：你必须完全用中文回答。",
+        _ => "IMPÉRATIF : Tu DOIS répondre intégralement en français.",
     };
 
     let mode_preamble_line = mode_prompts::mode_intervention_preamble(mode, discussion_language);
@@ -907,6 +913,7 @@ pub fn build_memory_update_prompt(
              Produce a JSON with 2 fields:\n\
              {{\n  \"summary\": \"updated cumulative summary (3-8 sentences: {summary_desc})\",\n  \
              \"positions\": {{\"Name1\": \"{position_label}\", \"Name2\": \"{position_label}\"}}\n}}\n\n\
+             Write all text values (summary, positions) in English.\n\
              Respond ONLY with the JSON.",
             summary_intro, positional_map_json, turn_number, turn_messages
         ),
@@ -915,6 +922,7 @@ pub fn build_memory_update_prompt(
              生成包含2个字段的JSON：\n\
              {{\n  \"summary\": \"更新的累积摘要（3-8句话：{summary_desc}）\",\n  \
              \"positions\": {{\"名字1\": \"{position_label}\", \"名字2\": \"{position_label}\"}}\n}}\n\n\
+             所有文本值（summary、positions）请用中文撰写。\n\
              仅用JSON回复。",
             summary_intro, positional_map_json, turn_number, turn_messages
         ),
@@ -923,6 +931,7 @@ pub fn build_memory_update_prompt(
              Produis un JSON avec 2 champs :\n\
              {{\n  \"summary\": \"résumé cumulatif mis à jour (3-8 phrases : {summary_desc})\",\n  \
              \"positions\": {{\"Nom1\": \"{position_label}\", \"Nom2\": \"{position_label}\"}}\n}}\n\n\
+             Rédige toutes les valeurs textuelles (summary, positions) en français.\n\
              Réponds UNIQUEMENT avec le JSON.",
             summary_intro, positional_map_json, turn_number, turn_messages
         ),
@@ -974,7 +983,8 @@ pub fn build_synthesis_prompt(
              As moderator, produce a structured synthesis:\n\
              {}\n\n\
              Use Markdown formatting: headings (##), bullet points, **bold** for key ideas. \
-             Be balanced, thorough, and airy — use short paragraphs and whitespace for readability.",
+             Be balanced, thorough, and airy — use short paragraphs and whitespace for readability.\n\n\
+             IMPORTANT: Write your entire synthesis in English.",
             datetime, mode_desc, topic, memory.contextual_summary, positions, web_block, doc_block, synth_instructions
         ),
         "zh" => format!(
@@ -984,7 +994,8 @@ pub fn build_synthesis_prompt(
              作为主持人，请做出结构化总结：\n\
              {}\n\n\
              使用Markdown格式：标题（##）、要点列表、**粗体**标记关键观点。\
-             保持公正、全面、通透——使用短段落和留白提高可读性。",
+             保持公正、全面、通透——使用短段落和留白提高可读性。\n\n\
+             重要：请用中文撰写整篇综合报告。",
             datetime, topic, mode_desc, memory.contextual_summary, positions, web_block, doc_block, synth_instructions
         ),
         _ => format!(
@@ -994,7 +1005,8 @@ pub fn build_synthesis_prompt(
              En tant que modérateur, produis une synthèse structurée :\n\
              {}\n\n\
              Utilise le format Markdown : titres (##), listes à puces, **gras** pour les idées clés. \
-             Sois équilibré, exhaustif et aéré — utilise des paragraphes courts et de l'espace pour la lisibilité.",
+             Sois équilibré, exhaustif et aéré — utilise des paragraphes courts et de l'espace pour la lisibilité.\n\n\
+             IMPÉRATIF : Rédige l'intégralité de ta synthèse en français.",
             datetime, mode_desc, topic, memory.contextual_summary, positions, web_block, doc_block, synth_instructions
         ),
     }
@@ -2136,6 +2148,115 @@ fn build_mode_aware_instruction(
         mode_prompts::InterventionContext::General
     };
     mode_prompts::mode_context_instruction(mode, lang, context, user_name, end_awareness)
+}
+
+/// Build a prompt for extracting arguments and theses from recent exchanges.
+pub fn build_argument_extraction_prompt(
+    recent_context: &str,
+    existing_theses: &[String],
+    topic: &str,
+    lang: &str,
+) -> String {
+    let theses_list = if existing_theses.is_empty() {
+        String::new()
+    } else {
+        existing_theses
+            .iter()
+            .enumerate()
+            .map(|(i, t)| format!("  {}. {}", i + 1, t))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let lang_name = match lang {
+        "en" => "English",
+        "zh" => "Chinese",
+        _ => "French",
+    };
+
+    match lang {
+        "en" => format!(
+            "Topic: {topic}\n\n\
+            {theses_section}\
+            Recent exchanges:\n{recent_context}\n\n\
+            Analyze these exchanges and extract:\n\
+            - New theses (main positions or claims) not already listed above\n\
+            - Arguments supporting, countering, or providing evidence for theses\n\
+            Ignore speakers who only greet, moderate, or ask questions without taking a position.\n\
+            Reuse existing thesis labels when a speaker refers to an already-identified thesis.\n\n\
+            CRITICAL FORMATTING RULES:\n\
+            - Write ALL labels in {lang_name}.\n\
+            - Thesis labels: one short complete sentence summarizing the position (e.g. \"The death penalty does not deter crime\").\n\
+            - Argument text: 1-2 short complete sentences faithfully summarizing the key idea. Must be coherent and self-contained.\n\
+            - NEVER quote verbatim from the discussion. NEVER truncate mid-sentence. NEVER use identifiers like 'Thesis_X_Y'.\n\n\
+            Respond ONLY with JSON in this format:\n\
+            {{\"extractions\": [\n\
+              {{\"speaker\": \"Name\", \"new_theses\": [\"short thesis label\"], \"arguments\": [\n\
+                {{\"text\": \"argument text\", \"type\": \"support|counter|evidence\",\n\
+                 \"for_thesis\": \"thesis label or null\", \"against_thesis\": \"thesis label or null\"}}\n\
+              ]}}\n\
+            ]}}",
+            theses_section = if theses_list.is_empty() {
+                String::new()
+            } else {
+                format!("Already identified theses:\n{theses_list}\n\n")
+            },
+        ),
+        "zh" => format!(
+            "主题: {topic}\n\n\
+            {theses_section}\
+            最近的对话:\n{recent_context}\n\n\
+            分析这些对话并提取:\n\
+            - 新论点（尚未在上面列出的主要立场或主张）\n\
+            - 支持、反驳或为论点提供证据的论据\n\
+            忽略只打招呼、主持或提问而不表态的发言者。\n\
+            当发言者提到已识别的论点时，重用现有的论点标签。\n\n\
+            关键格式规则：\n\
+            - 所有标签必须用中文。\n\
+            - 论点标签：一句简短完整的句子概括立场（例如\"死刑不能有效遏制犯罪\"）。\n\
+            - 论据文本：1-2句简短完整的句子忠实概括核心观点。必须连贯且自成一体。\n\
+            - 绝不逐字引用讨论内容。绝不截断句子。绝不使用'Thesis_X_Y'等标识符。\n\n\
+            仅用以下JSON格式回复:\n\
+            {{\"extractions\": [\n\
+              {{\"speaker\": \"姓名\", \"new_theses\": [\"简短论点标签\"], \"arguments\": [\n\
+                {{\"text\": \"论据文本\", \"type\": \"support|counter|evidence\",\n\
+                 \"for_thesis\": \"论点标签或null\", \"against_thesis\": \"论点标签或null\"}}\n\
+              ]}}\n\
+            ]}}",
+            theses_section = if theses_list.is_empty() {
+                String::new()
+            } else {
+                format!("已识别的论点:\n{theses_list}\n\n")
+            },
+        ),
+        _ => format!(
+            "Sujet : {topic}\n\n\
+            {theses_section}\
+            Échanges récents :\n{recent_context}\n\n\
+            Analyse ces échanges et extrais :\n\
+            - Les nouvelles thèses (positions ou affirmations principales) non encore listées ci-dessus\n\
+            - Les arguments soutenant, contrant ou apportant des preuves pour des thèses\n\
+            Ignore les intervenants qui ne font que saluer, modérer ou poser des questions sans prendre position.\n\
+            Réutilise les labels de thèses existantes quand un intervenant fait référence à une thèse déjà identifiée.\n\n\
+            RÈGLES DE FORMAT CRITIQUES :\n\
+            - Écris TOUS les labels en français.\n\
+            - Labels de thèse : une phrase courte et complète résumant la position (ex: \"La peine de mort ne dissuade pas le crime\").\n\
+            - Texte d'argument : 1-2 phrases courtes et complètes résumant fidèlement l'idée clé. Doit être cohérent et autonome.\n\
+            - JAMAIS de citation verbatim de la discussion. JAMAIS de phrase tronquée. JAMAIS d'identifiants comme 'Thesis_X_Y'.\n\n\
+            Réponds UNIQUEMENT avec du JSON dans ce format :\n\
+            {{\"extractions\": [\n\
+              {{\"speaker\": \"Nom\", \"new_theses\": [\"label court de thèse\"], \"arguments\": [\n\
+                {{\"text\": \"texte de l'argument\", \"type\": \"support|counter|evidence\",\n\
+                 \"for_thesis\": \"label thèse ou null\", \"against_thesis\": \"label thèse ou null\"}}\n\
+              ]}}\n\
+            ]}}",
+            theses_section = if theses_list.is_empty() {
+                String::new()
+            } else {
+                format!("Thèses déjà identifiées :\n{theses_list}\n\n")
+            },
+        ),
+    }
 }
 
 #[cfg(test)]

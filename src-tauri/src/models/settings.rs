@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::constants;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmParams {
@@ -14,12 +16,12 @@ pub struct LlmParams {
 impl Default for LlmParams {
     fn default() -> Self {
         Self {
-            temperature: 0.8,
-            top_p: 0.9,
-            top_k: 40,
-            num_predict: 2048,
-            num_ctx: 8192,
-            repeat_penalty: 1.3,
+            temperature: constants::LLM_DEFAULT_TEMPERATURE,
+            top_p: constants::LLM_DEFAULT_TOP_P,
+            top_k: constants::LLM_DEFAULT_TOP_K,
+            num_predict: constants::LLM_DEFAULT_NUM_PREDICT,
+            num_ctx: constants::LLM_DEFAULT_NUM_CTX,
+            repeat_penalty: constants::LLM_DEFAULT_REPEAT_PENALTY,
         }
     }
 }
@@ -47,7 +49,7 @@ impl Default for AppSettings {
             username: String::new(),
             language: "fr".to_string(),
             theme: "dark".to_string(),
-            ollama_url: "http://localhost:11434".to_string(),
+            ollama_url: constants::DEFAULT_OLLAMA_URL.to_string(),
             ollama_model: String::new(),
             emotion_driven: false,
             tavily_api_key: String::new(),

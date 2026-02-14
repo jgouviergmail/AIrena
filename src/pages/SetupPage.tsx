@@ -14,6 +14,7 @@ import {
   FileText,
   Globe,
   GripVertical,
+  Network,
   Heart,
   Info,
   Loader2,
@@ -159,8 +160,10 @@ export default function SetupPage() {
               )}
             </div>
           ))}
-          <span className="ml-3 text-xs text-muted-foreground">
+          <span className="ml-3 text-sm font-semibold text-foreground">
             {t("setup.step", { current: step + 1, total: TOTAL_STEPS })}
+            {" — "}
+            {t(`setup.stepTitle_${step}`)}
           </span>
         </div>
 
@@ -244,6 +247,8 @@ function StepTopic() {
   const setDiscussionMode = useSetupStore((s) => s.setDiscussionMode);
   const documentFormat = useSetupStore((s) => s.documentFormat);
   const setDocumentFormat = useSetupStore((s) => s.setDocumentFormat);
+  const argumentMapEnabled = useSetupStore((s) => s.argumentMapEnabled);
+  const setArgumentMapEnabled = useSetupStore((s) => s.setArgumentMapEnabled);
   const maxTurns = useSetupStore((s) => s.maxTurns);
   const setMaxTurns = useSetupStore((s) => s.setMaxTurns);
   const userInterventionTimeoutSecs = useSetupStore((s) => s.userInterventionTimeoutSecs);
@@ -426,6 +431,37 @@ function StepTopic() {
           rows={4}
           className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
         />
+      </div>
+
+      {/* Argument Map toggle */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Network className="h-4 w-4 text-primary" />
+          {t("setup.argumentMap")}
+        </label>
+        <p className="text-xs text-muted-foreground">{t("setup.argumentMapDesc")}</p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={argumentMapEnabled}
+            onClick={() => setArgumentMapEnabled(!argumentMapEnabled)}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+              argumentMapEnabled ? "bg-primary" : "bg-muted",
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
+                argumentMapEnabled ? "translate-x-4" : "translate-x-0",
+              )}
+            />
+          </button>
+          <span className="text-sm text-muted-foreground">
+            {argumentMapEnabled ? t("setup.switchYes") : t("setup.switchNo")}
+          </span>
+        </div>
       </div>
 
       {/* RAG Knowledge Base */}
@@ -960,33 +996,6 @@ function StepGladiateurs({
 
   return (
     <div className="space-y-6">
-      {/* Emotion-driven behavior toggle */}
-      <div className="space-y-3">
-        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
-          <Heart className="h-4 w-4 text-primary" />
-          {t("settings.emotionDriven")}
-        </label>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleToggleEmotionDriven}
-            className={cn(
-              "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
-              settings.emotionDriven ? "bg-primary" : "bg-muted",
-            )}
-          >
-            <span
-              className={cn(
-                "pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform",
-                settings.emotionDriven ? "translate-x-5" : "translate-x-0",
-              )}
-            />
-          </button>
-          <span className="text-sm text-muted-foreground">
-            {t("settings.emotionDrivenDesc")}
-          </span>
-        </div>
-      </div>
-
       {/* Global web search config */}
       {hasTavilyKey && (
         <div className="space-y-2">
@@ -1066,6 +1075,33 @@ function StepGladiateurs({
           <span>{t("setup.firstTurnSearchRule")}</span>
         </div>
       )}
+
+      {/* Emotion-driven behavior toggle */}
+      <div className="space-y-3">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Heart className="h-4 w-4 text-primary" />
+          {t("settings.emotionDriven")}
+        </label>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleToggleEmotionDriven}
+            className={cn(
+              "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+              settings.emotionDriven ? "bg-primary" : "bg-muted",
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform",
+                settings.emotionDriven ? "translate-x-5" : "translate-x-0",
+              )}
+            />
+          </button>
+          <span className="text-sm text-muted-foreground">
+            {t("settings.emotionDrivenDesc")}
+          </span>
+        </div>
+      </div>
 
       {/* Profile picker grouped by category */}
       <div className="space-y-3">
@@ -1271,6 +1307,7 @@ function StepSummary() {
   const documentFormat = useSetupStore((s) => s.documentFormat);
   const webSearchPool = useSetupStore((s) => s.webSearchPool);
   const wikiSearchPool = useSetupStore((s) => s.wikiSearchPool);
+  const argumentMapEnabled = useSetupStore((s) => s.argumentMapEnabled);
   const ragDocuments = useSetupStore((s) => s.ragDocuments);
   const emotionDriven = useSettingsStore((s) => s.settings.emotionDriven);
 
@@ -1300,6 +1337,9 @@ function StepSummary() {
         />
         {documentFormat !== "none" && (
           <SummaryRow label={t("setup.summaryDocFormat")} value={`.${documentFormat}`} />
+        )}
+        {argumentMapEnabled && (
+          <SummaryRow label={t("setup.summaryArgumentMap")} value={t("setup.switchYes")} />
         )}
         {(arbitre.webSearchIntro ?? false) && (
           <SummaryRow label={t("setup.summaryWebIntro")} value="1" />

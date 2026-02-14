@@ -55,7 +55,7 @@
     "modelPreloadError": "Failed to load model",
     "usernameRequired": "Username is required",
     "emotionDriven": "Emotion-driven behavior",
-    "emotionDrivenDesc": "Emotions influence the AI argumentation style",
+    "emotionDrivenDesc": "Emotions influence the GladIAteurs' argumentation style",
     "embeddingModel": "Embedding Model (RAG)",
     "embeddingModelAuto": "Automatic (uses the chat model)",
     "embeddingModelDesc": "Model used for RAG embeddings. Leave empty to automatically use the chat model.",
@@ -134,6 +134,10 @@
   "setup": {
     "title": "Discussion setup",
     "step": "Step {{current}} / {{total}}",
+    "stepTitle_0": "General discussion settings",
+    "stepTitle_1": "IArbitre configuration",
+    "stepTitle_2": "GladIAteurs configuration",
+    "stepTitle_3": "Summary",
     "next": "Next",
     "previous": "Previous",
     "start": "Start discussion",
@@ -257,7 +261,10 @@
     "summaryRag": "Knowledge Base (RAG)",
     "startError": "Failed to start discussion",
     "userDrivenNoTurnDist": "In Guided exchanges mode, speaking order is determined automatically (each AI decides whether to respond).",
-    "fictionNoTurnDist": "In Collaborative fiction mode, speaking order is always sequential to ensure narrative continuity."
+    "fictionNoTurnDist": "In Collaborative fiction mode, speaking order is always sequential to ensure narrative continuity.",
+    "argumentMap": "Argument Map",
+    "argumentMapDesc": "Extracts and visualizes theses and arguments as an interactive real-time mind map",
+    "summaryArgumentMap": "Argument Map"
   },
   "arena": {
     "title": "Discussion in progress",
@@ -283,6 +290,18 @@
     "banLifted": "{{name}} is back in the discussion",
     "turnSkipped": "Turn skipped: {{reason}}",
     "synthesizing": "Synthesizing...",
+    "activity": {
+      "thinking": "{{name}} is thinking...",
+      "writing": "{{name}} is writing...",
+      "reacting": "Distributing reactions...",
+      "webSearch": "{{name}} is searching the web...",
+      "wikiSearch": "{{name}} is consulting Wikipedia...",
+      "ragInjection": "Injecting RAG knowledge...",
+      "emotions": "Updating emotional states...",
+      "argumentMap": "Updating argument map...",
+      "synthesis": "Writing synthesis...",
+      "determining": "Determining speaking order..."
+    },
     "like": "Agree",
     "dislike": "Disagree",
     "webSearchPerformed": "{{name}} performed {{count}} search(es)"
@@ -302,7 +321,19 @@
     "participantsList": "Participants",
     "date": "Date",
     "downloadDocument": "Download document",
-    "discussionMode": "Discussion type"
+    "discussionMode": "Discussion type",
+    "tabArgumentMap": "Argument Map",
+    "downloadArgumentMap": "Export argument map",
+    "downloadArgumentMapSvg": "Export map as SVG"
+  },
+  "mindmap": {
+    "title": "Argument Map",
+    "expand": "Show map",
+    "empty": "Arguments will be mapped here at the end of each turn starting from turn 2",
+    "legendSupport": "Support",
+    "legendCounter": "Counter",
+    "legendEvidence": "Evidence",
+    "collapse": "Collapse map"
   },
   "document": {
     "title": "Shared document",

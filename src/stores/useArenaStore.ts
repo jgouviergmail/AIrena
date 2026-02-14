@@ -24,12 +24,19 @@ interface StreamBufferCallbacks {
   clearAll: () => void;
 }
 
+/** Real-time engine activity for the status bar */
+interface ActivityStatus {
+  type: "thinking" | "writing" | "reacting" | "webSearch" | "wikiSearch" | "ragInjection" | "emotions" | "argumentMap" | "synthesis" | "determining";
+  speakerName?: string;
+}
+
 interface ArenaState {
   discussionId: string | null;
   status: "idle" | "running" | "paused" | "synthesizing" | "ended";
   currentTurn: number;
   speakerOrder: string[];
   activeSpeakerId: string | null;
+  activityStatus: ActivityStatus | null;
   messages: Message[];
   emotions: Map<string, EmotionalProfile>;
   emotionHistory: Map<string, EmotionSnapshot[]>;
@@ -56,6 +63,9 @@ interface ArenaState {
   previousDocumentContent: string | null;
   documentFormat: DocumentFormat;
   documentLastEditor: string | null;
+  argumentMapMarkdown: string;
+  argumentMapThesesCount: number;
+  argumentMapArgumentsCount: number;
   directives: Map<string, DirectiveData>;
   bans: Map<string, BanInfo>;
   error: string | null;
@@ -72,6 +82,7 @@ const initialState = {
   currentTurn: 0,
   speakerOrder: [] as string[],
   activeSpeakerId: null as string | null,
+  activityStatus: null as ActivityStatus | null,
   messages: [] as Message[],
   emotions: new Map<string, EmotionalProfile>(),
   emotionHistory: new Map<string, EmotionSnapshot[]>(),
@@ -98,6 +109,9 @@ const initialState = {
   previousDocumentContent: null as string | null,
   documentFormat: "none" as DocumentFormat,
   documentLastEditor: null as string | null,
+  argumentMapMarkdown: "",
+  argumentMapThesesCount: 0,
+  argumentMapArgumentsCount: 0,
   directives: new Map<string, DirectiveData>(),
   bans: new Map<string, BanInfo>(),
   error: null as string | null,
@@ -105,6 +119,9 @@ const initialState = {
 
 // Stream buffer ref — lives outside store to avoid triggering re-renders
 let streamBuffer: StreamBufferCallbacks | null = null;
+
+// Track first messageChunk per speaker to transition activity: "thinking" → "writing" (once)
+let _writingSpeakerId: string | null = null;
 
 // Synthesis buffer — same pattern: collect tokens, flush every 60ms
 let synthBuffer: string[] = [];
@@ -163,6 +180,15 @@ export const useArenaStore = create<ArenaState>((set) => ({
       case "messageChunk":
         // Delegate to the external token buffer (no Zustand state update)
         streamBuffer?.pushToken(event.data.speakerId, event.data.chunk);
+        // Transition activity "thinking" → "writing" on first chunk per speaker
+        if (_writingSpeakerId !== event.data.speakerId) {
+          _writingSpeakerId = event.data.speakerId;
+          set((s) => ({
+            activityStatus: s.activityStatus
+              ? { ...s.activityStatus, type: "writing" as const }
+              : null,
+          }));
+        }
         break;
 
       case "messageComplete": {
@@ -220,6 +246,9 @@ export const useArenaStore = create<ArenaState>((set) => ({
               ? { ...m, reactions: [...(m.reactions ?? []), reaction] }
               : m,
           ),
+          activityStatus: s.activityStatus?.type === "reacting"
+            ? s.activityStatus
+            : { type: "reacting" as const, speakerName: reaction.fromSpeakerName },
         }));
         break;
       }
@@ -261,14 +290,22 @@ export const useArenaStore = create<ArenaState>((set) => ({
         break;
 
       case "determiningOrder":
-        set({ determiningOrder: true });
+        set({ determiningOrder: true, activityStatus: { type: "determining" } });
         break;
 
-      case "speakerActive":
+      case "speakerActive": {
         // Clear streaming buffer for new speaker
         streamBuffer?.clearAll();
+        _writingSpeakerId = null;
+        const setup = useSetupStore.getState();
+        const speakerName =
+          setup.arbitre.id === event.data.speakerId
+            ? setup.arbitre.name
+            : setup.gladiateurs.find((g) => g.id === event.data.speakerId)?.name
+              ?? event.data.speakerId;
         set({
           activeSpeakerId: event.data.speakerId,
+          activityStatus: { type: "thinking", speakerName },
           _pendingSearchCount: 0,
           _pendingWikiCount: 0,
           _pendingWikiUrls: [],
@@ -276,11 +313,13 @@ export const useArenaStore = create<ArenaState>((set) => ({
           _pendingRagChunks: [],
         });
         break;
+      }
 
       case "webSearchPerformed":
         set((s) => ({
           webSearchCount: s.webSearchCount + event.data.queries.length,
           _pendingSearchCount: s._pendingSearchCount + event.data.queries.length,
+          activityStatus: { type: "webSearch" as const, speakerName: event.data.speakerName },
         }));
         break;
 
@@ -289,6 +328,7 @@ export const useArenaStore = create<ArenaState>((set) => ({
           wikiSearchCount: s.wikiSearchCount + event.data.queries.length,
           _pendingWikiCount: s._pendingWikiCount + event.data.queries.length,
           _pendingWikiUrls: [...s._pendingWikiUrls, ...event.data.articleUrls],
+          activityStatus: { type: "wikiSearch" as const, speakerName: event.data.speakerName },
         }));
         break;
 
@@ -297,7 +337,17 @@ export const useArenaStore = create<ArenaState>((set) => ({
           ragChunkCount: s.ragChunkCount + event.data.chunks.length,
           _pendingRagCount: s._pendingRagCount + event.data.chunks.length,
           _pendingRagChunks: [...s._pendingRagChunks, ...event.data.chunks],
+          activityStatus: { type: "ragInjection" as const, speakerName: event.data.speakerName },
         }));
+        break;
+
+      case "argumentMapUpdated":
+        set({
+          argumentMapMarkdown: event.data.markdown,
+          argumentMapThesesCount: event.data.thesesCount,
+          argumentMapArgumentsCount: event.data.argumentsCount,
+          activityStatus: { type: "argumentMap" },
+        });
         break;
 
       case "emotionUpdated":
@@ -307,7 +357,13 @@ export const useArenaStore = create<ArenaState>((set) => ({
           const ms = event.data.moodSummary
             ? new Map(s.moodSummary).set(event.data.speakerId, event.data.moodSummary)
             : s.moodSummary;
-          return { emotions: em, moodSummary: ms };
+          return {
+            emotions: em,
+            moodSummary: ms,
+            activityStatus: s.activityStatus?.type === "emotions"
+              ? s.activityStatus
+              : { type: "emotions" as const },
+          };
         });
         break;
 
@@ -379,7 +435,7 @@ export const useArenaStore = create<ArenaState>((set) => ({
         break;
 
       case "pauseConfirmed":
-        set({ status: "paused" });
+        set({ status: "paused", activityStatus: null });
         break;
 
       case "resumeConfirmed":
@@ -391,13 +447,13 @@ export const useArenaStore = create<ArenaState>((set) => ({
         synthBuffer.push(event.data.chunk);
         if (!synthFlushTimer) {
           startSynthBuffering();
-          set({ status: "synthesizing" });
+          set({ status: "synthesizing", activityStatus: { type: "synthesis" } });
         }
         break;
 
       case "synthesisComplete":
         stopSynthBuffering();
-        set({ synthesis: event.data.summary, synthesisStreaming: "", status: "ended" });
+        set({ synthesis: event.data.summary, synthesisStreaming: "", status: "ended", activityStatus: null });
         break;
 
       case "discussionEnded": {
@@ -443,12 +499,13 @@ export const useArenaStore = create<ArenaState>((set) => ({
             discussionMode: setupState.discussionMode,
             documentContent: arenaState.documentContent,
             documentFormat: arenaState.documentFormat,
+            argumentMapMd: arenaState.argumentMapMarkdown,
           }).catch((err) =>
             console.error("Failed to save discussion history:", err),
           );
         }
 
-        set({ status: "ended", determiningOrder: false });
+        set({ status: "ended", determiningOrder: false, activityStatus: null });
         break;
       }
 
@@ -467,6 +524,7 @@ export const useArenaStore = create<ArenaState>((set) => ({
   reset: () => {
     streamBuffer?.clearAll();
     stopSynthBuffering();
+    _writingSpeakerId = null;
     set({
       ...initialState,
       emotions: new Map<string, EmotionalProfile>(),
@@ -476,6 +534,9 @@ export const useArenaStore = create<ArenaState>((set) => ({
       previousDocumentContent: null,
       documentFormat: "none" as DocumentFormat,
       documentLastEditor: null,
+      argumentMapMarkdown: "",
+      argumentMapThesesCount: 0,
+      argumentMapArgumentsCount: 0,
       directives: new Map<string, DirectiveData>(),
       bans: new Map<string, BanInfo>(),
     });

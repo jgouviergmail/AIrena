@@ -55,7 +55,7 @@
     "modelPreloadError": "模型加载失败",
     "usernameRequired": "用户名为必填项",
     "emotionDriven": "情绪驱动行为",
-    "emotionDrivenDesc": "情绪影响AI的论述风格",
+    "emotionDrivenDesc": "情绪影响GladIAteur的论述风格",
     "embeddingModel": "嵌入模型 (RAG)",
     "embeddingModelAuto": "自动（使用聊天模型）",
     "embeddingModelDesc": "用于 RAG 嵌入的模型。留空则自动使用聊天模型。",
@@ -134,6 +134,10 @@
   "setup": {
     "title": "讨论配置",
     "step": "步骤 {{current}} / {{total}}",
+    "stepTitle_0": "讨论通用设置",
+    "stepTitle_1": "IArbitre配置",
+    "stepTitle_2": "GladIAteur配置",
+    "stepTitle_3": "摘要",
     "next": "下一步",
     "previous": "上一步",
     "start": "开始讨论",
@@ -257,7 +261,10 @@
     "summaryRag": "知识库 (RAG)",
     "startError": "启动讨论失败",
     "userDrivenNoTurnDist": "在引导交流模式下，发言顺序自动确定（每个AI决定是否回应）。",
-    "fictionNoTurnDist": "在协作小说模式下，发言顺序始终为顺序进行以确保叙事连续性。"
+    "fictionNoTurnDist": "在协作小说模式下，发言顺序始终为顺序进行以确保叙事连续性。",
+    "argumentMap": "论证图谱",
+    "argumentMapDesc": "实时提取并可视化论点和论据为交互式思维导图",
+    "summaryArgumentMap": "论证图谱"
   },
   "arena": {
     "title": "讨论进行中",
@@ -283,6 +290,18 @@
     "banLifted": "{{name}} 已重新加入讨论",
     "turnSkipped": "回合跳过：{{reason}}",
     "synthesizing": "正在生成总结...",
+    "activity": {
+      "thinking": "{{name}} 正在思考...",
+      "writing": "{{name}} 正在撰写回复...",
+      "reacting": "分发反应中...",
+      "webSearch": "{{name}} 正在搜索网络...",
+      "wikiSearch": "{{name}} 正在查阅维基百科...",
+      "ragInjection": "注入RAG知识...",
+      "emotions": "更新情绪状态...",
+      "argumentMap": "更新论证图谱...",
+      "synthesis": "撰写综合总结...",
+      "determining": "确定发言顺序..."
+    },
     "like": "同意",
     "dislike": "不同意",
     "webSearchPerformed": "{{name}} 执行了 {{count}} 次搜索"
@@ -302,7 +321,19 @@
     "participantsList": "参与者",
     "date": "日期",
     "downloadDocument": "下载文档",
-    "discussionMode": "讨论类型"
+    "discussionMode": "讨论类型",
+    "tabArgumentMap": "论证图谱",
+    "downloadArgumentMap": "导出论证图谱",
+    "downloadArgumentMapSvg": "导出图谱为SVG"
+  },
+  "mindmap": {
+    "title": "论证图谱",
+    "expand": "显示图谱",
+    "empty": "从第2轮起，每轮结束后论点将在此被可视化",
+    "legendSupport": "支持",
+    "legendCounter": "反对",
+    "legendEvidence": "证据",
+    "collapse": "折叠图谱"
   },
   "document": {
     "title": "共享文档",

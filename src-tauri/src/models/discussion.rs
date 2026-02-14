@@ -79,4 +79,7 @@ pub struct DiscussionConfig {
     /// Document format for co-construction (none = disabled)
     #[serde(default)]
     pub document_format: DocumentFormat,
+    /// Enable real-time argument map extraction
+    #[serde(default)]
+    pub argument_map_enabled: bool,
 }

@@ -87,10 +87,31 @@ pub const ORCH_RECENT_MESSAGES_TAKE: usize = 10;
 /// Maximum response length to be considered a model safety refusal (longer = real response).
 pub const ORCH_MAX_REFUSAL_LENGTH: usize = 300;
 
+/// num_predict for respond-or-pass check (short JSON boolean).
+pub const ORCH_NUM_PREDICT_RESPOND_PASS: i32 = 50;
+
+/// num_predict for Socratic question generation (short question).
+pub const ORCH_NUM_PREDICT_SOCRATIC: i32 = 200;
+
+/// Minimum num_predict for document update (must fit full document + extension).
+pub const ORCH_DOC_MIN_NUM_PREDICT: i32 = 4096;
+
+/// Token padding added to estimated document size for document update.
+pub const ORCH_DOC_TOKEN_PADDING: i32 = 1024;
+
+/// Approximate chars-per-token ratio for multilingual text estimation.
+pub const CHARS_PER_TOKEN_ESTIMATE: usize = 3;
+
 /// Maximum emotion history snapshots to keep per participant.
 pub const ORCH_MAX_EMOTION_HISTORY: usize = 30;
 
 // ── Tavily ──────────────────────────────────────────────────────────────
+
+/// HTTP timeout for Tavily API calls (seconds).
+pub const TAVILY_HTTP_TIMEOUT_SECS: u64 = 15;
+
+/// Maximum search results returned by Tavily per query.
+pub const TAVILY_MAX_RESULTS: u8 = 5;
 
 /// Tavily API free tier monthly credit limit.
 pub const TAVILY_FREE_MONTHLY_QUOTA: u32 = 1000;
@@ -122,6 +143,9 @@ pub const OLLAMA_PRELOAD_TIMEOUT_SECS: u64 = 300;
 
 /// Quick connection check timeout (seconds).
 pub const OLLAMA_CHECK_TIMEOUT_SECS: u64 = 5;
+
+/// Base for exponential backoff on retry (seconds): sleep = base^attempt.
+pub const OLLAMA_RETRY_BACKOFF_BASE_SECS: u64 = 2;
 
 // ── Emotion engine ──────────────────────────────────────────────────────
 
@@ -241,6 +265,29 @@ pub const TEMP_MAX: f32 = 2.0;
 /// Low temperature used for voting, ordering, and other structured JSON responses.
 pub const TEMP_VOTING: f32 = 0.3;
 
+// ── LLM default parameters ──────────────────────────────────────────
+
+/// Default temperature for LLM generation.
+pub const LLM_DEFAULT_TEMPERATURE: f32 = 0.8;
+
+/// Default top_p (nucleus sampling) for LLM generation.
+pub const LLM_DEFAULT_TOP_P: f32 = 0.9;
+
+/// Default top_k for LLM generation.
+pub const LLM_DEFAULT_TOP_K: u32 = 40;
+
+/// Default max tokens to generate per response.
+pub const LLM_DEFAULT_NUM_PREDICT: i32 = 2048;
+
+/// Default context window size (tokens).
+pub const LLM_DEFAULT_NUM_CTX: u32 = 8192;
+
+/// Default repeat penalty to reduce repetitive output.
+pub const LLM_DEFAULT_REPEAT_PENALTY: f32 = 1.3;
+
+/// Default Ollama server URL.
+pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
+
 // ── RAG ──────────────────────────────────────────────────────────────
 
 /// Maximum file size for RAG import (bytes). 10 MB.
@@ -265,6 +312,9 @@ pub const RAG_RRF_K: f32 = 60.0;
 /// Maximum chunks the LLM selects (Stage 2).
 pub const RAG_LLM_SELECT_MAX: usize = 5;
 
+/// Fallback top-K when LLM chunk selection fails (uses top RRF results).
+pub const RAG_FALLBACK_TOP_K: usize = 3;
+
 /// BM25 parameter k1 (term frequency saturation).
 pub const RAG_BM25_K1: f32 = 1.2;
 
@@ -280,3 +330,29 @@ pub const RAG_EMBED_TIMEOUT_SECS: u64 = 60;
 
 /// Maximum characters for RAG context injected into prompts.
 pub const RAG_MAX_CONTEXT_LEN: usize = 5000;
+
+// ── Argument Map ──────────────────────────────────────────────────────
+
+/// Characters kept per message in argument extraction context.
+pub const ARGMAP_CONTEXT_CHARS: usize = 600;
+
+/// Maximum characters for a thesis label (one short complete sentence).
+pub const ARGMAP_MAX_THESIS_LABEL: usize = 100;
+
+/// Maximum characters for an argument label (1-2 short complete sentences).
+pub const ARGMAP_MAX_ARGUMENT_LABEL: usize = 200;
+
+/// Maximum number of theses in the argument map.
+pub const ARGMAP_MAX_THESES: usize = 20;
+
+/// Maximum total number of arguments across all theses.
+pub const ARGMAP_MAX_ARGUMENTS: usize = 100;
+
+/// Minimum num_predict for argument map extraction (generous for quality JSON output).
+pub const ARGMAP_NUM_PREDICT: i32 = 4096;
+
+/// Minimum num_ctx for argument map extraction (prompt + response must both fit).
+pub const ARGMAP_NUM_CTX: u32 = 16384;
+
+/// Temperature for argument map extraction (low for structured JSON output).
+pub const ARGMAP_TEMPERATURE: f32 = 0.3;

@@ -1,10 +1,6 @@
 import { useCallback, useRef } from "react";
 
-interface ResizeDividerProps {
-  onResize: (deltaX: number) => void;
-}
-
-export function ResizeDivider({ onResize }: ResizeDividerProps) {
+export function ResizeDivider({ onResize }: { onResize: (delta: number) => void }) {
   const dragging = useRef(false);
   const lastX = useRef(0);
 
@@ -40,9 +36,9 @@ export function ResizeDivider({ onResize }: ResizeDividerProps) {
   return (
     <div
       onMouseDown={handleMouseDown}
-      className="group flex w-1 shrink-0 cursor-col-resize items-center justify-center hover:bg-primary/20 transition-colors"
+      className="group flex h-full w-1 shrink-0 cursor-col-resize items-center justify-center transition-colors hover:bg-primary/20"
     >
-      <div className="h-8 w-0.5 rounded-full bg-border group-hover:bg-primary transition-colors" />
+      <div className="h-8 w-0.5 rounded-full bg-border transition-colors group-hover:bg-primary" />
     </div>
   );
 }

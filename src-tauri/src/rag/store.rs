@@ -185,8 +185,8 @@ impl RagStore {
             .llm_select(&fused, context, language, ollama_client, llm_params, &cancel)
             .await
             .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "LLM chunk selection failed, using top-3 RRF");
-                fused.iter().take(3).map(|&(idx, _)| idx).collect()
+                tracing::warn!(error = %e, "LLM chunk selection failed, using top-{} RRF", constants::RAG_FALLBACK_TOP_K);
+                fused.iter().take(constants::RAG_FALLBACK_TOP_K).map(|&(idx, _)| idx).collect()
             });
 
         if selected_indices.is_empty() {

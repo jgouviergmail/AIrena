@@ -55,7 +55,7 @@
     "modelPreloadError": "Échec du chargement du modèle",
     "usernameRequired": "Le nom d'utilisateur est requis",
     "emotionDriven": "Comportement émotionnel",
-    "emotionDrivenDesc": "Les émotions influencent le style d'argumentation des IA",
+    "emotionDrivenDesc": "Les émotions influencent le style d'argumentation des GladIAteurs",
     "embeddingModel": "Modèle d'embedding (RAG)",
     "embeddingModelAuto": "Automatique (utilise le modèle de chat)",
     "embeddingModelDesc": "Modèle utilisé pour les embeddings RAG. Laissez vide pour utiliser automatiquement le modèle de chat.",
@@ -134,6 +134,10 @@
   "setup": {
     "title": "Configuration de la discussion",
     "step": "Étape {{current}} / {{total}}",
+    "stepTitle_0": "Paramétrage général de la discussion",
+    "stepTitle_1": "Paramétrage de l'IArbitre",
+    "stepTitle_2": "Paramétrage des GladIAteurs",
+    "stepTitle_3": "Synthèse",
     "next": "Suivant",
     "previous": "Précédent",
     "start": "Lancer la discussion",
@@ -191,7 +195,7 @@
     "deleteProfile": "Supprimer ce profil",
     "webSearch": "Recherche Internet",
     "arbitreWebSearchIntro": "1 crédit internet pour l'introduction",
-    "arbitreWebSearchTitle": "Utiliser des informations internet pour introduire",
+    "arbitreWebSearchTitle": "Utiliser des informations internet pour l'introduction",
     "webSearchPool": "Crédits de recherches internet (discussion entière)",
     "webSearchPoolDesc": "Partagé entre tous les GladIAteurs, max 1 par tour par GladIAteur, maximum {{max}}",
     "webSearchBudget": "{{count}} recherche(s)",
@@ -199,7 +203,7 @@
     "wikiSearch": "Wikipédia",
     "arbitreWikiSearchIntro": "1 recherche Wikipédia pour l'introduction",
     "arbitreWikiSearchTitle": "Utiliser Wikipédia pour l'introduction",
-    "wikiSearchPool": "Crédits de recherches Wikipédia (discussion entière)",
+    "wikiSearchPool": "Nombre de recherches Wikipédia (discussion entière)",
     "wikiSearchPoolDesc": "Partagé entre tous les GladIAteurs, max 1 par tour par GladIAteur, maximum {{max}}",
     "wikiSearchBudget": "{{count}} recherche(s)",
     "firstTurnSearchRule": "Au premier tour, chaque GladIAteur effectuera automatiquement une recherche sur les sources activées pour disposer d'un contexte à jour. Les tours suivants, l'IA décide si une recherche est nécessaire.",
@@ -257,7 +261,10 @@
     "summaryRag": "Base de connaissances (RAG)",
     "startError": "Échec du lancement de la discussion",
     "userDrivenNoTurnDist": "En mode Échanges guidés, l'ordre de parole est déterminé automatiquement (chaque IA décide si elle répond).",
-    "fictionNoTurnDist": "En mode Fiction collaborative, l'ordre est toujours séquentiel pour assurer la continuité narrative."
+    "fictionNoTurnDist": "En mode Fiction collaborative, l'ordre est toujours séquentiel pour assurer la continuité narrative.",
+    "argumentMap": "Carte des arguments",
+    "argumentMapDesc": "Extrait et visualise les thèses et arguments sous forme de carte mentale interactive en temps réel",
+    "summaryArgumentMap": "Carte des arguments"
   },
   "arena": {
     "title": "Discussion en cours",
@@ -283,6 +290,18 @@
     "banLifted": "{{name}} est de retour dans la discussion",
     "turnSkipped": "Tour sauté : {{reason}}",
     "synthesizing": "Synthèse en cours...",
+    "activity": {
+      "thinking": "{{name}} réfléchit...",
+      "writing": "{{name}} rédige sa réponse...",
+      "reacting": "Distribution des réactions...",
+      "webSearch": "{{name}} recherche sur le web...",
+      "wikiSearch": "{{name}} consulte Wikipédia...",
+      "ragInjection": "Injection de connaissances RAG...",
+      "emotions": "Mise à jour des émotions...",
+      "argumentMap": "Mise à jour de la carte des arguments...",
+      "synthesis": "Rédaction de la synthèse...",
+      "determining": "Détermination de l'ordre de parole..."
+    },
     "like": "D'accord",
     "dislike": "Pas d'accord",
     "webSearchPerformed": "{{name}} a effectué {{count}} recherche(s)"
@@ -302,7 +321,19 @@
     "participantsList": "Participants",
     "date": "Date",
     "downloadDocument": "Télécharger le document",
-    "discussionMode": "Type d'échange"
+    "discussionMode": "Type d'échange",
+    "tabArgumentMap": "Carte des arguments",
+    "downloadArgumentMap": "Exporter la carte des arguments",
+    "downloadArgumentMapSvg": "Exporter la carte en SVG"
+  },
+  "mindmap": {
+    "title": "Carte des arguments",
+    "expand": "Afficher la carte",
+    "empty": "Les arguments seront cartographiés ici à chaque fin de tour à partir du tour 2",
+    "legendSupport": "Pour (soutien)",
+    "legendCounter": "Contre (opposition)",
+    "legendEvidence": "Preuves",
+    "collapse": "Réduire la carte"
   },
   "history": {
     "title": "Historique des discussions",

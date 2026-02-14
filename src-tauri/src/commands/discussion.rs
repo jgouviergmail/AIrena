@@ -92,6 +92,8 @@ pub async fn start_discussion(
     // Take RAG store from AppState (ownership transfer to engine)
     let rag_store = AppState::lock_or_recover(&state.rag_store).take();
 
+    let argument_map_enabled = config.argument_map_enabled;
+
     tauri::async_runtime::spawn(async move {
         let mut engine = DiscussionEngine::new(
             config, id_clone, &ollama_url, &ollama_model,
@@ -99,6 +101,7 @@ pub async fn start_discussion(
         );
         engine.set_cancel_token(engine_cancel);
         engine.set_emotion_driven(emotion_driven);
+        engine.set_argument_map_enabled(argument_map_enabled);
         engine.run(cmd_rx, on_event).await;
 
         // Cleanup: remove sender and token so a new discussion can start
