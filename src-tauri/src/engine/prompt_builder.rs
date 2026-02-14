@@ -47,7 +47,8 @@ pub fn build_introduction_prompt(
                  writer left off. Transitions must be seamless and coherent.\n\
                  {}\n\
                  Then invite the user to write the story opening.\n\
-                 Respond in English.",
+                 IMPORTANT: Do NOT use any markdown formatting (no #, ##, **, *, -, bullet points, code blocks). Write in plain conversational text only.\n\
+                 IMPORTANT: You MUST respond entirely in English.",
                 datetime, topic, participants, web_block, mode_instructions
             ),
             "zh" => format!(
@@ -57,7 +58,8 @@ pub fn build_introduction_prompt(
                  然后每位共同作者按顺序从上一位作者停笔的地方继续。过渡必须流畅且连贯。\n\
                  {}\n\
                  然后邀请用户写故事开头。\n\
-                 请用中文回答。",
+                 重要：不要使用任何markdown格式（不要用#、##、**、*、-、列表、代码块）。只用纯对话文本。\n\
+                 重要：你必须完全用中文回答。",
                 datetime, topic, participants, web_block, mode_instructions
             ),
             _ => format!(
@@ -68,7 +70,8 @@ pub fn build_introduction_prompt(
                  Les transitions doivent être fluides et cohérentes.\n\
                  {}\n\
                  Puis invite l'utilisateur à écrire l'ouverture de l'histoire.\n\
-                 Réponds en français.",
+                 IMPÉRATIF : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes à puces, blocs de code). Écris uniquement en texte conversationnel simple.\n\
+                 IMPÉRATIF : Tu DOIS répondre intégralement en français.",
                 datetime, topic, participants, web_block, mode_instructions
             ),
         };
@@ -82,7 +85,8 @@ pub fn build_introduction_prompt(
              and perspectives of the subject without narrowing it to a single angle or your personal bias.\n\
              {}\n\
              Then invite the first participant to speak.\n\
-             Respond in English.",
+             IMPORTANT: Do NOT use any markdown formatting (no #, ##, **, *, -, bullet points, code blocks). Write in plain conversational text only.\n\
+             IMPORTANT: You MUST respond entirely in English.",
             datetime, mode_desc, topic, participants, web_block, mode_instructions
         ),
         "zh" => format!(
@@ -92,7 +96,8 @@ pub fn build_introduction_prompt(
              不要将其缩小为单一角度或个人偏见。\n\
              {}\n\
              然后邀请第一位参与者发言。\n\
-             请用中文回答。",
+             重要：不要使用任何markdown格式（不要用#、##、**、*、-、列表、代码块）。只用纯对话文本。\n\
+             重要：你必须完全用中文回答。",
             datetime, mode_desc, topic, participants, web_block, mode_instructions
         ),
         _ => format!(
@@ -102,7 +107,8 @@ pub fn build_introduction_prompt(
              et perspectives clés du sujet sans le réduire à un seul angle ou à ton biais personnel.\n\
              {}\n\
              Puis invite le premier participant à prendre la parole.\n\
-             Réponds en français.",
+             IMPÉRATIF : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes à puces, blocs de code). Écris uniquement en texte conversationnel simple.\n\
+             IMPÉRATIF : Tu DOIS répondre intégralement en français.",
             datetime, mode_desc, topic, participants, web_block, mode_instructions
         ),
     }
@@ -330,7 +336,8 @@ NEVER insert your name or other co-authors' names as characters in the story. Th
 Write naturally. Match the tone, style, and perspective established by previous writers.\n\
 Your first sentence MUST connect directly to the last sentence written — ensure a seamless transition.\n\
 NEVER restart the story. NEVER summarize previous content. NEVER comment on the story or break the narrative.\n\
-Each segment MUST advance the plot: introduce a new event, action, revelation, or turning point. Avoid purely atmospheric descriptions that don't move the story forward.\n"),
+Each segment MUST advance the plot: introduce a new event, action, revelation, or turning point. Avoid purely atmospheric descriptions that don't move the story forward.\n\
+FORBIDDEN: Do NOT use any markdown formatting (no #, ##, **, *, -, bullet points, code blocks). Write in plain prose only.\n"),
             "zh" => format!("\
 你是接力写作故事的共同作者。\n\
 {mode_preamble_line}\n\
@@ -339,7 +346,8 @@ Each segment MUST advance the plot: introduce a new event, action, revelation, o
 自然地写作。匹配前面作者建立的语气、风格和视角。\n\
 你的第一句话必须直接衔接上一段的最后一句——确保无缝过渡。\n\
 绝不重新开始故事。绝不总结之前的内容。绝不评论故事或打破叙事。\n\
-每个片段必须推进情节：引入新事件、行动、揭示或转折点。避免纯粹的氛围描写而不推动故事发展。\n"),
+每个片段必须推进情节：引入新事件、行动、揭示或转折点。避免纯粹的氛围描写而不推动故事发展。\n\
+禁止：不要使用任何markdown格式（不要用#、##、**、*、-、列表、代码块）。只用纯散文写作。\n"),
             _ => format!("\
 Tu es un co-auteur dans une histoire écrite en relais.\n\
 {mode_preamble_line}\n\
@@ -348,7 +356,8 @@ N'insère JAMAIS ton nom ni celui des autres co-auteurs comme personnages dans l
 Écris naturellement. Respecte le ton, le style et la perspective établis par les auteurs précédents.\n\
 Ta première phrase DOIT se connecter directement à la dernière phrase écrite — assure une transition fluide.\n\
 Ne recommence JAMAIS l'histoire. Ne résume JAMAIS le contenu précédent. Ne commente JAMAIS l'histoire et ne brise pas le récit.\n\
-Chaque segment DOIT faire avancer l'intrigue : introduis un nouvel événement, une action, une révélation ou un retournement. Évite les descriptions purement atmosphériques qui ne font pas avancer l'histoire.\n"),
+Chaque segment DOIT faire avancer l'intrigue : introduis un nouvel événement, une action, une révélation ou un retournement. Évite les descriptions purement atmosphériques qui ne font pas avancer l'histoire.\n\
+INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes à puces, blocs de code). Écris uniquement en prose simple.\n"),
         }
     } else {
         match discussion_language {
@@ -361,7 +370,8 @@ Avoid formulaic patterns: don't systematically list points, don't always agree-t
 Be unpredictable. Sometimes be brief and punchy. Sometimes develop an idea at length. React genuinely to what others say.\n\
 CRITICAL: NEVER refer to yourself in the third person. You speak in first person (\"I\", \"me\", \"my\"). Never quote or comment on yourself as if you were someone else.\n\
 NEVER mention your own name in your speech. Do not address yourself, introduce yourself by name, or start with your own name.\n\
-Your verbal tics are OCCASIONAL punctuations, not crutches. Use them at most once per intervention, never at the beginning of a sentence.\n"),
+Your verbal tics are OCCASIONAL punctuations, not crutches. Use them at most once per intervention, never at the beginning of a sentence.\n\
+FORBIDDEN: Do NOT use any markdown formatting (no #, ##, **, *, -, numbered lists, bullet points, code blocks). You are speaking in a conversation, not writing a document. Plain text only.\n"),
             "zh" => format!("\
 你是一位参与者——始终保持角色。永远不要打破角色或称自己为AI。\n\
 {mode_preamble_line}\n\
@@ -371,7 +381,8 @@ Your verbal tics are OCCASIONAL punctuations, not crutches. Use them at most onc
 要不可预测。有时简短有力，有时深入展开一个想法。真诚地回应别人说的话。\n\
 关键：永远不要用第三人称提到自己。你用第一人称（「我」、「我的」）说话。永远不要像谈论别人一样引用或评论自己。\n\
 永远不要在发言中提到自己的名字。不要自我介绍，不要以自己的名字开头。\n\
-你的口头禅是偶尔的点缀，不是拐杖。每次发言最多使用一次，绝不放在句首。\n"),
+你的口头禅是偶尔的点缀，不是拐杖。每次发言最多使用一次，绝不放在句首。\n\
+禁止：不要使用任何markdown格式（不要用#、##、**、*、-、编号列表、列表、代码块）。你在对话中发言，不是在写文档。只用纯文本。\n"),
             _ => format!("\
 Tu es un participant — reste pleinement dans ton personnage en permanence. Ne sors jamais du rôle et ne te présente jamais comme une IA.\n\
 {mode_preamble_line}\n\
@@ -381,7 +392,8 @@ Ne commence JAMAIS systématiquement par \"Je pense que...\" ou \"En tant que [r
 Sois imprévisible. Parfois sois bref et percutant. Parfois développe une idée en profondeur. Réagis sincèrement à ce que disent les autres.\n\
 CRITIQUE : Ne te réfère JAMAIS à toi-même à la troisième personne. Tu parles à la première personne (\"je\", \"moi\", \"mon\"). Ne te cite pas et ne te commente pas comme si tu étais quelqu'un d'autre.\n\
 Ne mentionne JAMAIS ton propre nom dans ton intervention. Ne te présente pas, ne t'adresse pas à toi-même et ne commence pas par ton propre nom.\n\
-Tes tics verbaux sont des ponctuations OCCASIONNELLES, pas des béquilles. Utilise-les au maximum 1 fois par intervention, jamais en début de phrase.\n"),
+Tes tics verbaux sont des ponctuations OCCASIONNELLES, pas des béquilles. Utilise-les au maximum 1 fois par intervention, jamais en début de phrase.\n\
+INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes numérotées, listes à puces, blocs de code). Tu parles dans une conversation, tu n'écris pas un document. Texte simple uniquement.\n"),
         }
     };
 

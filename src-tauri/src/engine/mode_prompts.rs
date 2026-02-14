@@ -315,8 +315,9 @@ pub fn build_socratic_question_prompt(
             The question should:\n\
             - Challenge assumptions made in previous exchanges\n\
             - Open new angles of reflection\n\
-            - Be concise and direct\n\
-            - Be asked in English\n\n\
+            - Be concise and direct\n\n\
+            Do NOT use any markdown formatting. Plain text only.\n\
+            IMPORTANT: You MUST write the question entirely in English.\n\
             Respond with ONLY the question, nothing else."
         ),
         "zh" => format!(
@@ -326,8 +327,9 @@ pub fn build_socratic_question_prompt(
             这个问题应该：\n\
             - 挑战之前交流中的假设\n\
             - 开辟新的反思角度\n\
-            - 简洁直接\n\
-            - 用中文提问\n\n\
+            - 简洁直接\n\n\
+            不要使用任何markdown格式。只用纯文本。\n\
+            重要：你必须完全用中文写这个问题。\n\
             只回复问题本身，不要其他内容。"
         ),
         _ => format!(
@@ -337,8 +339,9 @@ pub fn build_socratic_question_prompt(
             La question doit :\n\
             - Remettre en question les hypothèses des échanges précédents\n\
             - Ouvrir de nouveaux angles de réflexion\n\
-            - Être concise et directe\n\
-            - Être posée en français\n\n\
+            - Être concise et directe\n\n\
+            N'utilise AUCUN formatage markdown. Texte simple uniquement.\n\
+            IMPÉRATIF : Tu DOIS poser la question intégralement en français.\n\
             Réponds UNIQUEMENT avec la question, rien d'autre."
         ),
     }
