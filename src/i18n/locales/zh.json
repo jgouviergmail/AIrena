@@ -12,8 +12,8 @@
     "discussionRunning": "请先结束当前讨论"
   },
   "home": {
-    "welcome": "欢迎来到 AIrena",
-    "description": "通过 Ollama 创建本地AI模型之间的精彩辩论。",
+    "welcome": "本地AI不仅用于回答，更用于思考。",
+    "description": "定义主题。选择你的冠军。启动竞技场。",
     "startDiscussion": "新讨论",
     "resumeDiscussion": "继续讨论",
     "goToSettings": "设置",

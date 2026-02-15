@@ -12,8 +12,8 @@
     "discussionRunning": "Terminez la discussion en cours"
   },
   "home": {
-    "welcome": "Bienvenue dans AIrena",
-    "description": "Créez des débats captivants entre modèles IA locaux via Ollama.",
+    "welcome": "L'IA locale ne sert pas seulement à répondre. Elle sert à réfléchir.",
+    "description": "Définissez le sujet. Choisissez vos champions. Lancez l'arène.",
     "startDiscussion": "Nouvelle discussion",
     "resumeDiscussion": "Reprendre la discussion",
     "goToSettings": "Paramètres",

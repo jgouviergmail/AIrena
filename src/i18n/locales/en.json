@@ -12,8 +12,8 @@
     "discussionRunning": "Finish the current discussion first"
   },
   "home": {
-    "welcome": "Welcome to AIrena",
-    "description": "Create captivating debates between local AI models via Ollama.",
+    "welcome": "Local AI isn't just for answering. It's for thinking.",
+    "description": "Define the topic. Choose your champions. Launch the arena.",
     "startDiscussion": "New discussion",
     "resumeDiscussion": "Resume discussion",
     "goToSettings": "Settings",

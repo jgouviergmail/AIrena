@@ -30,21 +30,25 @@ export default function HomePage() {
   return (
     <>
       <TopBar title={t("app.name")} />
-      <div className="flex flex-1 flex-col items-center justify-center gap-8 p-8">
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary">
-            <Swords className="h-8 w-8 text-primary-foreground" />
-          </div>
-          <h1 className="text-3xl font-bold text-foreground">
-            {t("home.welcome")}
+      <div className="relative flex flex-1 flex-col items-center gap-8 overflow-hidden pt-12">
+        <img
+          src="/AIrena.jpg"
+          alt=""
+          className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+        />
+        <div className="absolute inset-0 bg-black/60" />
+
+        <div className="relative z-10 flex flex-col items-center gap-4 px-8">
+          <h1 className="max-w-2xl whitespace-pre-line text-center text-3xl font-semibold italic leading-snug text-white drop-shadow-lg">
+            {t("home.welcome").replaceAll(". ", ".\n")}
           </h1>
-          <p className="max-w-md text-center text-muted-foreground">
-            {t("home.description")}
+          <p className="max-w-lg whitespace-pre-line text-center text-lg text-white/80">
+            {t("home.description").replaceAll(". ", ".\n")}
           </p>
         </div>
 
         {licenseStatus && !licenseStatus.valid && (
-          <div className="flex items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-2.5 text-sm text-destructive">
+          <div className="relative z-10 flex items-center gap-2 rounded-lg border border-red-400/30 bg-red-950/60 px-4 py-2.5 text-sm text-red-300 backdrop-blur-sm">
             <KeyRound className="h-4 w-4 shrink-0" />
             <span>
               {licenseStatus.error === "No license key configured"
@@ -54,11 +58,11 @@ export default function HomePage() {
           </div>
         )}
 
-        <div className="flex gap-4">
+        <div className="relative z-10 mt-auto flex w-64 flex-col gap-3" style={{ marginBottom: "15%" }}>
           {isDiscussionActive ? (
             <button
               onClick={() => navigate("/arena")}
-              className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-lg transition-colors hover:bg-primary/90"
             >
               <Swords className="h-4 w-4" />
               {t("home.resumeDiscussion")}
@@ -67,7 +71,7 @@ export default function HomePage() {
             <button
               onClick={handleNewDiscussion}
               disabled={licenseStatus?.valid !== true}
-              className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-lg transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
               <MessageSquarePlus className="h-4 w-4" />
               {t("home.startDiscussion")}
@@ -75,14 +79,14 @@ export default function HomePage() {
           )}
           <button
             onClick={() => navigate("/history")}
-            className="flex items-center gap-2 rounded-lg border border-border bg-card px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 bg-white/10 px-6 py-3 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/20"
           >
             <History className="h-4 w-4" />
             {t("home.history")}
           </button>
           <button
             onClick={() => navigate("/settings")}
-            className="flex items-center gap-2 rounded-lg border border-border bg-card px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 bg-white/10 px-6 py-3 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/20"
           >
             <Settings className="h-4 w-4" />
             {t("home.goToSettings")}
