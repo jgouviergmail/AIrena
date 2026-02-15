@@ -45,6 +45,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     tavilyUsageCount: 0,
     tavilyUsageHistory: "[]",
     embeddingModel: "",
+    licenseKey: "",
   },
   profiles: [],
   arbitreProfiles: [],

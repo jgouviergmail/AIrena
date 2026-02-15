@@ -45,6 +45,9 @@ Desktop.ini
 .env
 .env.*
 
+# License key generation secrets
+tools/.keys.json
+
 # SQLite
 *.db
 *.db-journal

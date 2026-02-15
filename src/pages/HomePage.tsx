@@ -1,14 +1,22 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { History, MessageSquarePlus, Settings, Swords } from "lucide-react";
+import { History, KeyRound, MessageSquarePlus, Settings, Swords } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { useSetupStore } from "@/stores/useSetupStore";
+import type { LicenseStatus } from "@/lib/types";
+import * as api from "@/lib/tauri-api";
 
 export default function HomePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const status = useArenaStore((s) => s.status);
+  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null);
+
+  useEffect(() => {
+    api.checkLicenseStatus().then(setLicenseStatus).catch(() => {});
+  }, []);
 
   const isDiscussionActive =
     status === "running" || status === "paused" || status === "synthesizing";
@@ -35,6 +43,17 @@ export default function HomePage() {
           </p>
         </div>
 
+        {licenseStatus && !licenseStatus.valid && (
+          <div className="flex items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-2.5 text-sm text-destructive">
+            <KeyRound className="h-4 w-4 shrink-0" />
+            <span>
+              {licenseStatus.error === "No license key configured"
+                ? t("home.licenseNeeded")
+                : t("home.licenseExpired")}
+            </span>
+          </div>
+        )}
+
         <div className="flex gap-4">
           {isDiscussionActive ? (
             <button
@@ -47,7 +66,8 @@ export default function HomePage() {
           ) : (
             <button
               onClick={handleNewDiscussion}
-              className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              disabled={licenseStatus?.valid !== true}
+              className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
               <MessageSquarePlus className="h-4 w-4" />
               {t("home.startDiscussion")}

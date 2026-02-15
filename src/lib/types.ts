@@ -108,6 +108,16 @@ export interface AppSettings {
   tavilyUsageCount: number;
   tavilyUsageHistory: string;
   embeddingModel: string;
+  licenseKey: string;
+}
+
+export interface LicenseStatus {
+  valid: boolean;
+  email: string;
+  expiresAt: number;
+  maxDiscussions: number;
+  discussionsUsed: number;
+  error: string | null;
 }
 
 export interface TavilyPeriodHistory {

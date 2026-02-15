@@ -3,6 +3,7 @@ mod constants;
 mod db;
 mod engine;
 mod error;
+mod license;
 mod models;
 mod ollama;
 mod rag;
@@ -109,6 +110,9 @@ pub fn run() {
             commands::settings::get_profile,
             commands::settings::save_profile,
             commands::settings::delete_profile,
+            // License commands
+            commands::settings::validate_license_key,
+            commands::settings::check_license_status,
             // History commands
             commands::history::save_discussion_history,
             commands::history::list_discussion_history,

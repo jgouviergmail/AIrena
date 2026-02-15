@@ -29,6 +29,7 @@ pub async fn get_settings(db: &Connection) -> Result<AppSettings, tokio_rusqlite
                 "tavily_usage_count" => settings.tavily_usage_count = value.parse().unwrap_or(0),
                 "tavily_usage_history" => settings.tavily_usage_history = value,
                 "embedding_model" => settings.embedding_model = value,
+                "license_key" => settings.license_key = value,
                 _ => {}
             }
         }
@@ -62,6 +63,7 @@ pub async fn save_settings(
             ("tavily_usage_count", settings.tavily_usage_count.to_string()),
             ("tavily_usage_history", settings.tavily_usage_history.clone()),
             ("embedding_model", settings.embedding_model.clone()),
+            ("license_key", settings.license_key.clone()),
         ];
         for (key, value) in &pairs {
             tx.execute(
@@ -497,4 +499,104 @@ fn last_day_of_month(year: i32, month: u32) -> u32 {
         .pred_opt()
         .unwrap()
         .day()
+}
+
+// ── License tracking ────────────────────────────────────────────────
+
+/// Read license tracking data from settings KV store.
+/// Returns (key_hash, discussions_count, last_check_timestamp).
+pub async fn get_license_tracking(
+    db: &Connection,
+) -> Result<(String, u32, i64), tokio_rusqlite::Error> {
+    db.call(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT key, value FROM settings WHERE key IN ('license_key_hash', 'license_discussions_count', 'last_check_timestamp')",
+        )?;
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut key_hash = String::new();
+        let mut disc_count: u32 = 0;
+        let mut last_check: i64 = 0;
+
+        for (key, value) in rows {
+            match key.as_str() {
+                "license_key_hash" => key_hash = value,
+                "license_discussions_count" => disc_count = value.parse().unwrap_or(0),
+                "last_check_timestamp" => last_check = value.parse().unwrap_or(0),
+                _ => {}
+            }
+        }
+
+        Ok((key_hash, disc_count, last_check))
+    })
+    .await
+}
+
+/// Increment discussion counter. Handles key change implicitly:
+/// if key_hash differs from stored hash → set count = 1 (new key),
+/// if key_hash matches → increment count.
+pub async fn increment_license_discussions(
+    db: &Connection,
+    key_hash: &str,
+) -> Result<(), tokio_rusqlite::Error> {
+    let key_hash = key_hash.to_string();
+    db.call(move |conn| {
+        // Read current stored hash + count
+        let (stored_hash, count) = {
+            let mut stmt = conn.prepare(
+                "SELECT key, value FROM settings WHERE key IN ('license_key_hash', 'license_discussions_count')",
+            )?;
+            let rows: Vec<(String, String)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut hash = String::new();
+            let mut cnt: u32 = 0;
+            for (k, v) in rows {
+                match k.as_str() {
+                    "license_key_hash" => hash = v,
+                    "license_discussions_count" => cnt = v.parse().unwrap_or(0),
+                    _ => {}
+                }
+            }
+            (hash, cnt)
+        };
+
+        let new_count = if stored_hash == key_hash { count + 1 } else { 1 };
+        let now = chrono::Utc::now().timestamp();
+
+        let tx = conn.transaction()?;
+        for (k, v) in [
+            ("license_key_hash", key_hash.as_str()),
+            ("license_discussions_count", &new_count.to_string()),
+            ("last_check_timestamp", &now.to_string()),
+        ] {
+            tx.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = ?2",
+                rusqlite::params![k, v],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+    .await
+}
+
+/// Update last check timestamp (called on every license validation).
+pub async fn update_last_check_timestamp(
+    db: &Connection,
+) -> Result<(), tokio_rusqlite::Error> {
+    db.call(|conn| {
+        let now = chrono::Utc::now().timestamp().to_string();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('last_check_timestamp', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = ?1",
+            rusqlite::params![now],
+        )?;
+        Ok(())
+    })
+    .await
 }

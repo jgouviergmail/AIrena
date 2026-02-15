@@ -41,6 +41,8 @@ pub struct AppSettings {
     pub tavily_usage_history: String,
     #[serde(default)]
     pub embedding_model: String,
+    #[serde(default)]
+    pub license_key: String,
 }
 
 impl Default for AppSettings {
@@ -57,6 +59,7 @@ impl Default for AppSettings {
             tavily_usage_count: 0,
             tavily_usage_history: "[]".to_string(),
             embedding_model: String::new(),
+            license_key: String::new(),
         }
     }
 }

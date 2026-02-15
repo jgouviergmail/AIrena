@@ -17,7 +17,9 @@
     "startDiscussion": "新讨论",
     "resumeDiscussion": "继续讨论",
     "goToSettings": "设置",
-    "history": "历史记录"
+    "history": "历史记录",
+    "licenseNeeded": "请在设置中配置许可证密钥以开始讨论。",
+    "licenseExpired": "您的许可证不再有效。请在设置中检查。"
   },
   "settings": {
     "title": "设置",
@@ -70,7 +72,18 @@
     "tavilyNoHistory": "暂无历史",
     "tavilyFree": "免费",
     "tavilyCurrentPeriod": "当前周期（自 {{start}}）— {{count}} 个额度",
-    "tavilyPeriodEntry": "从 {{start}} 到 {{end}} — {{count}} 个额度"
+    "tavilyPeriodEntry": "从 {{start}} 到 {{end}} — {{count}} 个额度",
+    "license": "许可证",
+    "licenseKey": "许可证密钥",
+    "licenseValidate": "验证",
+    "licenseStatus": "许可证状态",
+    "licenseNone": "未配置密钥",
+    "licenseActive": "许可证有效",
+    "licenseExpired": "许可证已过期",
+    "licenseInvalid": "密钥无效",
+    "licenseValid": "许可证验证成功",
+    "licenseError": "验证错误",
+    "licenseExpires": "到期日期: {{date}}"
   },
   "personaEditor": {
     "identity": "身份",
@@ -260,6 +273,7 @@
     "ragUnsupportedFormat": "不支持的文件格式。支持的格式：TXT、PDF、DOCX、PPTX、源代码。",
     "summaryRag": "知识库 (RAG)",
     "startError": "启动讨论失败",
+    "licenseRequired": "需要有效的许可证才能开始讨论。请在设置中配置。",
     "userDrivenNoTurnDist": "在引导交流模式下，发言顺序自动确定（每个AI决定是否回应）。",
     "fictionNoTurnDist": "在协作小说模式下，发言顺序始终为顺序进行以确保叙事连续性。",
     "argumentMap": "论证图谱",

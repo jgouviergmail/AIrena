@@ -5,6 +5,7 @@ import type {
   DiscussionConfig,
   DiscussionDetail,
   DiscussionSummary,
+  LicenseStatus,
   ModelInfo,
   PredefinedProfile,
   RagDocumentInfo,
@@ -83,6 +84,16 @@ export async function getSettings(): Promise<AppSettings> {
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
   return await invoke("save_settings", { settings });
+}
+
+// -- License commands --
+
+export async function validateLicenseKey(key: string): Promise<LicenseStatus> {
+  return await invoke<LicenseStatus>("validate_license_key", { key });
+}
+
+export async function checkLicenseStatus(): Promise<LicenseStatus> {
+  return await invoke<LicenseStatus>("check_license_status");
 }
 
 export async function listProfiles(): Promise<PredefinedProfile[]> {

@@ -356,3 +356,20 @@ pub const ARGMAP_NUM_CTX: u32 = 16384;
 
 /// Temperature for argument map extraction (low for structured JSON output).
 pub const ARGMAP_TEMPERATURE: f32 = 0.3;
+
+// ── License ──────────────────────────────────────────────────────────
+
+/// License key payload version.
+pub const LICENSE_VERSION: u8 = 1;
+
+/// Clock drift tolerance for anti-manipulation check (seconds). 2 hours covers DST.
+pub const LICENSE_CLOCK_TOLERANCE_SECS: i64 = 7200;
+
+/// Discussion quota per 24 hours of license duration.
+pub const LICENSE_DISCUSSIONS_PER_DAY: u32 = 50;
+
+/// Ed25519 public key for license signature verification (hex, 32 bytes).
+pub const LICENSE_ED25519_PUBLIC_KEY_HEX: &str = "758f08355ba45e51fc77559c3a16a419163a06438698b1054d18834188051fd4";
+
+/// AES-256-GCM shared key for license encryption (hex, 32 bytes).
+pub const LICENSE_AES_KEY_HEX: &str = "ab0bede65de2e957c25846a21420657eae852cd88288c4fbfa87077909cb1bbe";

@@ -16,4 +16,6 @@ pub enum CommandError {
     History(String),
     #[error("RAG error: {0}")]
     Rag(String),
+    #[error("License error: {0}")]
+    License(String),
 }

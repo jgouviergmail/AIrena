@@ -62,11 +62,43 @@ pub async fn start_discussion(
         }
     };
 
+    // ── License gate (validate only, no counter mutation) ──────────
+    if settings.license_key.is_empty() {
+        AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
+        return Err(CommandError::License("No license key configured".to_string()));
+    }
+    let db_for_license = state.db.clone();
+    {
+        let (stored_hash, disc_count, last_check) =
+            repository::get_license_tracking(&db_for_license).await.map_err(|e| {
+                AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
+                CommandError::License(e.to_string())
+            })?;
+        let status = crate::license::check_license_status(
+            &settings.license_key, &stored_hash, disc_count, last_check,
+        );
+        if !status.valid {
+            AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
+            return Err(CommandError::License(
+                status.error.unwrap_or_else(|| "Invalid license".to_string()),
+            ));
+        }
+    }
+
     // Validate that the Ollama model exists
     let client = OllamaClient::new(&settings.ollama_url, &settings.ollama_model);
     if let Err(e) = client.validate_model().await {
         AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
         return Err(CommandError::Ollama(e.to_string()));
+    }
+
+    // ── Increment license counter (after all pre-flight checks passed) ──
+    {
+        let key_hash = crate::license::hash_license_key(&settings.license_key);
+        if let Err(e) = repository::increment_license_discussions(&db_for_license, &key_hash).await {
+            AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
+            return Err(CommandError::License(e.to_string()));
+        }
     }
 
     // Check/reset Tavily period if API key is configured

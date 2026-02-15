@@ -37,3 +37,7 @@ pdf-extract = "0.10"
 lopdf = "0.38"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 quick-xml = "0.37"
+ed25519-dalek = "2.2"
+aes-gcm = "0.10"
+base64 = "0.22"
+sha2 = "0.10"

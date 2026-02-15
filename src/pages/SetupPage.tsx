@@ -14,6 +14,7 @@ import {
   FileText,
   Globe,
   GripVertical,
+  KeyRound,
   Network,
   Heart,
   Info,
@@ -43,7 +44,7 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { cn } from "@/lib/utils";
 import { DEFAULT_LLM_PARAMS } from "@/lib/types";
-import type { DiscussionMode, DocumentFormat, GladIAteurConfig, PredefinedProfile } from "@/lib/types";
+import type { DiscussionMode, DocumentFormat, GladIAteurConfig, LicenseStatus, PredefinedProfile } from "@/lib/types";
 import * as api from "@/lib/tauri-api";
 import { extractErrorMessage } from "@/lib/error-utils";
 import { toast } from "@/stores/useToastStore";
@@ -67,6 +68,12 @@ export default function SetupPage() {
   const startingRef = useRef(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null);
+  const licenseValid = licenseStatus?.valid === true;
+
+  useEffect(() => {
+    api.checkLicenseStatus().then(setLicenseStatus).catch(() => {});
+  }, []);
 
   const canNext = () => {
     switch (step) {
@@ -85,6 +92,10 @@ export default function SetupPage() {
 
   const handleStart = async () => {
     if (startingRef.current) return;
+    if (!licenseValid) {
+      setError(t("setup.licenseRequired"));
+      return;
+    }
     if (!settings.username.trim()) {
       setError(t("settings.usernameRequired"));
       return;
@@ -133,6 +144,12 @@ export default function SetupPage() {
   return (
     <>
       <TopBar title={t("setup.title")} />
+      {!licenseValid && licenseStatus !== null && (
+        <div className="flex items-center gap-2 border-b border-destructive/20 bg-destructive/5 px-4 py-2 text-sm text-destructive">
+          <KeyRound className="h-4 w-4 shrink-0" />
+          {t("setup.licenseRequired")}
+        </div>
+      )}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Stepper indicator */}
         <div className="flex items-center justify-center gap-2 border-b border-border px-4 py-3">
@@ -210,7 +227,7 @@ export default function SetupPage() {
           ) : (
             <button
               onClick={handleStart}
-              disabled={starting || !canNext()}
+              disabled={starting || !canNext() || !licenseValid}
               className="flex items-center gap-1.5 rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-30"
             >
               <Play className="h-4 w-4" />

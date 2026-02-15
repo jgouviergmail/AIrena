@@ -17,7 +17,9 @@
     "startDiscussion": "New discussion",
     "resumeDiscussion": "Resume discussion",
     "goToSettings": "Settings",
-    "history": "History"
+    "history": "History",
+    "licenseNeeded": "Configure a license key in Settings to start discussions.",
+    "licenseExpired": "Your license is no longer valid. Check it in Settings."
   },
   "settings": {
     "title": "Settings",
@@ -70,7 +72,18 @@
     "tavilyNoHistory": "No history",
     "tavilyFree": "free",
     "tavilyCurrentPeriod": "Current period (since {{start}}) — {{count}} credit(s)",
-    "tavilyPeriodEntry": "From {{start}} to {{end}} — {{count}} credit(s)"
+    "tavilyPeriodEntry": "From {{start}} to {{end}} — {{count}} credit(s)",
+    "license": "License",
+    "licenseKey": "License key",
+    "licenseValidate": "Validate",
+    "licenseStatus": "License status",
+    "licenseNone": "No key configured",
+    "licenseActive": "License active",
+    "licenseExpired": "License expired",
+    "licenseInvalid": "Invalid key",
+    "licenseValid": "License validated successfully",
+    "licenseError": "Validation error",
+    "licenseExpires": "Expires on {{date}}"
   },
   "personaEditor": {
     "identity": "Identity",
@@ -260,6 +273,7 @@
     "ragUnsupportedFormat": "Unsupported file format. Accepted formats: TXT, PDF, DOCX, PPTX, source code.",
     "summaryRag": "Knowledge Base (RAG)",
     "startError": "Failed to start discussion",
+    "licenseRequired": "A valid license is required to start a discussion. Configure it in Settings.",
     "userDrivenNoTurnDist": "In Guided exchanges mode, speaking order is determined automatically (each AI decides whether to respond).",
     "fictionNoTurnDist": "In Collaborative fiction mode, speaking order is always sequential to ensure narrative continuity.",
     "argumentMap": "Argument Map",

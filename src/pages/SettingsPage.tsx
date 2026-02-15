@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AlertCircle,
@@ -7,11 +7,14 @@ import {
   Eye,
   EyeOff,
   Globe,
+  KeyRound,
   Loader2,
   Moon,
   Search,
   Server,
   Settings as SettingsIcon,
+  ShieldCheck,
+  ShieldX,
   Sun,
   Wifi,
   WifiOff,
@@ -23,7 +26,8 @@ import { useTheme } from "@/providers/ThemeProvider";
 import { cn } from "@/lib/utils";
 import { extractErrorMessage } from "@/lib/error-utils";
 import { toast } from "@/stores/useToastStore";
-import type { TavilyPeriodHistory } from "@/lib/types";
+import type { LicenseStatus, TavilyPeriodHistory } from "@/lib/types";
+import * as api from "@/lib/tauri-api";
 
 export default function SettingsPage() {
   const { t, i18n } = useTranslation();
@@ -41,9 +45,12 @@ export default function SettingsPage() {
   const preloadDone = useSettingsStore((s) => s.preloadDone);
   const preloadError = useSettingsStore((s) => s.preloadError);
 
-  const [saved, setSaved] = useState(false);
+  const [autoSaved, setAutoSaved] = useState(false);
   const [checking, setChecking] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showLicenseKey, setShowLicenseKey] = useState(false);
+  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null);
+  const [validatingLicense, setValidatingLicense] = useState(false);
 
   useEffect(() => {
     hydrate();
@@ -53,17 +60,37 @@ export default function SettingsPage() {
     checkOllama();
   }, [checkOllama]);
 
-  const handleSave = async () => {
-    try {
-      await saveSettings();
-      i18n.changeLanguage(settings.language);
-      setTheme(settings.theme as "dark" | "light");
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
-      toast.error(t("settings.saveError"), extractErrorMessage(e));
+  useEffect(() => {
+    api.checkLicenseStatus().then(setLicenseStatus).catch(() => {});
+  }, []);
+
+  // Auto-save settings on change (debounced, skip initial hydration)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(null);
+  const hydratedRef = useRef(false);
+
+  useEffect(() => {
+    if (loading) return;
+    if (!hydratedRef.current) {
+      hydratedRef.current = true;
+      return;
     }
-  };
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        await saveSettings();
+        i18n.changeLanguage(settings.language);
+        setTheme(settings.theme as "dark" | "light");
+        setAutoSaved(true);
+        setTimeout(() => setAutoSaved(false), 2000);
+      } catch (e) {
+        toast.error(t("settings.saveError"), extractErrorMessage(e));
+      }
+    }, 800);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings, loading]);
 
   const handleCheckOllama = async () => {
     setChecking(true);
@@ -71,6 +98,25 @@ export default function SettingsPage() {
       await checkOllama();
     } finally {
       setChecking(false);
+    }
+  };
+
+  const handleValidateLicense = async () => {
+    const key = settings.licenseKey.trim();
+    if (!key) return;
+    setValidatingLicense(true);
+    try {
+      const status = await api.validateLicenseKey(key);
+      setLicenseStatus(status);
+      if (status.valid) {
+        toast.success(t("settings.licenseValid"));
+      } else {
+        toast.error(t("settings.licenseInvalid"), status.error ?? "");
+      }
+    } catch (e: unknown) {
+      toast.error(t("settings.licenseError"), extractErrorMessage(e));
+    } finally {
+      setValidatingLicense(false);
     }
   };
 
@@ -92,25 +138,12 @@ export default function SettingsPage() {
   return (
     <>
       <TopBar title={t("settings.title")}>
-        <button
-          onClick={handleSave}
-          disabled={!settings.username.trim()}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-5 py-2 text-sm font-medium transition-colors disabled:opacity-50",
-            saved
-              ? "bg-green-500/10 text-green-500"
-              : "bg-primary text-primary-foreground hover:bg-primary/90",
-          )}
-        >
-          {saved ? (
-            <>
-              <Check className="h-4 w-4" />
-              {t("settings.saved")}
-            </>
-          ) : (
-            t("settings.save")
-          )}
-        </button>
+        {autoSaved && (
+          <span className="flex items-center gap-1.5 text-sm text-green-500 animate-in fade-in">
+            <Check className="h-4 w-4" />
+            {t("settings.saved")}
+          </span>
+        )}
       </TopBar>
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-2xl space-y-8">
@@ -483,6 +516,88 @@ export default function SettingsPage() {
                 </Field>
               </>
             )}
+          </Section>
+
+          {/* License */}
+          <Section title={t("settings.license")} icon={KeyRound}>
+            <Field label={t("settings.licenseKey")}>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type={showLicenseKey ? "text" : "password"}
+                    value={settings.licenseKey}
+                    onChange={(e) =>
+                      updateSettings({ licenseKey: e.target.value })
+                    }
+                    placeholder="AIRENA-..."
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 pr-9 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLicenseKey(!showLicenseKey)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showLicenseKey ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+                <button
+                  onClick={handleValidateLicense}
+                  disabled={validatingLicense || !settings.licenseKey.trim()}
+                  className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+                >
+                  {validatingLicense ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <KeyRound className="h-3.5 w-3.5" />
+                  )}
+                  {t("settings.licenseValidate")}
+                </button>
+              </div>
+            </Field>
+
+            <Field label={t("settings.licenseStatus")}>
+              {!settings.licenseKey.trim() ? (
+                <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
+                  <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
+                  {t("settings.licenseNone")}
+                </div>
+              ) : licenseStatus?.valid ? (
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-green-500/10 text-green-500">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    {t("settings.licenseActive")}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {t("settings.licenseExpires", {
+                      date: new Date(
+                        licenseStatus.expiresAt * 1000,
+                      ).toLocaleString(undefined, {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      }),
+                    })}
+                  </p>
+                </div>
+              ) : licenseStatus ? (
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-destructive/10 text-destructive">
+                    <ShieldX className="h-3.5 w-3.5" />
+                    {licenseStatus.error === "License expired"
+                      ? t("settings.licenseExpired")
+                      : t("settings.licenseInvalid")}
+                  </div>
+                  {licenseStatus.error && (
+                    <p className="text-xs text-destructive">
+                      {licenseStatus.error}
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </Field>
           </Section>
         </div>
       </div>

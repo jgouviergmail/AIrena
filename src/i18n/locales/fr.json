@@ -17,7 +17,9 @@
     "startDiscussion": "Nouvelle discussion",
     "resumeDiscussion": "Reprendre la discussion",
     "goToSettings": "Paramètres",
-    "history": "Historique"
+    "history": "Historique",
+    "licenseNeeded": "Configurez une clé de licence dans les Paramètres pour démarrer des discussions.",
+    "licenseExpired": "Votre licence n'est plus valide. Vérifiez-la dans les Paramètres."
   },
   "settings": {
     "title": "Paramètres",
@@ -70,7 +72,18 @@
     "tavilyNoHistory": "Aucun historique",
     "tavilyFree": "gratuits",
     "tavilyCurrentPeriod": "Période en cours (depuis le {{start}}) — {{count}} crédit(s)",
-    "tavilyPeriodEntry": "Du {{start}} au {{end}} — {{count}} crédit(s)"
+    "tavilyPeriodEntry": "Du {{start}} au {{end}} — {{count}} crédit(s)",
+    "license": "Licence",
+    "licenseKey": "Clé de licence",
+    "licenseValidate": "Valider",
+    "licenseStatus": "Statut de la licence",
+    "licenseNone": "Aucune clé configurée",
+    "licenseActive": "Licence active",
+    "licenseExpired": "Licence expirée",
+    "licenseInvalid": "Clé invalide",
+    "licenseValid": "Licence validée avec succès",
+    "licenseError": "Erreur de validation",
+    "licenseExpires": "Expire le {{date}}"
   },
   "personaEditor": {
     "identity": "Identité",
@@ -260,6 +273,7 @@
     "ragUnsupportedFormat": "Format de fichier non supporté. Formats acceptés : TXT, PDF, DOCX, PPTX, code source.",
     "summaryRag": "Base de connaissances (RAG)",
     "startError": "Échec du lancement de la discussion",
+    "licenseRequired": "Une licence valide est requise pour démarrer une discussion. Configurez-la dans les Paramètres.",
     "userDrivenNoTurnDist": "En mode Échanges guidés, l'ordre de parole est déterminé automatiquement (chaque IA décide si elle répond).",
     "fictionNoTurnDist": "En mode Fiction collaborative, l'ordre est toujours séquentiel pour assurer la continuité narrative.",
     "argumentMap": "Carte des arguments",
