@@ -40,10 +40,10 @@ export default function HomePage() {
 
         <div className="relative z-10 flex flex-col items-center gap-4 px-8">
           <h1 className="max-w-2xl whitespace-pre-line text-center text-3xl font-semibold italic leading-snug text-white drop-shadow-lg">
-            {t("home.welcome").replaceAll(". ", ".\n")}
+            {t("home.welcome").split(". ").join(".\n")}
           </h1>
           <p className="max-w-lg whitespace-pre-line text-center text-lg text-white/80">
-            {t("home.description").replaceAll(". ", ".\n")}
+            {t("home.description").split(". ").join(".\n")}
           </p>
         </div>
 
