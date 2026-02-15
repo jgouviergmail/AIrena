@@ -13,6 +13,39 @@ import { ResizeDivider } from "@/components/layout/ResizeDivider";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { useSetupStore } from "@/stores/useSetupStore";
 
+/** Isolated synthesis streaming display — owns its own Zustand subscription so
+ *  60ms token flushes only re-render this subtree. Auto-scrolls to keep the
+ *  latest tokens visible as the synthesis grows beyond the visible area. */
+function SynthesisStreamingPanel() {
+  const { t } = useTranslation();
+  const status = useArenaStore((s) => s.status);
+  const synthesisStreaming = useArenaStore((s) => s.synthesisStreaming);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom on each token flush so the user always sees new content
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [synthesisStreaming]);
+
+  if (status !== "synthesizing" && !synthesisStreaming) return null;
+
+  return (
+    <div className="flex min-h-0 shrink flex-col border-t border-border bg-card">
+      <p className="shrink-0 px-4 pt-3 pb-1 text-xs font-medium text-primary">
+        {t("arena.synthesizing")}
+      </p>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-3">
+        <p className="whitespace-pre-wrap text-sm text-foreground">
+          {synthesisStreaming}
+          <span className="inline-block h-4 w-1 animate-pulse bg-primary" />
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function ArenaPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -23,7 +56,6 @@ export default function ArenaPage() {
   const webSearchCount = useArenaStore((s) => s.webSearchCount);
   const activityStatus = useArenaStore((s) => s.activityStatus);
   const error = useArenaStore((s) => s.error);
-  const synthesisStreaming = useArenaStore((s) => s.synthesisStreaming);
   const userTimeout = useSetupStore((s) => s.userInterventionTimeoutSecs);
   const documentFormat = useSetupStore((s) => s.documentFormat);
   const discussionMode = useSetupStore((s) => s.discussionMode);
@@ -100,18 +132,8 @@ export default function ArenaPage() {
             {/* Message feed */}
             <DiscussionFeed />
 
-            {/* Synthesis streaming */}
-            {(status === "synthesizing" || synthesisStreaming) && (
-              <div className="border-t border-border bg-card p-4">
-                <p className="mb-1 text-xs font-medium text-primary">
-                  {t("arena.synthesizing")}
-                </p>
-                <p className="whitespace-pre-wrap text-sm text-foreground">
-                  {synthesisStreaming}
-                  <span className="inline-block h-4 w-1 animate-pulse bg-primary" />
-                </p>
-              </div>
-            )}
+            {/* Synthesis streaming (isolated component to avoid cascading re-renders) */}
+            <SynthesisStreamingPanel />
 
             {/* User input area (when it's user's turn) */}
             {userTurnActive && (
