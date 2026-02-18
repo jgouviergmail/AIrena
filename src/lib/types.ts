@@ -52,10 +52,12 @@ export interface DiscussionConfig {
   discussionMode: DiscussionMode;
   documentFormat: DocumentFormat;
   argumentMapEnabled: boolean;
+  documentInjectionMode: DocumentInjectionMode;
 }
 
 export type DiscussionMode = "debate" | "ideation" | "coConstruction" | "userDriven" | "socratic" | "tutorial" | "critiqueReview" | "collaborativeFiction";
 export type DocumentFormat = "none" | "txt" | "md" | "csv";
+export type DocumentInjectionMode = "rag" | "fullInjection";
 
 export type SpeakerRole = "IArbitre" | "GladIAteur" | "user";
 export type ReactionType = "like" | "dislike";
@@ -109,6 +111,8 @@ export interface AppSettings {
   tavilyUsageHistory: string;
   embeddingModel: string;
   licenseKey: string;
+  tokenBudgetPriorities: string;
+  numCtx: number;
 }
 
 export interface LicenseStatus {
@@ -337,4 +341,100 @@ export interface BanInfo {
   remaining: number;
   totalBans: number;
   justIssued: boolean;
+}
+
+// ── Token Budget types ──────────────────────────────────────────────────
+
+export interface ModelArchInfo {
+  family: string;
+  blockCount: number;
+  headCount: number;
+  headCountKv: number;
+  embeddingLength: number;
+  headDim: number;
+  contextLength: number;
+  quantization: string;
+  kvBytesPerToken: number;
+}
+
+export interface VramStatus {
+  gpuName: string;
+  totalMb: number;
+  freeMb: number;
+  detectionMethod: string;
+}
+
+export interface ModelBudgetInfo {
+  arch: ModelArchInfo | null;
+  vram: VramStatus | null;
+  recommendedNumCtx: number | null;
+  currentNumCtx: number | null;
+  ollamaVramMb: number | null;
+  warnings: string[];
+}
+
+export type BudgetSection =
+  | "currentTurnMessages"
+  | "immediateMemory"
+  | "contextualSummary"
+  | "cognitiveDirectives"
+  | "arbitreDirectives"
+  | "fullDocument"
+  | "ragContext"
+  | "webWikiSearch"
+  | "positionalMap";
+
+/** Sections whose priority rank can be configured by the user in Settings. */
+export const CONFIGURABLE_BUDGET_SECTIONS: BudgetSection[] = [
+  "currentTurnMessages",
+  "immediateMemory",
+  "contextualSummary",
+  "cognitiveDirectives",
+  "arbitreDirectives",
+  "webWikiSearch",
+  "positionalMap",
+];
+
+export interface SectionPriority {
+  section: BudgetSection;
+  rank: number;
+  floor: number;
+  ceiling: number;
+}
+
+export interface BudgetFeatures {
+  webSearchEnabled: boolean;
+  wikiSearchEnabled: boolean;
+  ragEnabled: boolean;
+  documentChars: number;
+}
+
+export interface BudgetParams {
+  numCtx: number;
+  numPredict: number;
+  systemPromptChars: number;
+  nGladiateurs: number;
+  language: string;
+  features: BudgetFeatures;
+}
+
+export interface SectionAllocation {
+  section: BudgetSection;
+  allocatedChars: number;
+  floorChars: number;
+  ceilingChars: number;
+}
+
+export type BudgetQualityLevel = "optimal" | "degraded" | "insufficient";
+
+export interface TokenBudgetPreview {
+  totalTokens: number;
+  reservedTokens: number;
+  availableTokens: number;
+  sections: SectionAllocation[];
+  warnings: string[];
+  fullDocumentMode: boolean;
+  charsPerToken: number;
+  qualityLevel: BudgetQualityLevel;
+  documentAvailableTokens: number;
 }

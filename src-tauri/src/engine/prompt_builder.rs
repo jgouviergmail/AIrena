@@ -1,4 +1,5 @@
 use crate::constants;
+use crate::engine::token_budget::TokenBudget;
 use crate::models::discussion::DiscussionMode;
 use crate::models::emotion::EmotionalProfile;
 use crate::models::memory::ParticipantMemory;
@@ -17,9 +18,15 @@ pub fn build_introduction_prompt(
     discussion_language: &str,
     web_search_results: Option<&str>,
     mode: &DiscussionMode,
+    full_document: Option<&str>,
+    budget: &TokenBudget,
 ) -> String {
+    // Truncate web search results to budget allocation.
+    let web_search_results = web_search_results
+        .map(|r| truncate(r, budget.external_knowledge_chars()));
     let participants = participant_names.join(", ");
     let datetime = build_datetime_context(discussion_language);
+    let full_doc_block = build_full_document_block(full_document, budget.full_document_chars, discussion_language);
     let web_block = web_search_results
         .map(|r| {
             let instruction = match discussion_language {
@@ -41,7 +48,7 @@ pub fn build_introduction_prompt(
         return match discussion_language {
             "en" => format!(
                 "{}\n\nYou are the moderator of a collaborative fiction exercise. \
-                 The theme is: \"{}\"\nThe co-authors are: {}{}\n\n\
+                 The theme is: \"{}\"\nThe co-authors are: {}{}{}\n\n\
                  Briefly explain the rules (2-3 sentences): this is a relay-written story where the user \
                  writes the opening, then each co-author continues the story in sequence where the previous \
                  writer left off. Transitions must be seamless and coherent.\n\
@@ -49,22 +56,22 @@ pub fn build_introduction_prompt(
                  Then invite the user to write the story opening.\n\
                  IMPORTANT: Do NOT use any markdown formatting (no #, ##, **, *, -, bullet points, code blocks). Write in plain conversational text only.\n\
                  IMPORTANT: You MUST respond entirely in English.",
-                datetime, topic, participants, web_block, mode_instructions
+                datetime, topic, participants, web_block, full_doc_block, mode_instructions
             ),
             "zh" => format!(
                 "{}\n\n你是一个协作小说练习的主持人。\
-                 主题是：\"{}\"\n共同作者有：{}{}\n\n\
+                 主题是：\"{}\"\n共同作者有：{}{}{}\n\n\
                  简要解释规则（2-3句话）：这是一个接力写作故事，用户写开头，\
                  然后每位共同作者按顺序从上一位作者停笔的地方继续。过渡必须流畅且连贯。\n\
                  {}\n\
                  然后邀请用户写故事开头。\n\
                  重要：不要使用任何markdown格式（不要用#、##、**、*、-、列表、代码块）。只用纯对话文本。\n\
                  重要：你必须完全用中文回答。",
-                datetime, topic, participants, web_block, mode_instructions
+                datetime, topic, participants, web_block, full_doc_block, mode_instructions
             ),
             _ => format!(
                 "{}\n\nTu es le modérateur d'un exercice de fiction collaborative. \
-                 Le thème est : \"{}\"\nLes co-auteurs sont : {}{}\n\n\
+                 Le thème est : \"{}\"\nLes co-auteurs sont : {}{}{}\n\n\
                  Explique brièvement les règles (2-3 phrases) : c'est une histoire écrite en relais où l'utilisateur \
                  écrit l'ouverture, puis chaque co-auteur continue l'histoire à la suite du précédent. \
                  Les transitions doivent être fluides et cohérentes.\n\
@@ -72,7 +79,7 @@ pub fn build_introduction_prompt(
                  Puis invite l'utilisateur à écrire l'ouverture de l'histoire.\n\
                  IMPÉRATIF : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes à puces, blocs de code). Écris uniquement en texte conversationnel simple.\n\
                  IMPÉRATIF : Tu DOIS répondre intégralement en français.",
-                datetime, topic, participants, web_block, mode_instructions
+                datetime, topic, participants, web_block, full_doc_block, mode_instructions
             ),
         };
     }
@@ -80,36 +87,36 @@ pub fn build_introduction_prompt(
     match discussion_language {
         "en" => format!(
             "{}\n\nYou are the moderator of a {}. The topic is: \"{}\"\n\
-             The participants are: {}{}\n\n\
+             The participants are: {}{}{}\n\n\
              Introduce the topic in a BROAD and NEUTRAL manner (2-3 sentences), covering the key dimensions \
              and perspectives of the subject without narrowing it to a single angle or your personal bias.\n\
              {}\n\
              Then invite the first participant to speak.\n\
              IMPORTANT: Do NOT use any markdown formatting (no #, ##, **, *, -, bullet points, code blocks). Write in plain conversational text only.\n\
              IMPORTANT: You MUST respond entirely in English.",
-            datetime, mode_desc, topic, participants, web_block, mode_instructions
+            datetime, mode_desc, topic, participants, web_block, full_doc_block, mode_instructions
         ),
         "zh" => format!(
             "{}\n\n你是一场{}的主持人。主题是：\"{}\"\n\
-             参与者有：{}{}\n\n\
+             参与者有：{}{}{}\n\n\
              以广泛且中立的方式简要介绍主题（2-3句话），涵盖该主题的主要方面和视角，\
              不要将其缩小为单一角度或个人偏见。\n\
              {}\n\
              然后邀请第一位参与者发言。\n\
              重要：不要使用任何markdown格式（不要用#、##、**、*、-、列表、代码块）。只用纯对话文本。\n\
              重要：你必须完全用中文回答。",
-            datetime, mode_desc, topic, participants, web_block, mode_instructions
+            datetime, mode_desc, topic, participants, web_block, full_doc_block, mode_instructions
         ),
         _ => format!(
             "{}\n\nTu es le modérateur d'un(e) {}. Le sujet est : \"{}\"\n\
-             Les participants sont : {}{}\n\n\
+             Les participants sont : {}{}{}\n\n\
              Présente le sujet de manière LARGE et NEUTRE (2-3 phrases), en couvrant les dimensions \
              et perspectives clés du sujet sans le réduire à un seul angle ou à ton biais personnel.\n\
              {}\n\
              Puis invite le premier participant à prendre la parole.\n\
              IMPÉRATIF : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes à puces, blocs de code). Écris uniquement en texte conversationnel simple.\n\
              IMPÉRATIF : Tu DOIS répondre intégralement en français.",
-            datetime, mode_desc, topic, participants, web_block, mode_instructions
+            datetime, mode_desc, topic, participants, web_block, full_doc_block, mode_instructions
         ),
     }
 }
@@ -202,7 +209,11 @@ pub fn build_thought_prompt(
     max_turns: Option<u32>,
     web_search_results: Option<&str>,
     mode: &DiscussionMode,
+    budget: &TokenBudget,
 ) -> String {
+    // Truncate web search results to budget allocation.
+    let web_search_results = web_search_results
+        .map(|r| truncate(r, budget.external_knowledge_chars()));
     let emotion_suffix = if emotion_driven {
         let desc = describe_emotions(emotions, discussion_language);
         let threshold = build_threshold_instructions(emotions, discussion_language)
@@ -310,6 +321,8 @@ pub fn build_intervention_prompt(
     participant_names: &[String],
     dynamic_directive: Option<&str>,
     mode: &DiscussionMode,
+    full_document: Option<&str>,
+    budget: &TokenBudget,
 ) -> (String, String) {
     // Detect if the user has spoken in this turn
     let user_has_spoken = current_turn_messages
@@ -443,7 +456,9 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
         }
     }
 
-    // Web/wiki search results (injected before memory context)
+    // Web/wiki/RAG search results (truncated to combined external knowledge budget)
+    let web_search_results = web_search_results
+        .map(|r| truncate(r, budget.external_knowledge_chars()));
     if let Some(web_results) = web_search_results {
         user_msg.push_str(web_results);
         user_msg.push('\n');
@@ -467,17 +482,25 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
         user_msg.push_str("\n\n");
     }
 
-    // Contextual memory (summary)
+    // Full document injection (when the entire document fits in the budget)
+    let full_doc_block = build_full_document_block(full_document, budget.full_document_chars, discussion_language);
+    if !full_doc_block.is_empty() {
+        user_msg.push_str(&full_doc_block);
+        user_msg.push_str("\n\n");
+    }
+
+    // Contextual memory (summary — truncated to current speaker's budget)
     if !memory.contextual_summary.is_empty() {
         let label = match discussion_language {
             "en" => "Discussion summary so far",
             "zh" => "到目前为止的讨论摘要",
             _ => "Résumé de la discussion jusqu'ici",
         };
-        user_msg.push_str(&format!("[{}]\n{}\n\n", label, memory.contextual_summary));
+        let summary = truncate(&memory.contextual_summary, budget.contextual_summary_chars);
+        user_msg.push_str(&format!("[{}]\n{}\n\n", label, summary));
     }
 
-    // Positional memory
+    // Positional memory (truncated per participant within budget)
     if !memory.positional_map.is_empty() {
         let label = match discussion_language {
             "en" => "Participants' positions",
@@ -485,8 +508,10 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
             _ => "Positions des participants",
         };
         user_msg.push_str(&format!("[{}]\n", label));
+        let per_participant = budget.positional_map_chars / memory.positional_map.len().max(1);
         for (name, pos) in &memory.positional_map {
-            user_msg.push_str(&format!("- {} : {}\n", name, pos.stance));
+            let stance = truncate(&pos.stance, per_participant);
+            user_msg.push_str(&format!("- {} : {}\n", name, stance));
         }
         user_msg.push('\n');
     }
@@ -522,7 +547,7 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
                 user_msg.push_str(&format!(
                     "{}: {}\n",
                     msg.speaker_name,
-                    truncate(&msg.content, constants::TRUNC_IMMEDIATE_MEMORY)
+                    truncate(&msg.content, budget.immediate_memory_msg_chars)
                 ));
             }
             user_msg.push('\n');
@@ -591,7 +616,7 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
                     user_msg.push_str(&format!(
                         "{}: {}\n",
                         msg.speaker_name,
-                        truncate(&msg.content, constants::TRUNC_CURRENT_TURN)
+                        truncate(&msg.content, budget.current_turn_msg_chars)
                     ));
                 }
                 user_msg.push('\n');
@@ -609,7 +634,7 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
             for msg in &arbitre_msgs {
                 user_msg.push_str(&format!(
                     "{}\n",
-                    truncate(&msg.content, constants::TRUNC_MODERATOR_DIRECTIVE)
+                    truncate(&msg.content, budget.arbitre_directives_chars)
                 ));
             }
             user_msg.push('\n');
@@ -657,6 +682,7 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
     // Final instruction — dynamic directive replaces static instructions when available
     let instruction = if let Some(directive) = dynamic_directive {
         // Dynamic behavioral directive from the meta-orchestrator (emotion_driven mode)
+        let directive = truncate(directive, budget.cognitive_directives_chars);
         format!("{}{}", directive, &end_awareness)
     } else {
         // Unified mode-aware instructions via compositional templates (all 8 modes)
@@ -902,7 +928,11 @@ pub fn build_memory_update_prompt(
     turn_messages: &str,
     discussion_language: &str,
     mode: &DiscussionMode,
+    budget: &TokenBudget,
 ) -> String {
+    // Truncate inputs to budget allocations.
+    let contextual_summary = truncate(contextual_summary, budget.contextual_summary_chars);
+    let positional_map_json = truncate(positional_map_json, budget.positional_map_chars);
     let summary_intro = if contextual_summary.is_empty() {
         match discussion_language {
             "en" => "This is the beginning of the discussion. Create the first summary.".to_string(),
@@ -951,6 +981,7 @@ pub fn build_memory_update_prompt(
 }
 
 /// Build the synthesis prompt for the IArbitre
+#[allow(clippy::too_many_arguments)]
 pub fn build_synthesis_prompt(
     topic: &str,
     memory: &ParticipantMemory,
@@ -958,7 +989,12 @@ pub fn build_synthesis_prompt(
     web_search_results: Option<&str>,
     mode: &DiscussionMode,
     document_context: Option<&str>,
+    full_document: Option<&str>,
+    budget: &TokenBudget,
 ) -> String {
+    // Truncate web search results to budget allocation.
+    let web_search_results = web_search_results
+        .map(|r| truncate(r, budget.external_knowledge_chars()));
     let positions = memory
         .positional_map
         .iter()
@@ -986,40 +1022,41 @@ pub fn build_synthesis_prompt(
     let doc_block = document_context
         .map(|d| format!("\n\n{}", d))
         .unwrap_or_default();
+    let full_doc_block = build_full_document_block(full_document, budget.full_document_chars, discussion_language);
 
     match discussion_language {
         "en" => format!(
             "{}\n\nThe {} on \"{}\" is now over.\n\n\
              Discussion summary:\n{}\n\n\
-             Final positions:\n{}{}{}\n\n\
+             Final positions:\n{}{}{}{}\n\n\
              As moderator, produce a structured synthesis:\n\
              {}\n\n\
              Use Markdown formatting: headings (##), bullet points, **bold** for key ideas. \
              Be balanced, thorough, and airy — use short paragraphs and whitespace for readability.\n\n\
              IMPORTANT: Write your entire synthesis in English.",
-            datetime, mode_desc, topic, memory.contextual_summary, positions, web_block, doc_block, synth_instructions
+            datetime, mode_desc, topic, memory.contextual_summary, positions, web_block, doc_block, full_doc_block, synth_instructions
         ),
         "zh" => format!(
             "{}\n\n关于\"{}\"的{}现在结束了。\n\n\
              讨论摘要：\n{}\n\n\
-             最终立场：\n{}{}{}\n\n\
+             最终立场：\n{}{}{}{}\n\n\
              作为主持人，请做出结构化总结：\n\
              {}\n\n\
              使用Markdown格式：标题（##）、要点列表、**粗体**标记关键观点。\
              保持公正、全面、通透——使用短段落和留白提高可读性。\n\n\
              重要：请用中文撰写整篇综合报告。",
-            datetime, topic, mode_desc, memory.contextual_summary, positions, web_block, doc_block, synth_instructions
+            datetime, topic, mode_desc, memory.contextual_summary, positions, web_block, doc_block, full_doc_block, synth_instructions
         ),
         _ => format!(
             "{}\n\nLe/la {} sur \"{}\" est maintenant terminé(e).\n\n\
              Résumé de la discussion :\n{}\n\n\
-             Positions finales :\n{}{}{}\n\n\
+             Positions finales :\n{}{}{}{}\n\n\
              En tant que modérateur, produis une synthèse structurée :\n\
              {}\n\n\
              Utilise le format Markdown : titres (##), listes à puces, **gras** pour les idées clés. \
              Sois équilibré, exhaustif et aéré — utilise des paragraphes courts et de l'espace pour la lisibilité.\n\n\
              IMPÉRATIF : Rédige l'intégralité de ta synthèse en français.",
-            datetime, mode_desc, topic, memory.contextual_summary, positions, web_block, doc_block, synth_instructions
+            datetime, mode_desc, topic, memory.contextual_summary, positions, web_block, doc_block, full_doc_block, synth_instructions
         ),
     }
 }
@@ -1733,6 +1770,32 @@ pub fn build_wiki_results_context(
     }
 
     output
+}
+
+/// Build a [Reference Document] block for full document injection.
+/// Returns an empty string if `full_document` is `None` or empty.
+/// The document text is truncated to `max_chars` (from the token budget allocation).
+fn build_full_document_block(full_document: Option<&str>, max_chars: usize, lang: &str) -> String {
+    let doc = match full_document {
+        Some(d) if !d.is_empty() => d,
+        _ => return String::new(),
+    };
+    let truncated = truncate(doc, max_chars);
+    let (header, instruction) = match lang {
+        "en" => (
+            "[REFERENCE DOCUMENT — Imported Knowledge Base]",
+            "Use this document as your primary knowledge source. Cite specific facts, data, or passages naturally in your reasoning.",
+        ),
+        "zh" => (
+            "[参考文档 — 导入的知识库]",
+            "将此文档作为你的主要知识来源。在推理中自然地引用具体事实、数据或段落。",
+        ),
+        _ => (
+            "[DOCUMENT DE RÉFÉRENCE — Base de connaissances importée]",
+            "Utilise ce document comme source principale de connaissances. Cite naturellement des faits, données ou passages précis dans ton raisonnement.",
+        ),
+    };
+    format!("\n\n{}\n{}\n\n--- DOCUMENT ---\n{}\n--- FIN ---", header, instruction, truncated)
 }
 
 /// Build a date/time context string with timezone offset.
@@ -2621,5 +2684,50 @@ mod tests {
         );
         assert!(usr_zh.contains("想法"), "ZH user should contain '想法': {usr_zh}");
         assert!(usr_zh.contains("记住"), "ZH user should contain '记住': {usr_zh}");
+    }
+
+    #[test]
+    fn test_build_full_document_block_none() {
+        let result = build_full_document_block(None, 5000, "fr");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_build_full_document_block_empty_string() {
+        let result = build_full_document_block(Some(""), 5000, "fr");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_build_full_document_block_french() {
+        let result = build_full_document_block(Some("Contenu du document"), 5000, "fr");
+        assert!(result.contains("DOCUMENT DE RÉFÉRENCE"));
+        assert!(result.contains("--- DOCUMENT ---"));
+        assert!(result.contains("Contenu du document"));
+        assert!(result.contains("--- FIN ---"));
+    }
+
+    #[test]
+    fn test_build_full_document_block_english() {
+        let result = build_full_document_block(Some("Document content"), 5000, "en");
+        assert!(result.contains("REFERENCE DOCUMENT"));
+        assert!(result.contains("Document content"));
+    }
+
+    #[test]
+    fn test_build_full_document_block_chinese() {
+        let result = build_full_document_block(Some("文档内容"), 5000, "zh");
+        assert!(result.contains("参考文档"));
+        assert!(result.contains("文档内容"));
+    }
+
+    #[test]
+    fn test_build_full_document_block_truncation() {
+        let long_doc = "A".repeat(10_000);
+        let result = build_full_document_block(Some(&long_doc), 100, "en");
+        // The document text should be truncated to ~100 chars
+        assert!(result.contains("REFERENCE DOCUMENT"));
+        // The result should NOT contain all 10K chars
+        assert!(result.len() < 500, "Block should be truncated, got {} chars", result.len());
     }
 }

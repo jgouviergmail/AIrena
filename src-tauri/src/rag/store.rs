@@ -53,6 +53,9 @@ pub struct RagStore {
     chunks: Vec<StoredChunk>,
     bm25_index: Bm25Index,
     documents: HashMap<String, RagDocumentInfo>,
+    /// Original full text of each imported document (doc_id → text).
+    /// Used for full document injection when the budget allows it.
+    full_texts: HashMap<String, String>,
     /// Global chunk counter (used as BM25 doc_id, monotonically increasing)
     next_chunk_id: usize,
 }
@@ -64,6 +67,7 @@ impl RagStore {
             chunks: Vec::new(),
             bm25_index: Bm25Index::new(),
             documents: HashMap::new(),
+            full_texts: HashMap::new(),
             next_chunk_id: 0,
         }
     }
@@ -110,6 +114,7 @@ impl RagStore {
             char_count,
         };
         self.documents.insert(doc_id.to_string(), info.clone());
+        self.full_texts.insert(doc_id.to_string(), doc.text.clone());
         info
     }
 
@@ -118,6 +123,7 @@ impl RagStore {
         if self.documents.remove(doc_id).is_none() {
             return false;
         }
+        self.full_texts.remove(doc_id);
 
         self.chunks.retain(|c| c.doc_id != doc_id);
 
@@ -139,6 +145,32 @@ impl RagStore {
 
     pub fn is_empty(&self) -> bool {
         self.chunks.is_empty()
+    }
+
+    /// Total character count across all imported documents.
+    pub fn total_char_count(&self) -> usize {
+        self.documents.values().map(|d| d.char_count).sum()
+    }
+
+    /// Concatenate the full text of all imported documents, separated by headers.
+    /// Returns `None` if no documents are stored.
+    pub fn get_full_text(&self) -> Option<String> {
+        if self.full_texts.is_empty() {
+            return None;
+        }
+        // Sort by doc_id for deterministic ordering
+        let mut entries: Vec<_> = self.full_texts.iter().collect();
+        entries.sort_by_key(|(id, _)| *id);
+        let mut result = String::new();
+        for (doc_id, text) in &entries {
+            if let Some(info) = self.documents.get(*doc_id) {
+                if !result.is_empty() {
+                    result.push_str("\n\n---\n\n");
+                }
+                result.push_str(&format!("[{}]\n{}", info.file_name, text));
+            }
+        }
+        Some(result)
     }
 
     /// Dimension of the stored embeddings (None if no chunks).
@@ -574,6 +606,7 @@ mod tests {
             }],
             bm25_index: Bm25Index::new(),
             documents: HashMap::new(),
+            full_texts: HashMap::new(),
             next_chunk_id: 1,
         };
 
@@ -598,6 +631,7 @@ mod tests {
             }],
             bm25_index: Bm25Index::new(),
             documents: HashMap::new(),
+            full_texts: HashMap::new(),
             next_chunk_id: 1,
         };
 
@@ -620,6 +654,7 @@ mod tests {
             }],
             bm25_index: Bm25Index::new(),
             documents: HashMap::new(),
+            full_texts: HashMap::new(),
             next_chunk_id: 1,
         };
 
@@ -638,5 +673,120 @@ mod tests {
 
         let zh = build_selection_system_prompt("zh");
         assert!(zh.contains("文档检索助手"));
+    }
+
+    #[test]
+    fn test_total_char_count_empty() {
+        let store = RagStore {
+            embedding_client: EmbeddingClient::new("http://localhost:11434", "test"),
+            chunks: Vec::new(),
+            bm25_index: Bm25Index::new(),
+            documents: HashMap::new(),
+            full_texts: HashMap::new(),
+            next_chunk_id: 0,
+        };
+        assert_eq!(store.total_char_count(), 0);
+    }
+
+    #[test]
+    fn test_total_char_count_multiple_docs() {
+        let mut docs = HashMap::new();
+        docs.insert("d1".to_string(), RagDocumentInfo {
+            doc_id: "d1".to_string(),
+            file_name: "a.txt".to_string(),
+            format: "txt".to_string(),
+            chunk_count: 1,
+            char_count: 100,
+        });
+        docs.insert("d2".to_string(), RagDocumentInfo {
+            doc_id: "d2".to_string(),
+            file_name: "b.txt".to_string(),
+            format: "txt".to_string(),
+            chunk_count: 2,
+            char_count: 250,
+        });
+        let store = RagStore {
+            embedding_client: EmbeddingClient::new("http://localhost:11434", "test"),
+            chunks: Vec::new(),
+            bm25_index: Bm25Index::new(),
+            documents: docs,
+            full_texts: HashMap::new(),
+            next_chunk_id: 0,
+        };
+        assert_eq!(store.total_char_count(), 350);
+    }
+
+    #[test]
+    fn test_get_full_text_empty() {
+        let store = RagStore {
+            embedding_client: EmbeddingClient::new("http://localhost:11434", "test"),
+            chunks: Vec::new(),
+            bm25_index: Bm25Index::new(),
+            documents: HashMap::new(),
+            full_texts: HashMap::new(),
+            next_chunk_id: 0,
+        };
+        assert!(store.get_full_text().is_none());
+    }
+
+    #[test]
+    fn test_get_full_text_single_doc() {
+        let mut docs = HashMap::new();
+        docs.insert("d1".to_string(), RagDocumentInfo {
+            doc_id: "d1".to_string(),
+            file_name: "notes.md".to_string(),
+            format: "md".to_string(),
+            chunk_count: 1,
+            char_count: 11,
+        });
+        let mut full_texts = HashMap::new();
+        full_texts.insert("d1".to_string(), "Hello World".to_string());
+        let store = RagStore {
+            embedding_client: EmbeddingClient::new("http://localhost:11434", "test"),
+            chunks: Vec::new(),
+            bm25_index: Bm25Index::new(),
+            documents: docs,
+            full_texts,
+            next_chunk_id: 0,
+        };
+        let text = store.get_full_text().unwrap();
+        assert!(text.contains("[notes.md]"));
+        assert!(text.contains("Hello World"));
+        assert!(!text.contains("---"), "Single doc should have no separator");
+    }
+
+    #[test]
+    fn test_get_full_text_multiple_docs_sorted() {
+        let mut docs = HashMap::new();
+        docs.insert("b".to_string(), RagDocumentInfo {
+            doc_id: "b".to_string(),
+            file_name: "second.txt".to_string(),
+            format: "txt".to_string(),
+            chunk_count: 1,
+            char_count: 5,
+        });
+        docs.insert("a".to_string(), RagDocumentInfo {
+            doc_id: "a".to_string(),
+            file_name: "first.txt".to_string(),
+            format: "txt".to_string(),
+            chunk_count: 1,
+            char_count: 5,
+        });
+        let mut full_texts = HashMap::new();
+        full_texts.insert("a".to_string(), "Alpha".to_string());
+        full_texts.insert("b".to_string(), "Bravo".to_string());
+        let store = RagStore {
+            embedding_client: EmbeddingClient::new("http://localhost:11434", "test"),
+            chunks: Vec::new(),
+            bm25_index: Bm25Index::new(),
+            documents: docs,
+            full_texts,
+            next_chunk_id: 0,
+        };
+        let text = store.get_full_text().unwrap();
+        let first_pos = text.find("[first.txt]").unwrap();
+        let second_pos = text.find("[second.txt]").unwrap();
+        assert!(first_pos < second_pos, "Documents should be sorted by doc_id");
+        assert!(text.contains("---"), "Multiple docs should have separator");
     }
 }

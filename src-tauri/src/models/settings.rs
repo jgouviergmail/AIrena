@@ -43,6 +43,18 @@ pub struct AppSettings {
     pub embedding_model: String,
     #[serde(default)]
     pub license_key: String,
+    /// JSON-serialized token budget priorities (user-customizable ordering).
+    /// Empty string means "use defaults".
+    #[serde(default)]
+    pub token_budget_priorities: String,
+    /// Global context window size in tokens (shared by all speakers).
+    /// Auto-detected from GPU VRAM, adjustable by the user.
+    #[serde(default = "default_num_ctx")]
+    pub num_ctx: u32,
+}
+
+fn default_num_ctx() -> u32 {
+    constants::LLM_DEFAULT_NUM_CTX
 }
 
 impl Default for AppSettings {
@@ -60,6 +72,8 @@ impl Default for AppSettings {
             tavily_usage_history: "[]".to_string(),
             embedding_model: String::new(),
             license_key: String::new(),
+            token_budget_priorities: String::new(),
+            num_ctx: constants::LLM_DEFAULT_NUM_CTX,
         }
     }
 }

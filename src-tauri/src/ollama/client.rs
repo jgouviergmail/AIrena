@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 use super::error::OllamaError;
-use super::types::{ChatRequest, ChatResponse, ModelInfo};
+use super::types::{ChatRequest, ChatResponse, ModelInfo, PsResponse, ShowResponse};
 use crate::constants;
 use crate::models::settings::LlmParams;
 
@@ -205,16 +205,63 @@ impl OllamaClient {
         }
     }
 
+    /// Unload a specific model from Ollama VRAM (keep_alive: 0).
+    /// Uses POST /api/generate with keep_alive:0 — the documented Ollama unload method.
+    pub async fn unload_model(
+        base_url: &str,
+        model_name: &str,
+        client: &reqwest::Client,
+    ) -> Result<(), OllamaError> {
+        let url = format!("{base_url}/api/generate");
+        let body = serde_json::json!({
+            "model": model_name,
+            "keep_alive": 0
+        });
+        let resp = client
+            .post(&url)
+            .json(&body)
+            .timeout(Duration::from_secs(constants::OLLAMA_CHECK_TIMEOUT_SECS))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            tracing::warn!("Failed to unload model {model_name}: HTTP {}", resp.status());
+        }
+        Ok(())
+    }
+
+    /// Unload all currently loaded models from Ollama VRAM.
+    pub async fn unload_all_models(&self) -> Result<usize, OllamaError> {
+        let ps = self.list_running_models().await?;
+        let count = ps.models.len();
+        for model in &ps.models {
+            if let Err(e) =
+                Self::unload_model(&self.base_url, &model.name, &self.client).await
+            {
+                tracing::warn!("Failed to unload {}: {e}", model.name);
+            }
+        }
+        tracing::info!("Unloaded {count} model(s) from VRAM");
+        Ok(count)
+    }
+
     /// Preload a model into Ollama's memory by sending a minimal chat request.
     /// This avoids cold-start delays when the discussion starts.
-    pub async fn preload_model(&self) -> Result<(), OllamaError> {
+    ///
+    /// # Arguments
+    /// - `num_ctx` — Context size to allocate. **Critical**: without this, Ollama
+    ///   uses the model's native context length (often 128K), which can consume
+    ///   all available VRAM just for the KV cache.
+    pub async fn preload_model(&self, num_ctx: Option<u32>) -> Result<(), OllamaError> {
         let url = format!("{}/api/chat", self.base_url);
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": [{"role": "user", "content": "hello"}],
             "stream": false,
             "keep_alive": "5m"
         });
+        if let Some(ctx) = num_ctx {
+            body["options"] = serde_json::json!({ "num_ctx": ctx });
+        }
         let resp = self.client
             .post(&url)
             .json(&body)
@@ -251,6 +298,54 @@ impl OllamaClient {
             .filter_map(|m| serde_json::from_value(m.clone()).ok())
             .collect();
         Ok(models)
+    }
+
+    /// Fetch model architecture and metadata via POST `/api/show`.
+    pub async fn show_model(&self, model_name: &str) -> Result<ShowResponse, OllamaError> {
+        let url = format!("{}/api/show", self.base_url);
+        let body = serde_json::json!({ "name": model_name });
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .timeout(Duration::from_secs(constants::OLLAMA_CHECK_TIMEOUT_SECS))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            return Err(if status.as_u16() == 404 {
+                OllamaError::ModelNotFound(model_name.to_string())
+            } else {
+                OllamaError::ConnectionFailed(format!("show_model: HTTP {status}"))
+            });
+        }
+
+        resp.json::<ShowResponse>()
+            .await
+            .map_err(|e| OllamaError::ConnectionFailed(format!("show_model parse error: {e}")))
+    }
+
+    /// List currently loaded/running models via GET `/api/ps`.
+    pub async fn list_running_models(&self) -> Result<PsResponse, OllamaError> {
+        let url = format!("{}/api/ps", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .timeout(Duration::from_secs(constants::OLLAMA_CHECK_TIMEOUT_SECS))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(OllamaError::ConnectionFailed(format!(
+                "list_running_models: HTTP {}",
+                resp.status()
+            )));
+        }
+
+        resp.json::<PsResponse>()
+            .await
+            .map_err(|e| OllamaError::ConnectionFailed(format!("list_running_models parse error: {e}")))
     }
 
     /// Build a ChatRequest from LlmParams

@@ -24,9 +24,22 @@ function Loading() {
 
 function AppInit({ children }: { children: React.ReactNode }) {
   const hydrate = useSettingsStore((s) => s.hydrate);
+  const loading = useSettingsStore((s) => s.loading);
+  const ollamaModel = useSettingsStore((s) => s.settings.ollamaModel);
+  const ollamaInitialized = useSettingsStore((s) => s.ollamaInitialized);
+  const initializeOllama = useSettingsStore((s) => s.initializeOllama);
+
   useEffect(() => {
     hydrate();
   }, [hydrate]);
+
+  // After hydration, initialize Ollama (unload VRAM → detect → recommend → preload)
+  useEffect(() => {
+    if (!loading && ollamaModel && !ollamaInitialized) {
+      initializeOllama();
+    }
+  }, [loading, ollamaModel, ollamaInitialized, initializeOllama]);
+
   return <>{children}</>;
 }
 

@@ -10,53 +10,48 @@ export function LlmParamsForm({ params, onChange }: Props) {
   const { t } = useTranslation();
 
   return (
-    <div className="grid grid-cols-2 gap-3">
-      <SliderField
-        label={t("setup.temperature")}
-        value={params.temperature}
-        min={0}
-        max={2}
-        step={0.1}
-        onChange={(v) => onChange({ temperature: v })}
-      />
-      <SliderField
-        label={t("setup.topP")}
-        value={params.topP}
-        min={0}
-        max={1}
-        step={0.05}
-        onChange={(v) => onChange({ topP: v })}
-      />
-      <SliderField
-        label={t("setup.topK")}
-        value={params.topK}
-        min={1}
-        max={100}
-        step={1}
-        onChange={(v) => onChange({ topK: v })}
-      />
-      <NumberField
-        label={t("setup.numPredict")}
-        value={params.numPredict}
-        min={64}
-        max={4096}
-        onChange={(v) => onChange({ numPredict: v })}
-      />
-      <NumberField
-        label={t("setup.numCtx")}
-        value={params.numCtx}
-        min={2048}
-        max={131072}
-        onChange={(v) => onChange({ numCtx: v })}
-      />
-      <SliderField
-        label={t("setup.repeatPenalty")}
-        value={params.repeatPenalty}
-        min={1}
-        max={2}
-        step={0.05}
-        onChange={(v) => onChange({ repeatPenalty: v })}
-      />
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <SliderField
+          label={t("setup.temperature")}
+          value={params.temperature}
+          min={0}
+          max={2}
+          step={0.1}
+          onChange={(v) => onChange({ temperature: v })}
+        />
+        <SliderField
+          label={t("setup.topP")}
+          value={params.topP}
+          min={0}
+          max={1}
+          step={0.05}
+          onChange={(v) => onChange({ topP: v })}
+        />
+        <SliderField
+          label={t("setup.topK")}
+          value={params.topK}
+          min={1}
+          max={100}
+          step={1}
+          onChange={(v) => onChange({ topK: v })}
+        />
+        <NumberField
+          label={t("setup.numPredict")}
+          value={params.numPredict}
+          min={64}
+          max={4096}
+          onChange={(v) => onChange({ numPredict: v })}
+        />
+        <SliderField
+          label={t("setup.repeatPenalty")}
+          value={params.repeatPenalty}
+          min={1}
+          max={2}
+          step={0.05}
+          onChange={(v) => onChange({ repeatPenalty: v })}
+        />
+      </div>
     </div>
   );
 }

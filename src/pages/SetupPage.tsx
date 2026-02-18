@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import {
@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
 import { LlmParamsForm } from "@/components/setup/LlmParamsForm";
+import { TokenBudgetPreviewPanel } from "@/components/setup/TokenBudgetPreview";
 import { PersonaEditor } from "@/components/setup/PersonaEditor";
 import { EmojiPicker } from "@/components/setup/EmojiPicker";
 import { getProfileEmoji } from "@/lib/profile-emoji";
@@ -44,12 +45,12 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { cn } from "@/lib/utils";
 import { DEFAULT_LLM_PARAMS } from "@/lib/types";
-import type { DiscussionMode, DocumentFormat, GladIAteurConfig, LicenseStatus, PredefinedProfile } from "@/lib/types";
+import type { BudgetParams, DiscussionMode, DocumentFormat, GladIAteurConfig, LicenseStatus, PredefinedProfile, SectionPriority, TokenBudgetPreview } from "@/lib/types";
 import * as api from "@/lib/tauri-api";
 import { extractErrorMessage } from "@/lib/error-utils";
 import { toast } from "@/stores/useToastStore";
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 5;
 
 export default function SetupPage() {
   const { t } = useTranslation();
@@ -75,6 +76,8 @@ export default function SetupPage() {
     api.checkLicenseStatus().then(setLicenseStatus).catch(() => {});
   }, []);
 
+  const tokenBudgetPreview = useSetupStore((s) => s.tokenBudgetPreview);
+
   const canNext = () => {
     switch (step) {
       case 0:
@@ -84,7 +87,9 @@ export default function SetupPage() {
       case 2:
         return gladiateurs.length >= 1;
       case 3:
-        return true;
+        return true; // Knowledge step — always passable
+      case 4:
+        return tokenBudgetPreview?.qualityLevel !== "insufficient";
       default:
         return false;
     }
@@ -100,12 +105,23 @@ export default function SetupPage() {
       setError(t("settings.usernameRequired"));
       return;
     }
+    const preview = useSetupStore.getState().tokenBudgetPreview;
+    if (preview?.qualityLevel === "insufficient") {
+      setError(t("setup.budgetQualityInsufficient"));
+      return;
+    }
     startingRef.current = true;
     setStarting(true);
     setError(null);
     arenaReset();
     try {
       const config = buildConfig(settings.username.trim());
+      // Override all speakers' numCtx with the global setting (spread to avoid mutating store)
+      config.arbitre = { ...config.arbitre, llmParams: { ...config.arbitre.llmParams, numCtx: settings.numCtx } };
+      config.gladiateurs = config.gladiateurs.map((g) => ({
+        ...g,
+        llmParams: { ...g.llmParams, numCtx: settings.numCtx },
+      }));
       await api.startDiscussion(config, (event) => {
         handleEvent(event);
       });
@@ -196,7 +212,8 @@ export default function SetupPage() {
                 onAddEmpty={addEmptyGladiateur}
               />
             )}
-            {step === 3 && <StepSummary />}
+            {step === 3 && <StepKnowledge />}
+            {step === 4 && <StepSummary />}
           </div>
         </div>
 
@@ -270,102 +287,6 @@ function StepTopic() {
   const setMaxTurns = useSetupStore((s) => s.setMaxTurns);
   const userInterventionTimeoutSecs = useSetupStore((s) => s.userInterventionTimeoutSecs);
   const setUserTimeout = useSetupStore((s) => s.setUserTimeout);
-  const ragDocuments = useSetupStore((s) => s.ragDocuments);
-  const addRagDocument = useSetupStore((s) => s.addRagDocument);
-  const removeRagDocument = useSetupStore((s) => s.removeRagDocument);
-  const ollamaModel = useSettingsStore((s) => s.settings.ollamaModel);
-  const embeddingModel = useSettingsStore((s) => s.settings.embeddingModel);
-  const [ragImporting, setRagImporting] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-
-  const importFiles = async (paths: string[]) => {
-    setRagImporting(true);
-    try {
-      for (const filePath of paths) {
-        try {
-          const doc = await api.importRagDocument(filePath);
-          addRagDocument(doc);
-        } catch (e: unknown) {
-          const detail = extractErrorMessage(e);
-          const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
-          toast.error(t("setup.ragImportError", { file: fileName }), detail);
-        }
-      }
-    } finally {
-      setRagImporting(false);
-    }
-  };
-
-  const handleRagImport = async () => {
-    const effectiveModel = embeddingModel || ollamaModel;
-    if (!effectiveModel) {
-      toast.warning(t("setup.ragNoModel"));
-      return;
-    }
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        multiple: true,
-        filters: [{
-          name: "Documents",
-          extensions: [...RAG_SUPPORTED_EXTENSIONS],
-        }],
-      });
-      if (!selected || selected.length === 0) return;
-      const paths = Array.isArray(selected) ? selected : [selected];
-      await importFiles(paths);
-    } catch (e: unknown) {
-      toast.error(t("setup.ragImportError", { file: "" }), extractErrorMessage(e));
-    }
-  };
-
-  // Ref to always call the latest drop handler without re-subscribing
-  const dropHandlerRef = useRef<(paths: string[]) => void>(() => {});
-  dropHandlerRef.current = (paths: string[]) => {
-    const effectiveModel = embeddingModel || ollamaModel;
-    if (!effectiveModel) {
-      toast.warning(t("setup.ragNoModel"));
-      return;
-    }
-    const validPaths = paths.filter((p) => {
-      const ext = p.split(".").pop()?.toLowerCase() ?? "";
-      return RAG_SUPPORTED_EXTENSIONS.has(ext);
-    });
-    if (validPaths.length === 0) {
-      toast.warning(t("setup.ragUnsupportedFormat"));
-      return;
-    }
-    importFiles(validPaths);
-  };
-
-  // Subscribe to Tauri drag-drop events (global webview-level)
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let mounted = true;
-    (async () => {
-      const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-      const unsub = await getCurrentWebviewWindow().onDragDropEvent((event) => {
-        if (!mounted) return;
-        if (event.payload.type === "enter" || event.payload.type === "over") {
-          setDragOver(true);
-        } else if (event.payload.type === "leave") {
-          setDragOver(false);
-        } else if (event.payload.type === "drop") {
-          setDragOver(false);
-          dropHandlerRef.current(event.payload.paths);
-        }
-      });
-      if (mounted) {
-        unlisten = unsub;
-      } else {
-        unsub();
-      }
-    })();
-    return () => {
-      mounted = false;
-      unlisten?.();
-    };
-  }, []);
 
   return (
     <div className="space-y-6">
@@ -479,77 +400,6 @@ function StepTopic() {
             {argumentMapEnabled ? t("setup.switchYes") : t("setup.switchNo")}
           </span>
         </div>
-      </div>
-
-      {/* RAG Knowledge Base */}
-      <div className="space-y-2">
-        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
-          <Database className="h-4 w-4 text-purple-500" />
-          {t("setup.ragKnowledgeBase")}
-        </label>
-        <p className="text-xs text-muted-foreground">{t("setup.ragDesc")}</p>
-
-        {!embeddingModel && ollamaModel && (
-          <div className="flex items-start gap-2 rounded-md border border-purple-500/20 bg-purple-500/5 px-3 py-2 text-xs text-muted-foreground">
-            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-purple-500" />
-            <span>{t("setup.ragRecommendModel")}</span>
-          </div>
-        )}
-
-        {dragOver && (
-          <div className="flex flex-col items-center justify-center rounded-md border-2 border-dashed border-purple-500/50 bg-purple-500/5 py-6">
-            <Upload className="h-8 w-8 text-purple-500" />
-            <p className="mt-2 text-sm font-medium text-purple-500">{t("setup.ragDropFiles")}</p>
-          </div>
-        )}
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleRagImport}
-            disabled={ragImporting}
-            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
-          >
-            {ragImporting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Plus className="h-3.5 w-3.5" />
-            )}
-            {ragImporting ? t("setup.ragImporting") : t("setup.ragImportFiles")}
-          </button>
-          <span className="text-xs text-muted-foreground">{t("setup.ragDropHint")}</span>
-        </div>
-
-        {ragDocuments.length > 0 && (
-          <div className="space-y-1.5">
-            {ragDocuments.map((doc) => (
-              <div
-                key={doc.docId}
-                className="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2"
-              >
-                <div className="flex items-center gap-2 text-sm">
-                  <Database className="h-3.5 w-3.5 text-purple-500" />
-                  <span className="font-medium text-foreground">{doc.fileName}</span>
-                  <span className="text-xs text-muted-foreground">
-                    .{doc.format} — {doc.chunkCount} {t("setup.ragChunks")}, {doc.charCount.toLocaleString()} {t("setup.ragChars")}
-                  </span>
-                </div>
-                <button
-                  onClick={async () => {
-                    try {
-                      await api.removeRagDocument(doc.docId);
-                      removeRagDocument(doc.docId);
-                    } catch (e: unknown) {
-                      toast.error(t("setup.ragRemoveError"), extractErrorMessage(e));
-                    }
-                  }}
-                  className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Document format selector */}
@@ -894,11 +744,6 @@ function StepGladiateurs({
   const updateGladiateur = useSetupStore((s) => s.updateGladiateur);
   const updateGladiateurLlm = useSetupStore((s) => s.updateGladiateurLlm);
   const reorderGladiateurs = useSetupStore((s) => s.reorderGladiateurs);
-  const maxTurns = useSetupStore((s) => s.maxTurns);
-  const webSearchPool = useSetupStore((s) => s.webSearchPool);
-  const setWebSearchPool = useSetupStore((s) => s.setWebSearchPool);
-  const wikiSearchPool = useSetupStore((s) => s.wikiSearchPool);
-  const setWikiSearchPool = useSetupStore((s) => s.setWikiSearchPool);
   const settings = useSettingsStore((s) => s.settings);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const saveSettings = useSettingsStore((s) => s.saveSettings);
@@ -1008,91 +853,8 @@ function StepGladiateurs({
     });
   };
 
-  const hasTavilyKey = !!settings.tavilyApiKey.trim();
-  const maxSearchBound = (maxTurns ?? 100) * Math.max(gladiateurs.length, 1);
-
   return (
     <div className="space-y-6">
-      {/* Global web search config */}
-      {hasTavilyKey && (
-        <div className="space-y-2">
-          <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
-            <Globe className="h-4 w-4 text-primary" />
-            {t("setup.webSearchPool")}
-          </label>
-          <div className="flex items-center gap-3">
-            <input
-              type="number"
-              min={0}
-              max={maxSearchBound}
-              value={webSearchPool}
-              onChange={(e) =>
-                setWebSearchPool(
-                  Math.max(0, Math.min(maxSearchBound, parseInt(e.target.value) || 0)),
-                )
-              }
-              className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-            <span className="text-sm text-muted-foreground">
-              {t("setup.webSearchPoolDesc", { max: maxSearchBound })}
-            </span>
-          </div>
-          {webSearchPool > 0 && (
-            <p className="text-xs text-muted-foreground">
-              {t("setup.webSearchBudget", {
-                count: webSearchPool,
-              })}
-            </p>
-          )}
-        </div>
-      )}
-      {!hasTavilyKey && (
-        <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-          <Globe className="h-3.5 w-3.5" />
-          {t("setup.webSearchNoKey")}
-        </div>
-      )}
-
-      {/* Global wiki search config */}
-      <div className="space-y-2">
-        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
-          <BookOpen className="h-4 w-4 text-green-600" />
-          {t("setup.wikiSearchPool")}
-        </label>
-        <div className="flex items-center gap-3">
-          <input
-            type="number"
-            min={0}
-            max={maxSearchBound}
-            value={wikiSearchPool}
-            onChange={(e) =>
-              setWikiSearchPool(
-                Math.max(0, Math.min(maxSearchBound, parseInt(e.target.value) || 0)),
-              )
-            }
-            className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-          <span className="text-sm text-muted-foreground">
-            {t("setup.wikiSearchPoolDesc", { max: maxSearchBound })}
-          </span>
-        </div>
-        {wikiSearchPool > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {t("setup.wikiSearchBudget", {
-              count: wikiSearchPool,
-            })}
-          </p>
-        )}
-      </div>
-
-      {/* First-turn search rule explanation */}
-      {(webSearchPool > 0 || wikiSearchPool > 0) && (
-        <div className="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
-          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
-          <span>{t("setup.firstTurnSearchRule")}</span>
-        </div>
-      )}
-
       {/* Emotion-driven behavior toggle */}
       <div className="space-y-3">
         <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
@@ -1313,6 +1075,370 @@ function StepGladiateurs({
   );
 }
 
+function StepKnowledge() {
+  const { t } = useTranslation();
+  const ragDocuments = useSetupStore((s) => s.ragDocuments);
+  const addRagDocument = useSetupStore((s) => s.addRagDocument);
+  const removeRagDocument = useSetupStore((s) => s.removeRagDocument);
+  const gladiateurs = useSetupStore((s) => s.gladiateurs);
+  const maxTurns = useSetupStore((s) => s.maxTurns);
+  const webSearchPool = useSetupStore((s) => s.webSearchPool);
+  const setWebSearchPool = useSetupStore((s) => s.setWebSearchPool);
+  const wikiSearchPool = useSetupStore((s) => s.wikiSearchPool);
+  const setWikiSearchPool = useSetupStore((s) => s.setWikiSearchPool);
+  const arbitre = useSetupStore((s) => s.arbitre);
+  const discussionLanguage = useSetupStore((s) => s.discussionLanguage);
+  const tokenBudgetPreview = useSetupStore((s) => s.tokenBudgetPreview);
+  const setTokenBudgetPreview = useSetupStore((s) => s.setTokenBudgetPreview);
+  const documentInjectionMode = useSetupStore((s) => s.documentInjectionMode);
+  const setDocumentInjectionMode = useSetupStore((s) => s.setDocumentInjectionMode);
+  const settingsNumCtx = useSettingsStore((s) => s.settings.numCtx);
+  const ollamaModel = useSettingsStore((s) => s.settings.ollamaModel);
+  const embeddingModel = useSettingsStore((s) => s.settings.embeddingModel);
+  const hasTavilyKey = !!useSettingsStore((s) => s.settings.tavilyApiKey).trim();
+  const tokenBudgetPriorities = useSettingsStore((s) => s.settings.tokenBudgetPriorities);
+  const [ragImporting, setRagImporting] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  const maxSearchBound = (maxTurns ?? 100) * Math.max(gladiateurs.length, 1);
+
+  const importFiles = async (paths: string[]) => {
+    setRagImporting(true);
+    try {
+      for (const filePath of paths) {
+        try {
+          const doc = await api.importRagDocument(filePath);
+          addRagDocument(doc);
+        } catch (e: unknown) {
+          const detail = extractErrorMessage(e);
+          const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
+          toast.error(t("setup.ragImportError", { file: fileName }), detail);
+        }
+      }
+    } finally {
+      setRagImporting(false);
+    }
+  };
+
+  const handleRagImport = async () => {
+    const effectiveModel = embeddingModel || ollamaModel;
+    if (!effectiveModel) {
+      toast.warning(t("setup.ragNoModel"));
+      return;
+    }
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: true,
+        filters: [{
+          name: "Documents",
+          extensions: [...RAG_SUPPORTED_EXTENSIONS],
+        }],
+      });
+      if (!selected || selected.length === 0) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      await importFiles(paths);
+    } catch (e: unknown) {
+      toast.error(t("setup.ragImportError", { file: "" }), extractErrorMessage(e));
+    }
+  };
+
+  // Ref to always call the latest drop handler without re-subscribing
+  const dropHandlerRef = useRef<(paths: string[]) => void>(() => {});
+  dropHandlerRef.current = (paths: string[]) => {
+    const effectiveModel = embeddingModel || ollamaModel;
+    if (!effectiveModel) {
+      toast.warning(t("setup.ragNoModel"));
+      return;
+    }
+    const validPaths = paths.filter((p) => {
+      const ext = p.split(".").pop()?.toLowerCase() ?? "";
+      return RAG_SUPPORTED_EXTENSIONS.has(ext);
+    });
+    if (validPaths.length === 0) {
+      toast.warning(t("setup.ragUnsupportedFormat"));
+      return;
+    }
+    importFiles(validPaths);
+  };
+
+  // Subscribe to Tauri drag-drop events (global webview-level)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+    (async () => {
+      const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const unsub = await getCurrentWebviewWindow().onDragDropEvent((event) => {
+        if (!mounted) return;
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          setDragOver(true);
+        } else if (event.payload.type === "leave") {
+          setDragOver(false);
+        } else if (event.payload.type === "drop") {
+          setDragOver(false);
+          dropHandlerRef.current(event.payload.paths);
+        }
+      });
+      if (mounted) {
+        unlisten = unsub;
+      } else {
+        unsub();
+      }
+    })();
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
+
+  // Compute token budget preview when relevant params change
+  const computeBudget = useCallback(async (): Promise<TokenBudgetPreview> => {
+    const numCtx = settingsNumCtx;
+    const numPredict = arbitre.llmParams.numPredict;
+    const systemPromptChars = arbitre.systemPrompt.length;
+
+    const totalDocChars = ragDocuments.reduce((sum, d) => sum + d.charCount, 0);
+
+    const params: BudgetParams = {
+      numCtx,
+      numPredict,
+      systemPromptChars,
+      nGladiateurs: gladiateurs.length || 1,
+      language: discussionLanguage,
+      features: {
+        webSearchEnabled: webSearchPool > 0 || (arbitre.webSearchIntro ?? false),
+        wikiSearchEnabled: wikiSearchPool > 0 || (arbitre.wikiSearchIntro ?? false),
+        ragEnabled: ragDocuments.length > 0,
+        documentChars: ragDocuments.length > 0 && documentInjectionMode === "fullInjection" ? totalDocChars : 0,
+      },
+    };
+
+    let priorities: SectionPriority[] = [];
+    try {
+      if (tokenBudgetPriorities) {
+        priorities = JSON.parse(tokenBudgetPriorities);
+      }
+    } catch { /* use defaults on backend */ }
+
+    return api.computeTokenBudget(params, priorities);
+  }, [
+    settingsNumCtx, arbitre.llmParams.numPredict, arbitre.systemPrompt.length,
+    gladiateurs.length, discussionLanguage, webSearchPool, wikiSearchPool,
+    ragDocuments, arbitre.webSearchIntro, arbitre.wikiSearchIntro,
+    tokenBudgetPriorities, documentInjectionMode,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const preview = await computeBudget();
+        if (!cancelled) setTokenBudgetPreview(preview);
+      } catch {
+        if (!cancelled) setTokenBudgetPreview(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [computeBudget, setTokenBudgetPreview]);
+
+  return (
+    <div className="space-y-6">
+      {/* Token Budget Preview — always visible at the top */}
+      <TokenBudgetPreviewPanel
+        preview={tokenBudgetPreview}
+        documentInjectionMode={documentInjectionMode}
+        hasDocuments={ragDocuments.length > 0}
+      />
+
+      <p className="text-sm text-muted-foreground">{t("setup.knowledgeStepDesc")}</p>
+
+      {/* RAG Knowledge Base */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <Database className="h-4 w-4 text-purple-500" />
+          {t("setup.ragKnowledgeBase")}
+        </label>
+        <p className="text-xs text-muted-foreground">{t("setup.ragDesc")}</p>
+
+        {!embeddingModel && ollamaModel && (
+          <div className="flex items-start gap-2 rounded-md border border-purple-500/20 bg-purple-500/5 px-3 py-2 text-xs text-muted-foreground">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-purple-500" />
+            <span>{t("setup.ragRecommendModel")}</span>
+          </div>
+        )}
+
+        {dragOver && (
+          <div className="flex flex-col items-center justify-center rounded-md border-2 border-dashed border-purple-500/50 bg-purple-500/5 py-6">
+            <Upload className="h-8 w-8 text-purple-500" />
+            <p className="mt-2 text-sm font-medium text-purple-500">{t("setup.ragDropFiles")}</p>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRagImport}
+            disabled={ragImporting}
+            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {ragImporting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            {ragImporting ? t("setup.ragImporting") : t("setup.ragImportFiles")}
+          </button>
+          <span className="text-xs text-muted-foreground">{t("setup.ragDropHint")}</span>
+        </div>
+
+        {ragDocuments.length > 0 && (
+          <div className="space-y-1.5">
+            {ragDocuments.map((doc) => (
+              <div
+                key={doc.docId}
+                className="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2"
+              >
+                <div className="flex items-center gap-2 text-sm">
+                  <Database className="h-3.5 w-3.5 text-purple-500" />
+                  <span className="font-medium text-foreground">{doc.fileName}</span>
+                  <span className="text-xs text-muted-foreground">
+                    .{doc.format} — {doc.chunkCount} {t("setup.ragChunks")}, {doc.charCount.toLocaleString()} {t("setup.ragChars")}
+                  </span>
+                </div>
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.removeRagDocument(doc.docId);
+                      removeRagDocument(doc.docId);
+                    } catch (e: unknown) {
+                      toast.error(t("setup.ragRemoveError"), extractErrorMessage(e));
+                    }
+                  }}
+                  className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Document injection mode choice — only when documents are imported */}
+      {ragDocuments.length > 0 && (
+        <div className="space-y-2">
+          <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+            <FileText className="h-4 w-4 text-primary" />
+            {t("setup.injectionModeLabel")}
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setDocumentInjectionMode("rag")}
+              className={cn(
+                "rounded-md border px-3 py-2 text-left transition-colors",
+                documentInjectionMode === "rag"
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:bg-accent",
+              )}
+            >
+              <div className="text-sm font-medium">{t("setup.injectionModeRag")}</div>
+              <div className="mt-0.5 text-xs opacity-70">{t("setup.injectionModeRagDesc")}</div>
+            </button>
+            <button
+              onClick={() => setDocumentInjectionMode("fullInjection")}
+              className={cn(
+                "rounded-md border px-3 py-2 text-left transition-colors",
+                documentInjectionMode === "fullInjection"
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:bg-accent",
+              )}
+            >
+              <div className="text-sm font-medium">{t("setup.injectionModeFull")}</div>
+              <div className="mt-0.5 text-xs opacity-70">{t("setup.injectionModeFullDesc")}</div>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Web search pool */}
+      {hasTavilyKey && (
+        <div className="space-y-2">
+          <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+            <Globe className="h-4 w-4 text-primary" />
+            {t("setup.webSearchPool")}
+          </label>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={0}
+              max={maxSearchBound}
+              value={webSearchPool}
+              onChange={(e) =>
+                setWebSearchPool(
+                  Math.max(0, Math.min(maxSearchBound, parseInt(e.target.value) || 0)),
+                )
+              }
+              className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <span className="text-sm text-muted-foreground">
+              {t("setup.webSearchPoolDesc", { max: maxSearchBound })}
+            </span>
+          </div>
+          {webSearchPool > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {t("setup.webSearchBudget", { count: webSearchPool })}
+            </p>
+          )}
+        </div>
+      )}
+      {!hasTavilyKey && (
+        <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+          <Globe className="h-3.5 w-3.5" />
+          {t("setup.webSearchNoKey")}
+        </div>
+      )}
+
+      {/* Wiki search pool */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-1.5 border-b border-border pb-2 text-sm font-medium text-foreground">
+          <BookOpen className="h-4 w-4 text-green-600" />
+          {t("setup.wikiSearchPool")}
+        </label>
+        <div className="flex items-center gap-3">
+          <input
+            type="number"
+            min={0}
+            max={maxSearchBound}
+            value={wikiSearchPool}
+            onChange={(e) =>
+              setWikiSearchPool(
+                Math.max(0, Math.min(maxSearchBound, parseInt(e.target.value) || 0)),
+              )
+            }
+            className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <span className="text-sm text-muted-foreground">
+            {t("setup.wikiSearchPoolDesc", { max: maxSearchBound })}
+          </span>
+        </div>
+        {wikiSearchPool > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {t("setup.wikiSearchBudget", { count: wikiSearchPool })}
+          </p>
+        )}
+      </div>
+
+      {/* First-turn search rule explanation */}
+      {(webSearchPool > 0 || wikiSearchPool > 0) && (
+        <div className="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+          <span>{t("setup.firstTurnSearchRule")}</span>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
 function StepSummary() {
   const { t } = useTranslation();
   const topic = useSetupStore((s) => s.topic);
@@ -1326,6 +1452,7 @@ function StepSummary() {
   const wikiSearchPool = useSetupStore((s) => s.wikiSearchPool);
   const argumentMapEnabled = useSetupStore((s) => s.argumentMapEnabled);
   const ragDocuments = useSetupStore((s) => s.ragDocuments);
+  const documentInjectionMode = useSetupStore((s) => s.documentInjectionMode);
   const emotionDriven = useSettingsStore((s) => s.settings.emotionDriven);
 
   return (
@@ -1400,16 +1527,24 @@ function StepSummary() {
           />
         )}
         {ragDocuments.length > 0 && (
-          <div>
-            <p className="text-xs text-muted-foreground">{t("setup.summaryRag")}</p>
-            <div className="mt-1 space-y-0.5">
-              {ragDocuments.map((doc) => (
-                <p key={doc.docId} className="text-sm font-medium text-foreground">
-                  {doc.fileName} ({doc.chunkCount} {t("setup.ragChunks")})
-                </p>
-              ))}
+          <>
+            <div>
+              <p className="text-xs text-muted-foreground">{t("setup.summaryRag")}</p>
+              <div className="mt-1 space-y-0.5">
+                {ragDocuments.map((doc) => (
+                  <p key={doc.docId} className="text-sm font-medium text-foreground">
+                    {doc.fileName} ({doc.chunkCount} {t("setup.ragChunks")})
+                  </p>
+                ))}
+              </div>
             </div>
-          </div>
+            <SummaryRow
+              label={t("setup.summaryInjectionMode")}
+              value={documentInjectionMode === "fullInjection"
+                ? t("setup.injectionModeFull")
+                : t("setup.injectionModeRag")}
+            />
+          </>
         )}
       </div>
     </div>

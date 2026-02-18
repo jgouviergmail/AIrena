@@ -6,6 +6,7 @@ use crate::models::history::{
 };
 use crate::models::message::{Message, Reaction, SpeakerRole};
 use crate::models::profile::PredefinedProfile;
+use crate::constants;
 use crate::models::settings::AppSettings;
 
 pub async fn get_settings(db: &Connection) -> Result<AppSettings, tokio_rusqlite::Error> {
@@ -30,6 +31,8 @@ pub async fn get_settings(db: &Connection) -> Result<AppSettings, tokio_rusqlite
                 "tavily_usage_history" => settings.tavily_usage_history = value,
                 "embedding_model" => settings.embedding_model = value,
                 "license_key" => settings.license_key = value,
+                "token_budget_priorities" => settings.token_budget_priorities = value,
+                "num_ctx" => settings.num_ctx = value.parse().unwrap_or(constants::LLM_DEFAULT_NUM_CTX),
                 _ => {}
             }
         }
@@ -64,6 +67,8 @@ pub async fn save_settings(
             ("tavily_usage_history", settings.tavily_usage_history.clone()),
             ("embedding_model", settings.embedding_model.clone()),
             ("license_key", settings.license_key.clone()),
+            ("token_budget_priorities", settings.token_budget_priorities.clone()),
+            ("num_ctx", settings.num_ctx.to_string()),
         ];
         for (key, value) in &pairs {
             tx.execute(

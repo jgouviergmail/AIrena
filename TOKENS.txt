@@ -1,0 +1,151 @@
+Token Budget Manager + Full Document Injection
+Context
+Chaque section du prompt LLM a des caps fixes dans constants.rs (ex: mémoire=3000 chars, messages=800 chars, RAG=5000 chars), indépendants de num_ctx. Avec un num_ctx de 32K, ~26K tokens sont gaspillés. Avec un num_ctx de 4K, le prompt peut déborder et Ollama tronque silencieusement.
+
+Objectif : Maximiser la qualité de raisonnement/contexte/mémoire en exploitant pleinement le num_ctx disponible, avec calcul automatique du num_ctx optimal basé sur la VRAM.
+
+Modèle unique : Confirmé — tous les participants (IArbitre + GladIAteurs) partagent un seul modèle Ollama (setting global ollamaModel). Chaque speaker a ses propres llmParams (temperature, numCtx, numPredict, etc.) mais pas de choix de modèle individuel.
+
+Données mesurées
+System prompts (jamais tronqués)
+GladIAteurs : 2 768 – 4 511 chars (max ~1 128 tokens)
+IArbitres : 1 535 – 1 973 chars (max ~493 tokens)
+Sections déterministes (fixes, ~596 tokens total)
+Section	Max chars	~Tokens
+Preamble + mode override	1 070	268
+Language instruction	55	14
+DateTime	51	13
+Mode instructions (intervention)	280	70
+End-of-discussion awareness	180	45
+Emotions description	515	129
+Emotion thresholds	227	57
+Total déterministe	~2 378	~596
+Sections variables (dépendent de N gladiateurs, features)
+Section	Formule actuelle	Cap actuel
+Résumé contextuel (mémoire)	LLM-compressé chaque tour	3 000 chars
+Mémoire immédiate (3 tours)	3 × (N+1) × par msg	800 chars/msg
+Messages tour courant	(N+1) × par msg	800 chars/msg
+Directives IArbitre	Messages IArbitre du tour	1 500 chars
+Directives cognitives (5 layers)	Émotions + relations + speech act	~2 960 chars max
+Positional map	N × stance	~100 chars/participant
+Web+Wiki search	Si activé	5 000 chars
+RAG context	Si activé	5 000 chars
+Document complet (NOUVEAU)	Si le budget le permet	N/A (n'existe pas)
+Architecture : 3 couches
+Couche 1 : Détection VRAM + num_ctx optimal
+Nouveau fichier : src-tauri/src/ollama/model_info.rs
+
+API Ollama utilisées :
+
+/api/show → champ model_info avec architecture (préfixé par famille) :
+{family}.block_count (nombre de couches transformer)
+{family}.attention.head_count (nombre de heads attention)
+{family}.attention.head_count_kv (nombre de heads KV — GQA)
+{family}.embedding_length (dimension embedding totale)
+{family}.attention.key_length (dim clé par head, optionnel)
+{family}.attention.value_length (dim valeur par head, optionnel)
+{family}.context_length (context max natif du modèle)
+{family}.rope.dimension_count (dim rotatoire = head_dim)
+Champ details.quantization_level (ex: "Q4_K_M") pour estimer dtype
+/api/ps → modèles chargés : size_vram (VRAM occupée), size (taille modèle)
+Détection VRAM GPU :
+
+NVIDIA : nvidia-smi --query-gpu=memory.total,memory.free --format=csv,noheader,nounits → VRAM totale + libre en MiB
+AMD : Pas de CLI disponible sur Windows (rocm-smi = Linux uniquement). Configuration manuelle obligatoire.
+Si détection échoue → pas d'auto-fill, l'utilisateur configure manuellement num_ctx
+Formule KV cache (corrigée) :
+
+
+head_dim = key_length || rope.dimension_count || (embedding_length / head_count)
+kv_bytes_per_token = 2 × block_count × head_count_kv × head_dim × dtype_bytes
+VRAM_kv_total = kv_bytes_per_token × num_ctx
+2 × = facteur K + V (deux matrices distinctes)
+dtype_bytes = 2 (f16 par défaut), 1 (q8_0), 0.5 (q4_0). Dérivé de OLLAMA_KV_CACHE_TYPE si connu, sinon f16.
+Fallback head_dim en cascade : key_length → rope.dimension_count → embedding_length / head_count
+Recommandation num_ctx :
+
+
+VRAM_libre = nvidia_smi_free  (ou: VRAM_total - size_vram_from_ps)
+max_num_ctx = (VRAM_libre + kv_cache_actuel) / kv_bytes_per_token
+kv_cache_actuel = kv_bytes_per_token × num_ctx_actuel_du_modèle_chargé
+Note : les appels LLM sont séquentiels dans AIrena (pas de parallélisme), donc un seul KV cache est actif à la fois. Le num_ctx recommandé est le MAX possible pour n'importe quel speaker.
+
+Couche 2 : Token Budget Calculator
+Nouveau fichier : src-tauri/src/engine/token_budget.rs
+
+Entrées : num_ctx, num_predict, system_prompt_len, N gladiateurs, features activées, taille document, discussion_language
+Sortie : TokenBudget — caps par section en chars
+
+Ratio chars/token par langue :
+
+FR/EN : ~4.0 chars/token (CHARS_PER_TOKEN_LATIN)
+ZH : ~1.5 chars/token (CHARS_PER_TOKEN_CJK)
+Utilisé pour convertir le budget en tokens ↔ chars. Estimation conservatrice (sous-estime les chars = plus de marge).
+Algorithme Waterfall (allocation par priorité stricte) :
+
+Réserver les sections non-négociables (system prompt + déterministe + num_predict) → tokens restants
+Convertir tokens restants → chars (via ratio langue)
+Soustraire les floors (minimums) de chaque section variable → chars surplus
+Si surplus < 0 : budget insuffisant → émettre warning, réduire les sections de plus basse priorité en premier (en-dessous de leur floor, voire à 0)
+Si surplus ≥ 0 : remplir les sections de la plus haute priorité à la plus basse :
+Chaque section reçoit min(ceiling - floor, surplus_restant) de chars supplémentaires
+Le surplus restant passe à la section suivante
+Les sections à priorité plus basse ne reçoivent du surplus que si les sections supérieures ont atteint leur ceiling
+Cet algorithme est un priority queue strict (pas de distribution proportionnelle). Plus intuitif : la section la plus importante est servie en premier.
+
+Floor / Ceiling par section variable :
+
+Section	Floor (chars)	Ceiling (chars)	Priorité défaut
+Messages tour courant	400/msg	2 000/msg	4
+Mémoire immédiate (3 tours)	300/msg	1 500/msg	5
+Résumé contextuel	500	8 000	6
+Directives cognitives	500	3 000	7
+Directives IArbitre	300	2 000	8
+Document complet	0	document_chars	9
+RAG context	500	10 000	10
+Web+Wiki search	500	8 000	11
+Positional map	50	N × 200	12
+Note : Document complet a un floor de 0 — si le document ne tient pas entièrement, il n'est pas injecté (fallback vers RAG). Les floors et ceilings sont des constantes dans constants.rs.
+
+Priorités par défaut (configurable par l'utilisateur dans Settings, stocké en DB settings comme JSON token_budget_priorities) :
+
+Priorité	Section	Ce que ça contient	Impact si réduit
+1 (fixe)	System prompt	Persona XML complète (identité, psychologie, voix, dynamiques)	Jamais réduit — c'est l'identité
+2 (fixe)	num_predict	Tokens réservés pour la réponse générée par l'IA	Réponses tronquées
+3 (fixe)	Sections déterministes	Preamble, mode, langue, date, émotions, seuils (~600 tokens)	Jamais réduit — coût fixe
+4	Messages tour courant	Ce que TOUS les speakers viennent de dire CE tour	L'IA perd le fil de la conversation immédiate
+5	Mémoire immédiate (3 tours)	Messages des 3 derniers tours complets	L'IA oublie ce qui s'est dit récemment
+6	Résumé contextuel	Synthèse LLM cumulative de toute la discussion	L'IA perd la vue d'ensemble
+7	Directives cognitives	Comportement émotionnel, relations, speech act, anti-répétition	Réponses plus génériques, moins de personnalité
+8	Directives IArbitre	Consignes/cadrage du modérateur pour le tour	L'IA ignore les consignes du modérateur
+9	Document complet	Texte intégral du document importé (si le budget le permet)	Fallback vers RAG (fragments seulement)
+10	RAG context	Fragments sémantiquement pertinents du document	Moins de chunks, connaissance doc réduite
+11	Web+Wiki search	Résultats de recherche web/Wikipédia	Moins de données factuelles externes
+12	Positional map	Position/stance de chaque participant sur le sujet	L'IA ne sait pas "qui pense quoi"
+Les priorités 1-3 sont fixes (non-négociables). Les priorités 4-12 sont ajustables par l'utilisateur (rangs réordonnables).
+
+Quand la priorité importe : uniquement quand num_ctx est serré. Avec un num_ctx généreux (32K+), toutes les sections atteignent leur ceiling et la priorité n'a aucun effet.
+
+Cas d'insuffisance budgétaire :
+
+Si num_ctx < BUDGET_MIN_VIABLE_NUM_CTX (constante, ex: 2048) → erreur bloquante, discussion refusée
+Si les floors de toutes les sections ne tiennent pas → warning dans le TokenBudgetPreview ("Budget très contraint, qualité dégradée"), les sections de plus basse priorité sont réduites à 0 en commençant par le bas
+La discussion est tout de même lancée (pas de blocage) car l'utilisateur peut accepter la dégradation
+Couche 3 : Prompt Builder budget-aware
+Fichier modifié : src-tauri/src/engine/prompt_builder.rs
+
+Fonctions qui reçoivent &TokenBudget (5 fonctions — les prompts "lourds") :
+
+build_intervention_prompt() — le plus lourd, appelé N×T fois
+build_thought_prompt() — mode think, conditionnel
+build_synthesis_prompt() — fin de discussion, 1 fois
+build_introduction_prompt() — intro, 1 fois (inclut web search results)
+build_memory_update_prompt() — via memory_manager, T fois
+Fonctions qui gardent les constantes fixes (12 fonctions — prompts légers/auxiliaires) :
+
+build_reaction_prompt(), build_moderation_prompt(), build_emotion_analysis_prompt()
+build_democratic_vote_prompt(), build_authoritarian_order_prompt(), build_tiebreak_prompt()
+build_web_search_decision_prompt(), build_wiki_search_decision_prompt()
+build_document_update_prompt(), build_argument_extraction_prompt()
+Helpers : build_search_results_context(), build_wiki_results_context(), etc.
+Logging : Chaque appel à une fonction budget-aware log via tracing::info! le budget alloué par section et la taille réelle du prompt généré. Format : [BUDGET] speaker={name} section={section} allocated={n}chars used={m}chars

@@ -4,10 +4,12 @@ import type {
   DiscussionConfig,
   DiscussionMode,
   DocumentFormat,
+  DocumentInjectionMode,
   GladIAteurConfig,
   IArbitreConfig,
   LlmParams,
   RagDocumentInfo,
+  TokenBudgetPreview,
 } from "@/lib/types";
 import { DEFAULT_LLM_PARAMS } from "@/lib/types";
 import { clearRagStore } from "@/lib/tauri-api";
@@ -26,7 +28,11 @@ interface SetupState {
   wikiSearchPool: number;
   argumentMapEnabled: boolean;
   ragDocuments: RagDocumentInfo[];
+  documentInjectionMode: DocumentInjectionMode;
+  tokenBudgetPreview: TokenBudgetPreview | null;
 
+  setDocumentInjectionMode: (mode: DocumentInjectionMode) => void;
+  setTokenBudgetPreview: (preview: TokenBudgetPreview | null) => void;
   setArgumentMapEnabled: (v: boolean) => void;
   setDiscussionMode: (mode: DiscussionMode) => void;
   setDocumentFormat: (fmt: DocumentFormat) => void;
@@ -73,7 +79,11 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   wikiSearchPool: 0,
   argumentMapEnabled: false,
   ragDocuments: [],
+  documentInjectionMode: "rag" as DocumentInjectionMode,
+  tokenBudgetPreview: null,
 
+  setDocumentInjectionMode: (mode) => set({ documentInjectionMode: mode }),
+  setTokenBudgetPreview: (preview) => set({ tokenBudgetPreview: preview }),
   setArgumentMapEnabled: (v) => set({ argumentMapEnabled: v }),
   setDiscussionMode: (mode) => set({ discussionMode: mode }),
   setDocumentFormat: (fmt) => set({ documentFormat: fmt }),
@@ -163,6 +173,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       webSearchPool: s.webSearchPool,
       wikiSearchPool: s.wikiSearchPool,
       argumentMapEnabled: s.argumentMapEnabled,
+      documentInjectionMode: s.documentInjectionMode,
     };
   },
 
@@ -183,6 +194,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       wikiSearchPool: 0,
       argumentMapEnabled: false,
       ragDocuments: [],
+      documentInjectionMode: "rag" as DocumentInjectionMode,
+      tokenBudgetPreview: null,
     });
   },
 }));

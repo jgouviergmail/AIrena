@@ -102,6 +102,9 @@ pub fn run() {
             commands::ollama::check_ollama_connection,
             commands::ollama::list_ollama_models,
             commands::ollama::preload_ollama_model,
+            commands::ollama::get_model_budget_info,
+            commands::ollama::initialize_ollama,
+            commands::ollama::compute_token_budget,
             // Settings commands
             commands::settings::get_settings,
             commands::settings::save_settings,

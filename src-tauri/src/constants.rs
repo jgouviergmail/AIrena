@@ -147,6 +147,9 @@ pub const OLLAMA_CHECK_TIMEOUT_SECS: u64 = 5;
 /// Base for exponential backoff on retry (seconds): sleep = base^attempt.
 pub const OLLAMA_RETRY_BACKOFF_BASE_SECS: u64 = 2;
 
+/// Delay (ms) after unloading models to let GPU VRAM fully release.
+pub const OLLAMA_VRAM_SETTLE_MS: u64 = 500;
+
 // ── Emotion engine ──────────────────────────────────────────────────────
 
 /// Emotional axis value at or above which a "high" threshold crossing is detected.
@@ -330,6 +333,76 @@ pub const RAG_EMBED_TIMEOUT_SECS: u64 = 60;
 
 /// Maximum characters for RAG context injected into prompts.
 pub const RAG_MAX_CONTEXT_LEN: usize = 5000;
+
+// ── Token Budget ──────────────────────────────────────────────────────
+
+/// Conservative chars-per-token ratio for Latin languages (FR, EN, etc.).
+/// Under-estimates chars to leave headroom (actual ≈ 4.0–4.5).
+pub const CHARS_PER_TOKEN_LATIN: f64 = 3.8;
+
+/// Conservative chars-per-token ratio for CJK languages (ZH, JA, KO).
+/// Each CJK character ≈ 1 token.
+pub const CHARS_PER_TOKEN_CJK: f64 = 1.5;
+
+/// Fixed overhead for deterministic prompt sections (preamble, mode, language,
+/// datetime, emotions description, emotion thresholds). Measured at ~2 378 chars.
+pub const BUDGET_DETERMINISTIC_OVERHEAD_CHARS: usize = 2_400;
+
+/// Minimum num_ctx below which the discussion is refused outright.
+pub const BUDGET_MIN_VIABLE_NUM_CTX: usize = 2_048;
+
+/// Upper bound for recommended num_ctx (beyond this, diminishing returns).
+pub const BUDGET_MAX_RECOMMENDED_NUM_CTX: usize = 131_072;
+
+/// Approximate characters per printed page (~500 words × ~4 chars/word).
+/// Used to display document capacity as page equivalents in the UI.
+pub const APPROX_CHARS_PER_PAGE: usize = 2_000;
+
+/// VRAM safety margin (MiB) subtracted from available VRAM before recommending num_ctx.
+pub const VRAM_SAFETY_MARGIN_MB: usize = 512;
+
+/// Default KV cache dtype size in bytes (f16 = 2, q8_0 = 1, q4_0 ≈ 0.5).
+pub const KV_CACHE_DTYPE_BYTES: usize = 2;
+
+// ── Token Budget — section floors (minimum chars) ─────────────────────
+
+/// Floor: per-message chars for current turn messages.
+pub const BUDGET_FLOOR_CURRENT_TURN: usize = 400;
+/// Floor: per-message chars for immediate memory (3 turns).
+pub const BUDGET_FLOOR_IMMEDIATE_MEMORY: usize = 300;
+/// Floor: total chars for contextual summary.
+pub const BUDGET_FLOOR_CONTEXTUAL_SUMMARY: usize = 500;
+/// Floor: total chars for cognitive directives.
+pub const BUDGET_FLOOR_COGNITIVE_DIRECTIVES: usize = 500;
+/// Floor: total chars for IArbitre directives.
+pub const BUDGET_FLOOR_ARBITRE_DIRECTIVES: usize = 300;
+/// Floor: total chars for full document injection (0 = all-or-nothing).
+pub const BUDGET_FLOOR_FULL_DOCUMENT: usize = 0;
+/// Floor: total chars for RAG context.
+pub const BUDGET_FLOOR_RAG_CONTEXT: usize = 500;
+/// Floor: total chars for web+wiki search results.
+pub const BUDGET_FLOOR_WEB_WIKI: usize = 500;
+/// Floor: total chars for positional map.
+pub const BUDGET_FLOOR_POSITIONAL_MAP: usize = 50;
+
+// ── Token Budget — section ceilings (maximum chars) ───────────────────
+
+/// Ceiling: per-message chars for current turn messages.
+pub const BUDGET_CEIL_CURRENT_TURN: usize = 2_000;
+/// Ceiling: per-message chars for immediate memory (3 turns).
+pub const BUDGET_CEIL_IMMEDIATE_MEMORY: usize = 1_500;
+/// Ceiling: total chars for contextual summary.
+pub const BUDGET_CEIL_CONTEXTUAL_SUMMARY: usize = 8_000;
+/// Ceiling: total chars for cognitive directives.
+pub const BUDGET_CEIL_COGNITIVE_DIRECTIVES: usize = 3_000;
+/// Ceiling: total chars for IArbitre directives.
+pub const BUDGET_CEIL_ARBITRE_DIRECTIVES: usize = 2_000;
+/// Ceiling: total chars for RAG context.
+pub const BUDGET_CEIL_RAG_CONTEXT: usize = 10_000;
+/// Ceiling: total chars for web+wiki search results.
+pub const BUDGET_CEIL_WEB_WIKI: usize = 8_000;
+/// Ceiling: per-participant chars for positional map.
+pub const BUDGET_CEIL_POSITIONAL_MAP_PER_PARTICIPANT: usize = 200;
 
 // ── Argument Map ──────────────────────────────────────────────────────
 

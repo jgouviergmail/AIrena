@@ -2,14 +2,18 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
   ArenaEvent,
+  BudgetParams,
   DiscussionConfig,
   DiscussionDetail,
   DiscussionSummary,
   LicenseStatus,
+  ModelBudgetInfo,
   ModelInfo,
   PredefinedProfile,
   RagDocumentInfo,
   SaveDiscussionRequest,
+  SectionPriority,
+  TokenBudgetPreview,
 } from "./types";
 
 // -- Discussion commands --
@@ -72,8 +76,28 @@ export async function listOllamaModels(): Promise<ModelInfo[]> {
   return await invoke<ModelInfo[]>("list_ollama_models");
 }
 
-export async function preloadOllamaModel(model: string): Promise<void> {
-  return await invoke("preload_ollama_model", { model });
+export async function preloadOllamaModel(model: string, numCtx?: number): Promise<void> {
+  return await invoke("preload_ollama_model", { model, numCtx: numCtx ?? null });
+}
+
+export async function getModelBudgetInfo(
+  model: string,
+): Promise<ModelBudgetInfo> {
+  return await invoke<ModelBudgetInfo>("get_model_budget_info", { model });
+}
+
+export async function initializeOllama(): Promise<ModelBudgetInfo> {
+  return await invoke<ModelBudgetInfo>("initialize_ollama");
+}
+
+export async function computeTokenBudget(
+  params: BudgetParams,
+  priorities: SectionPriority[],
+): Promise<TokenBudgetPreview> {
+  return await invoke<TokenBudgetPreview>("compute_token_budget", {
+    params,
+    priorities,
+  });
 }
 
 // -- Settings commands --

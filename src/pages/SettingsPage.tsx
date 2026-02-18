@@ -2,14 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   Check,
   Database,
   Eye,
   EyeOff,
   Globe,
   KeyRound,
+  Layers,
   Loader2,
   Moon,
+  RotateCcw,
   Search,
   Server,
   Settings as SettingsIcon,
@@ -18,15 +22,18 @@ import {
   Sun,
   Wifi,
   WifiOff,
+  Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { TopBar } from "@/components/layout/TopBar";
+import { VramIndicator } from "@/components/setup/VramIndicator";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useTheme } from "@/providers/ThemeProvider";
 import { cn } from "@/lib/utils";
 import { extractErrorMessage } from "@/lib/error-utils";
 import { toast } from "@/stores/useToastStore";
-import type { LicenseStatus, TavilyPeriodHistory } from "@/lib/types";
+import { CONFIGURABLE_BUDGET_SECTIONS } from "@/lib/types";
+import type { LicenseStatus, SectionPriority, TavilyPeriodHistory } from "@/lib/types";
 import * as api from "@/lib/tauri-api";
 
 export default function SettingsPage() {
@@ -44,6 +51,11 @@ export default function SettingsPage() {
   const preloading = useSettingsStore((s) => s.preloading);
   const preloadDone = useSettingsStore((s) => s.preloadDone);
   const preloadError = useSettingsStore((s) => s.preloadError);
+  const modelBudgetInfo = useSettingsStore((s) => s.modelBudgetInfo);
+  const modelBudgetLoading = useSettingsStore((s) => s.modelBudgetLoading);
+  const fetchModelBudgetInfo = useSettingsStore((s) => s.fetchModelBudgetInfo);
+  const initializingOllama = useSettingsStore((s) => s.initializingOllama);
+  const ollamaInitialized = useSettingsStore((s) => s.ollamaInitialized);
 
   const [autoSaved, setAutoSaved] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -56,13 +68,51 @@ export default function SettingsPage() {
     hydrate();
   }, [hydrate]);
 
+  // Skip Ollama check if initialization is already in progress
   useEffect(() => {
-    checkOllama();
-  }, [checkOllama]);
+    if (!initializingOllama) {
+      checkOllama();
+    }
+  }, [checkOllama, initializingOllama]);
 
   useEffect(() => {
     api.checkLicenseStatus().then(setLicenseStatus).catch(() => {});
   }, []);
+
+  // Track whether model was changed by user (vs hydration/mount)
+  const userChangedModelRef = useRef(false);
+
+  // Fetch model budget info (VRAM + architecture) when model changes
+  // Skip if initialization is in progress (it already fetches budget info)
+  useEffect(() => {
+    if (settings.ollamaModel && !initializingOllama) {
+      fetchModelBudgetInfo(settings.ollamaModel, userChangedModelRef.current);
+      userChangedModelRef.current = false;
+    }
+  }, [settings.ollamaModel, fetchModelBudgetInfo, initializingOllama]);
+
+  // numCtx local state — commit on blur/Enter to avoid clamping on every keystroke
+  const [numCtxInput, setNumCtxInput] = useState(String(settings.numCtx));
+  useEffect(() => {
+    setNumCtxInput(String(settings.numCtx));
+  }, [settings.numCtx]);
+
+  const numCtxMax = modelBudgetInfo?.recommendedNumCtx
+    ? Math.round(modelBudgetInfo.recommendedNumCtx * 1.5)
+    : 131072;
+
+  const commitNumCtx = () => {
+    const parsed = parseInt(numCtxInput) || 2048;
+    const clamped = Math.max(2048, Math.min(numCtxMax, parsed));
+    setNumCtxInput(String(clamped));
+    const prev = settings.numCtx;
+    updateSettings({ numCtx: clamped });
+    // Reload the model with the new num_ctx so Ollama reallocates the KV cache.
+    // Without this, changing num_ctx only takes effect at next discussion start.
+    if (clamped !== prev && settings.ollamaModel) {
+      preloadModel(settings.ollamaModel);
+    }
+  };
 
   // Auto-save settings on change (debounced, skip initial hydration)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(null);
@@ -215,6 +265,88 @@ export default function SettingsPage() {
             </Field>
           </Section>
 
+          {/* License */}
+          <Section title={t("settings.license")} icon={KeyRound}>
+            <Field label={t("settings.licenseKey")}>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type={showLicenseKey ? "text" : "password"}
+                    value={settings.licenseKey}
+                    onChange={(e) =>
+                      updateSettings({ licenseKey: e.target.value })
+                    }
+                    placeholder="AIRENA-..."
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 pr-9 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLicenseKey(!showLicenseKey)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showLicenseKey ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+                <button
+                  onClick={handleValidateLicense}
+                  disabled={validatingLicense || !settings.licenseKey.trim()}
+                  className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+                >
+                  {validatingLicense ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <KeyRound className="h-3.5 w-3.5" />
+                  )}
+                  {t("settings.licenseValidate")}
+                </button>
+              </div>
+            </Field>
+
+            <Field label={t("settings.licenseStatus")}>
+              {!settings.licenseKey.trim() ? (
+                <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
+                  <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
+                  {t("settings.licenseNone")}
+                </div>
+              ) : licenseStatus?.valid ? (
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-green-500/10 text-green-500">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    {t("settings.licenseActive")}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {t("settings.licenseExpires", {
+                      date: new Date(
+                        licenseStatus.expiresAt * 1000,
+                      ).toLocaleString(undefined, {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      }),
+                    })}
+                  </p>
+                </div>
+              ) : licenseStatus ? (
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-destructive/10 text-destructive">
+                    <ShieldX className="h-3.5 w-3.5" />
+                    {licenseStatus.error === "License expired"
+                      ? t("settings.licenseExpired")
+                      : t("settings.licenseInvalid")}
+                  </div>
+                  {licenseStatus.error && (
+                    <p className="text-xs text-destructive">
+                      {licenseStatus.error}
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </Field>
+          </Section>
+
           {/* Ollama */}
           <Section title={t("settings.ollama")} icon={Server}>
             <Field label={t("settings.ollamaUrl")}>
@@ -271,6 +403,7 @@ export default function SettingsPage() {
                     value={settings.ollamaModel}
                     onChange={(e) => {
                       const model = e.target.value;
+                      userChangedModelRef.current = true;
                       updateSettings({ ollamaModel: model });
                       if (model) {
                         preloadModel(model);
@@ -314,7 +447,19 @@ export default function SettingsPage() {
                   <Database className="h-4 w-4 text-purple-500" />
                   <select
                     value={settings.embeddingModel}
-                    onChange={(e) => updateSettings({ embeddingModel: e.target.value })}
+                    onChange={async (e) => {
+                      const model = e.target.value;
+                      updateSettings({ embeddingModel: model });
+                      try {
+                        // Force save so backend reads the new embedding model, then refresh VRAM info
+                        await saveSettings();
+                        if (settings.ollamaModel) {
+                          fetchModelBudgetInfo(settings.ollamaModel, false);
+                        }
+                      } catch (err: unknown) {
+                        toast.error(t("settings.saveError"), extractErrorMessage(err));
+                      }
+                    }}
                     className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     <option value="">{t("settings.embeddingModelAuto")}</option>
@@ -343,6 +488,76 @@ export default function SettingsPage() {
                 <p className="mt-1 text-xs text-muted-foreground">
                   {t("settings.embeddingModelDesc")}
                 </p>
+              </Field>
+            )}
+
+            {/* Ollama initialization indicator */}
+            {initializingOllama && !ollamaInitialized && (
+              <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {t("settings.ollamaInitializing")}
+              </div>
+            )}
+
+            {/* Context window size (numCtx) + VRAM indicator */}
+            {ollamaConnected && settings.ollamaModel && (
+              <Field label={<><Layers className="inline h-3.5 w-3.5 mr-1" />{t("settings.numCtxLabel")}</>}>
+                {/* 1. Explanatory text (directly under title) */}
+                <div className="rounded-md border border-border/50 bg-muted/30 px-3 py-2">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {t("settings.numCtxDesc")}
+                  </p>
+                </div>
+
+                {/* 2. VRAM indicator (GPU info + refresh) */}
+                <VramIndicator
+                  info={modelBudgetInfo}
+                  loading={modelBudgetLoading || initializingOllama}
+                  onRefresh={async () => {
+                    if (settings.ollamaModel) {
+                      try {
+                        await saveSettings();
+                        fetchModelBudgetInfo(settings.ollamaModel, false);
+                      } catch (err: unknown) {
+                        toast.error(t("settings.saveError"), extractErrorMessage(err));
+                      }
+                    }
+                  }}
+                />
+
+                {/* 3. numCtx input + AUTO button */}
+                <div className="flex items-center gap-3">
+                  <input
+                    type="number"
+                    min={2048}
+                    max={numCtxMax}
+                    value={numCtxInput}
+                    onChange={(e) => setNumCtxInput(e.target.value)}
+                    onBlur={commitNumCtx}
+                    onKeyDown={(e) => e.key === "Enter" && commitNumCtx()}
+                    className="w-32 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <span className="text-sm text-muted-foreground">tokens</span>
+                  {modelBudgetInfo?.recommendedNumCtx && (
+                    <button
+                      onClick={() => {
+                        const rec = modelBudgetInfo.recommendedNumCtx!;
+                        updateSettings({ numCtx: rec });
+                        if (rec !== settings.numCtx && settings.ollamaModel) {
+                          preloadModel(settings.ollamaModel);
+                        }
+                      }}
+                      title={t("setup.vramAutoFillTooltip", { value: modelBudgetInfo.recommendedNumCtx.toLocaleString() })}
+                      className={cn(
+                        "flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-xs font-medium text-primary",
+                        "transition-colors hover:bg-primary/10",
+                      )}
+                    >
+                      <Zap className="h-3 w-3" />
+                      AUTO — {modelBudgetInfo.recommendedNumCtx.toLocaleString()}
+                    </button>
+                  )}
+                </div>
               </Field>
             )}
 
@@ -518,86 +733,15 @@ export default function SettingsPage() {
             )}
           </Section>
 
-          {/* License */}
-          <Section title={t("settings.license")} icon={KeyRound}>
-            <Field label={t("settings.licenseKey")}>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <input
-                    type={showLicenseKey ? "text" : "password"}
-                    value={settings.licenseKey}
-                    onChange={(e) =>
-                      updateSettings({ licenseKey: e.target.value })
-                    }
-                    placeholder="AIRENA-..."
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 pr-9 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowLicenseKey(!showLicenseKey)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    {showLicenseKey ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
-                  </button>
-                </div>
-                <button
-                  onClick={handleValidateLicense}
-                  disabled={validatingLicense || !settings.licenseKey.trim()}
-                  className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
-                >
-                  {validatingLicense ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <KeyRound className="h-3.5 w-3.5" />
-                  )}
-                  {t("settings.licenseValidate")}
-                </button>
-              </div>
-            </Field>
-
-            <Field label={t("settings.licenseStatus")}>
-              {!settings.licenseKey.trim() ? (
-                <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
-                  <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
-                  {t("settings.licenseNone")}
-                </div>
-              ) : licenseStatus?.valid ? (
-                <div className="space-y-1">
-                  <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-green-500/10 text-green-500">
-                    <ShieldCheck className="h-3.5 w-3.5" />
-                    {t("settings.licenseActive")}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {t("settings.licenseExpires", {
-                      date: new Date(
-                        licenseStatus.expiresAt * 1000,
-                      ).toLocaleString(undefined, {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      }),
-                    })}
-                  </p>
-                </div>
-              ) : licenseStatus ? (
-                <div className="space-y-1">
-                  <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-destructive/10 text-destructive">
-                    <ShieldX className="h-3.5 w-3.5" />
-                    {licenseStatus.error === "License expired"
-                      ? t("settings.licenseExpired")
-                      : t("settings.licenseInvalid")}
-                  </div>
-                  {licenseStatus.error && (
-                    <p className="text-xs text-destructive">
-                      {licenseStatus.error}
-                    </p>
-                  )}
-                </div>
-              ) : null}
-            </Field>
+          {/* Token Budget Priorities */}
+          <Section title={t("settings.tokenBudget")} icon={Layers}>
+            <p className="text-sm text-muted-foreground">
+              {t("settings.tokenBudgetDesc")}
+            </p>
+            <TokenBudgetPriorities
+              value={settings.tokenBudgetPriorities}
+              onChange={(json) => updateSettings({ tokenBudgetPriorities: json })}
+            />
           </Section>
         </div>
       </div>
@@ -629,7 +773,7 @@ function Field({
   label,
   children,
 }: {
-  label: string;
+  label: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -638,6 +782,101 @@ function Field({
         {label}
       </label>
       {children}
+    </div>
+  );
+}
+
+function TokenBudgetPriorities({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (json: string) => void;
+}) {
+  const { t } = useTranslation();
+
+  // Parse stored priorities or build defaults
+  const sections = (() => {
+    try {
+      if (value) {
+        const parsed: SectionPriority[] = JSON.parse(value);
+        // Filter to CONFIGURABLE sections only (document sections are auto-managed by backend)
+        const configurable = parsed.filter((p) => CONFIGURABLE_BUDGET_SECTIONS.includes(p.section));
+        const present = new Set(configurable.map((p) => p.section));
+        if (CONFIGURABLE_BUDGET_SECTIONS.every((s) => present.has(s))) {
+          return [...configurable].sort((a, b) => a.rank - b.rank);
+        }
+      }
+    } catch { /* fall through to defaults */ }
+    // Default order (rank 4-10)
+    return CONFIGURABLE_BUDGET_SECTIONS.map((section, i) => ({
+      section,
+      rank: i + 4,
+      floor: 0,
+      ceiling: 0,
+    }));
+  })();
+
+  const moveUp = (index: number) => {
+    if (index <= 0) return;
+    const updated = [...sections];
+    [updated[index - 1], updated[index]] = [updated[index], updated[index - 1]];
+    // Re-assign ranks
+    const reranked = updated.map((s, i) => ({ ...s, rank: i + 4 }));
+    onChange(JSON.stringify(reranked));
+  };
+
+  const moveDown = (index: number) => {
+    if (index >= sections.length - 1) return;
+    const updated = [...sections];
+    [updated[index], updated[index + 1]] = [updated[index + 1], updated[index]];
+    const reranked = updated.map((s, i) => ({ ...s, rank: i + 4 }));
+    onChange(JSON.stringify(reranked));
+  };
+
+  const handleReset = () => {
+    onChange("");
+  };
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">{t("settings.tokenBudgetDragHint")}</p>
+      <div className="space-y-1">
+        {sections.map((s, i) => (
+          <div
+            key={s.section}
+            className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5"
+          >
+            <span className="w-5 text-center text-xs font-mono text-muted-foreground">
+              {s.rank}
+            </span>
+            <span className="flex-1 text-sm text-foreground">
+              {t(`setup.budgetSection_${s.section}`)}
+            </span>
+            <button
+              onClick={() => moveUp(i)}
+              disabled={i === 0}
+              className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-20"
+            >
+              <ArrowUp className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => moveDown(i)}
+              disabled={i === sections.length - 1}
+              className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-20"
+            >
+              <ArrowDown className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <button
+        onClick={handleReset}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <RotateCcw className="h-3 w-3" />
+        {t("settings.tokenBudgetReset")}
+      </button>
     </div>
   );
 }

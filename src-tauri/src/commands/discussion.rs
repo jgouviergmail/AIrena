@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::db::repository;
 use crate::engine::orchestrator::DiscussionEngine;
+use crate::engine::token_budget;
 use crate::error::CommandError;
 use crate::models::discussion::DiscussionConfig;
 use crate::models::engine_command::EngineCommand;
@@ -126,10 +127,12 @@ pub async fn start_discussion(
 
     let argument_map_enabled = config.argument_map_enabled;
 
+    let priorities = token_budget::parse_priorities_or_default(&settings.token_budget_priorities);
+
     tauri::async_runtime::spawn(async move {
         let mut engine = DiscussionEngine::new(
             config, id_clone, &ollama_url, &ollama_model,
-            tavily_key.as_deref(), db_clone, rag_store,
+            tavily_key.as_deref(), db_clone, rag_store, priorities,
         );
         engine.set_cancel_token(engine_cancel);
         engine.set_emotion_driven(emotion_driven);

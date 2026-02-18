@@ -82,4 +82,18 @@ pub struct DiscussionConfig {
     /// Enable real-time argument map extraction
     #[serde(default)]
     pub argument_map_enabled: bool,
+    /// Whether to inject the full document or use RAG chunk search.
+    #[serde(default)]
+    pub document_injection_mode: DocumentInjectionMode,
+}
+
+/// Controls how imported documents are provided to the AI during discussions.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DocumentInjectionMode {
+    /// Search-based: relevant chunks extracted via hybrid BM25 + vector search.
+    #[default]
+    Rag,
+    /// Full injection: entire document included in each prompt (requires sufficient budget).
+    FullInjection,
 }

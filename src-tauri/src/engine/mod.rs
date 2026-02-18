@@ -6,6 +6,7 @@ pub mod memory_manager;
 pub mod mode_prompts;
 pub mod orchestrator;
 pub mod prompt_builder;
+pub mod token_budget;
 pub mod turn_manager;
 
 /// UTF-8–safe truncation: returns the longest prefix of `s` that fits within `max_chars`.

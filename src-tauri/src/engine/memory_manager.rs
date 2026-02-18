@@ -32,13 +32,16 @@ pub fn add_turn_to_memory(
     }
 }
 
-/// Update contextual summary and positional map from a combined LLM response
+/// Update contextual summary and positional map from a combined LLM response.
+/// `summary_max_chars` controls the maximum length of the stored summary —
+/// dynamically set by the token budget instead of using a fixed constant.
 pub fn update_from_llm_response(
     memory: &mut ParticipantMemory,
     summary: String,
     positions: HashMap<String, String>,
+    summary_max_chars: usize,
 ) {
-    memory.contextual_summary = truncate_content(&summary, constants::MEMORY_MAX_SUMMARY_CHARS);
+    memory.contextual_summary = truncate_content(&summary, summary_max_chars);
 
     memory.positional_map = positions
         .into_iter()

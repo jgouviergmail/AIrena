@@ -63,3 +63,66 @@ pub struct ModelInfo {
     #[serde(default)]
     pub digest: String,
 }
+
+// ── /api/show response ──────────────────────────────────────────────────
+
+/// Response from Ollama's POST `/api/show` endpoint.
+/// Contains model architecture details, parameters, and quantization info.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ShowResponse {
+    /// Template used for prompt formatting.
+    #[serde(default)]
+    pub template: String,
+    /// Model metadata (family, parameter_size, quantization_level).
+    #[serde(default)]
+    pub details: ShowDetails,
+    /// Architecture-specific model info. Keys are prefixed by model family
+    /// (e.g. `"llama.block_count"`, `"qwen2.embedding_length"`).
+    #[serde(default)]
+    pub model_info: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Model details from the `details` field of `/api/show`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ShowDetails {
+    #[serde(default)]
+    pub parent_model: String,
+    #[serde(default)]
+    pub format: String,
+    #[serde(default)]
+    pub family: String,
+    #[serde(default)]
+    pub parameter_size: String,
+    #[serde(default)]
+    pub quantization_level: String,
+}
+
+// ── /api/ps response ────────────────────────────────────────────────────
+
+/// Response from Ollama's GET `/api/ps` endpoint.
+/// Lists currently loaded models with VRAM usage.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PsResponse {
+    #[serde(default)]
+    pub models: Vec<PsModel>,
+}
+
+/// A single running model from `/api/ps`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PsModel {
+    /// Full model name (e.g. "llama3.1:8b-instruct-q4_K_M").
+    #[serde(default)]
+    pub name: String,
+    /// Short model identifier.
+    #[serde(default)]
+    pub model: String,
+    /// Total model size in bytes.
+    #[serde(default)]
+    pub size: u64,
+    /// VRAM occupied by this model in bytes.
+    #[serde(default)]
+    pub size_vram: u64,
+    /// Expiry timestamp for keep-alive.
+    #[serde(default)]
+    pub expires_at: String,
+}

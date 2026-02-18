@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { logger } from "@/lib/logger";
 import { extractErrorMessage } from "@/lib/error-utils";
 import { toast } from "@/stores/useToastStore";
-import type { AppSettings, ModelInfo, PredefinedProfile } from "@/lib/types";
+import type { AppSettings, ModelBudgetInfo, ModelInfo, PredefinedProfile } from "@/lib/types";
 import * as api from "@/lib/tauri-api";
 
 interface SettingsState {
@@ -15,6 +15,10 @@ interface SettingsState {
   preloading: boolean;
   preloadDone: boolean;
   preloadError: string | null;
+  modelBudgetInfo: ModelBudgetInfo | null;
+  modelBudgetLoading: boolean;
+  initializingOllama: boolean;
+  ollamaInitialized: boolean;
 
   hydrate: () => Promise<void>;
   updateSettings: (patch: Partial<AppSettings>) => void;
@@ -22,6 +26,8 @@ interface SettingsState {
   checkOllama: () => Promise<boolean>;
   refreshModels: () => Promise<void>;
   preloadModel: (model: string) => Promise<void>;
+  fetchModelBudgetInfo: (model: string, autoFillNumCtx?: boolean) => Promise<void>;
+  initializeOllama: () => Promise<void>;
   refreshProfiles: () => Promise<void>;
   saveProfile: (profile: PredefinedProfile) => Promise<void>;
   deleteProfile: (id: string) => Promise<void>;
@@ -31,6 +37,7 @@ interface SettingsState {
 }
 
 let preloadGeneration = 0;
+let budgetInfoGeneration = 0;
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: {
@@ -46,6 +53,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     tavilyUsageHistory: "[]",
     embeddingModel: "",
     licenseKey: "",
+    tokenBudgetPriorities: "",
+    numCtx: 8192,
   },
   profiles: [],
   arbitreProfiles: [],
@@ -55,6 +64,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   preloading: false,
   preloadDone: false,
   preloadError: null,
+  modelBudgetInfo: null,
+  modelBudgetLoading: false,
+  initializingOllama: false,
+  ollamaInitialized: false,
 
   hydrate: async () => {
     try {
@@ -114,10 +127,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     logger.info("settings", `Preloading model: ${model} (gen=${gen})`);
     set({ preloading: true, preloadDone: false, preloadError: null });
     try {
-      await api.preloadOllamaModel(model);
+      const numCtx = get().settings.numCtx;
+      await api.preloadOllamaModel(model, numCtx > 0 ? numCtx : undefined);
       if (gen === preloadGeneration) {
         logger.info("settings", `Model preloaded: ${model}`);
         set({ preloading: false, preloadDone: true });
+        // After successful preload, refresh VRAM display (model is now loaded, VRAM changed)
+        get().fetchModelBudgetInfo(model, false);
       } else {
         logger.debug("settings", `Stale preload ignored (gen=${gen}, current=${preloadGeneration})`);
       }
@@ -126,6 +142,56 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       if (gen === preloadGeneration) {
         set({ preloading: false, preloadError: extractErrorMessage(e) });
       }
+    }
+  },
+
+  fetchModelBudgetInfo: async (model, autoFillNumCtx = false) => {
+    if (!model) {
+      set({ modelBudgetInfo: null, modelBudgetLoading: false });
+      return;
+    }
+    const gen = ++budgetInfoGeneration;
+    set({ modelBudgetLoading: true });
+    try {
+      const info = await api.getModelBudgetInfo(model);
+      if (gen === budgetInfoGeneration) {
+        set({ modelBudgetInfo: info, modelBudgetLoading: false });
+        // Only auto-fill numCtx when explicitly requested (user changed model)
+        if (autoFillNumCtx && info.recommendedNumCtx) {
+          get().updateSettings({ numCtx: info.recommendedNumCtx });
+        }
+      }
+    } catch (e) {
+      logger.error("settings", `Failed to fetch model budget info: ${model}`, e);
+      if (gen === budgetInfoGeneration) {
+        set({ modelBudgetInfo: null, modelBudgetLoading: false });
+      }
+    }
+  },
+
+  initializeOllama: async () => {
+    set({ initializingOllama: true });
+    try {
+      const info = await api.initializeOllama();
+      set({
+        ollamaConnected: true,
+        modelBudgetInfo: info,
+        preloadDone: true,
+        ollamaInitialized: true,
+        initializingOllama: false,
+      });
+      // Auto-fill numCtx with recommended value
+      if (info.recommendedNumCtx) {
+        get().updateSettings({ numCtx: info.recommendedNumCtx });
+      }
+      // Populate model list
+      await get().refreshModels();
+      logger.info("settings", "Ollama initialized successfully");
+    } catch (e) {
+      logger.error("settings", "Ollama initialization failed, falling back to checkOllama", e);
+      set({ initializingOllama: false });
+      // Fallback: at least check connectivity
+      await get().checkOllama();
     }
   },
 

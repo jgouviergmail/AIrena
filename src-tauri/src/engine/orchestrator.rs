@@ -12,10 +12,11 @@ use crate::engine::emotion_engine::{self, EmotionContext};
 use crate::engine::json_parser;
 use crate::engine::memory_manager;
 use crate::engine::prompt_builder;
+use crate::engine::token_budget::{BudgetFeatures, BudgetParams, SectionPriority, TokenBudget};
 use crate::engine::turn_manager;
 use crate::models::emotion::{EmotionSnapshot, EmotionalProfile};
 use crate::engine::mode_prompts;
-use crate::models::discussion::{DiscussionConfig, DiscussionMode, DiscussionStatus, DocumentFormat, TurnDistribution};
+use crate::models::discussion::{DiscussionConfig, DiscussionMode, DiscussionStatus, DocumentFormat, DocumentInjectionMode, TurnDistribution};
 use crate::models::engine_command::EngineCommand;
 use crate::models::events::ArenaEvent;
 use crate::models::gladiateur::GladIAteurState;
@@ -111,9 +112,13 @@ pub struct DiscussionEngine {
     argument_map_enabled: bool,
     /// Accumulated argument map across all turns
     argument_map: ArgumentMap,
+    /// Per-speaker token budgets (speaker_id → TokenBudget).
+    /// Computed once at engine construction; used by prompt_builder for dynamic truncation.
+    budgets: HashMap<String, TokenBudget>,
 }
 
 impl DiscussionEngine {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: DiscussionConfig,
         discussion_id: String,
@@ -122,10 +127,11 @@ impl DiscussionEngine {
         tavily_api_key: Option<&str>,
         db: tokio_rusqlite::Connection,
         rag_store: Option<RagStore>,
+        priorities: Vec<SectionPriority>,
     ) -> Self {
         let ollama_client = OllamaClient::new(ollama_url, ollama_model);
         let arbitre = IArbitreState::new(config.arbitre.clone());
-        let gladiateurs = config
+        let gladiateurs: Vec<GladIAteurState> = config
             .gladiateurs
             .iter()
             .map(|g| {
@@ -136,6 +142,118 @@ impl DiscussionEngine {
         let tavily_client = tavily_api_key
             .filter(|k| !k.is_empty())
             .map(TavilyClient::new);
+
+        // Compute per-speaker token budgets.
+        let has_rag = rag_store.as_ref().is_some_and(|r| !r.is_empty());
+        let rag_total_chars = rag_store.as_ref().map_or(0, |r| r.total_char_count());
+        let features = match config.document_injection_mode {
+            DocumentInjectionMode::FullInjection => BudgetFeatures {
+                web_search_enabled: config.web_search_pool > 0
+                    || config.arbitre.web_search_intro,
+                wiki_search_enabled: config.wiki_search_pool > 0
+                    || config.arbitre.wiki_search_intro,
+                // Safety net: keep RAG enabled when docs exist so the budget allocator
+                // provides RAG fallback if the full document doesn't fit.
+                // token_budget.rs zeroes rag_context_chars when full_document_mode is true.
+                rag_enabled: has_rag,
+                document_chars: rag_total_chars,
+            },
+            DocumentInjectionMode::Rag => BudgetFeatures {
+                web_search_enabled: config.web_search_pool > 0
+                    || config.arbitre.web_search_intro,
+                wiki_search_enabled: config.wiki_search_pool > 0
+                    || config.arbitre.wiki_search_intro,
+                rag_enabled: has_rag,
+                document_chars: 0,
+            },
+        };
+
+        let mut budgets = HashMap::new();
+
+        // Budget for IArbitre
+        let arbitre_params = BudgetParams {
+            num_ctx: config.arbitre.llm_params.num_ctx,
+            num_predict: config.arbitre.llm_params.num_predict,
+            system_prompt_chars: config.arbitre.system_prompt.len(),
+            n_gladiateurs: config.gladiateurs.len(),
+            language: config.discussion_language.clone(),
+            features: features.clone(),
+        };
+        let (arbitre_budget, arbitre_warnings) =
+            TokenBudget::compute(&arbitre_params, &priorities);
+        for w in &arbitre_warnings {
+            tracing::warn!("[BUDGET] IArbitre '{}': {}", config.arbitre.name, w);
+        }
+        tracing::info!(
+            "[BUDGET] IArbitre '{}': ctx={} predict={} sys_prompt={}chars → \
+             current_turn={}c/msg imm_mem={}c/msg summary={}c cognitive={}c arbitre={}c \
+             full_doc={}c(mode={}) web_wiki={}c rag={}c pos_map={}c",
+            config.arbitre.name,
+            arbitre_params.num_ctx,
+            arbitre_params.num_predict,
+            arbitre_params.system_prompt_chars,
+            arbitre_budget.current_turn_msg_chars,
+            arbitre_budget.immediate_memory_msg_chars,
+            arbitre_budget.contextual_summary_chars,
+            arbitre_budget.cognitive_directives_chars,
+            arbitre_budget.arbitre_directives_chars,
+            arbitre_budget.full_document_chars,
+            arbitre_budget.full_document_mode,
+            arbitre_budget.web_wiki_chars,
+            arbitre_budget.rag_context_chars,
+            arbitre_budget.positional_map_chars,
+        );
+        budgets.insert(config.arbitre.id.clone(), arbitre_budget);
+
+        // Budget for each GladIAteur
+        for g in &config.gladiateurs {
+            let glad_params = BudgetParams {
+                num_ctx: g.llm_params.num_ctx,
+                num_predict: g.llm_params.num_predict,
+                system_prompt_chars: g.system_prompt.len(),
+                n_gladiateurs: config.gladiateurs.len(),
+                language: config.discussion_language.clone(),
+                features: features.clone(),
+            };
+            let (glad_budget, glad_warnings) =
+                TokenBudget::compute(&glad_params, &priorities);
+            for w in &glad_warnings {
+                tracing::warn!("[BUDGET] GladIAteur '{}': {}", g.name, w);
+            }
+            tracing::info!(
+                "[BUDGET] GladIAteur '{}': ctx={} predict={} sys_prompt={}chars → \
+                 current_turn={}c/msg imm_mem={}c/msg summary={}c cognitive={}c arbitre={}c \
+                 full_doc={}c(mode={}) web_wiki={}c rag={}c pos_map={}c",
+                g.name,
+                glad_params.num_ctx,
+                glad_params.num_predict,
+                glad_params.system_prompt_chars,
+                glad_budget.current_turn_msg_chars,
+                glad_budget.immediate_memory_msg_chars,
+                glad_budget.contextual_summary_chars,
+                glad_budget.cognitive_directives_chars,
+                glad_budget.arbitre_directives_chars,
+                glad_budget.full_document_chars,
+                glad_budget.full_document_mode,
+                glad_budget.web_wiki_chars,
+                glad_budget.rag_context_chars,
+                glad_budget.positional_map_chars,
+            );
+            budgets.insert(g.id.clone(), glad_budget);
+        }
+
+        // Warn if full injection was requested but budget couldn't fit the document.
+        if config.document_injection_mode == DocumentInjectionMode::FullInjection {
+            for (id, budget) in &budgets {
+                if !budget.full_document_mode {
+                    tracing::warn!(
+                        "[BUDGET] Speaker '{}': full injection requested but budget insufficient \
+                         (allocated {}chars < {}chars needed). Falling back to RAG.",
+                        id, budget.full_document_chars, rag_total_chars,
+                    );
+                }
+            }
+        }
 
         Self {
             discussion_id,
@@ -168,7 +286,35 @@ impl DiscussionEngine {
             rag_store,
             argument_map_enabled: false,
             argument_map: ArgumentMap::default(),
+            budgets,
         }
+    }
+
+    /// Safe accessor for per-speaker token budgets.
+    /// Returns the budget for the given speaker, or the default fallback budget
+    /// if the speaker ID is unexpectedly missing (should never happen).
+    fn budget_for(&self, speaker_id: &str) -> &TokenBudget {
+        static DEFAULT_BUDGET: std::sync::LazyLock<TokenBudget> =
+            std::sync::LazyLock::new(TokenBudget::default);
+        self.budgets.get(speaker_id).unwrap_or_else(|| {
+            tracing::error!(
+                speaker_id = speaker_id,
+                "Budget not found for speaker — using default fallback"
+            );
+            &DEFAULT_BUDGET
+        })
+    }
+
+    /// Returns the full document text for injection when the speaker's budget allows it.
+    /// When `full_document_mode` is true, the entire RAG document is injected directly
+    /// instead of using chunk-based RAG search.
+    fn full_document_for(&self, speaker_id: &str) -> Option<String> {
+        let budget = self.budget_for(speaker_id);
+        if !budget.full_document_mode {
+            return None;
+        }
+        let rag_store = self.rag_store.as_ref()?;
+        rag_store.get_full_text()
     }
 
     pub fn set_cancel_token(&mut self, token: CancellationToken) {
@@ -356,37 +502,41 @@ impl DiscussionEngine {
         };
 
         // RAG knowledge base for introduction
-        if let Some(ref rag_store) = self.rag_store {
-            if !rag_store.is_empty() {
-                let lang = &self.config.discussion_language;
-                match rag_store
-                    .query(
-                        &self.config.topic,
-                        lang,
-                        &self.ollama_client,
-                        &self.arbitre.config.llm_params,
-                        self.cancel_token.clone(),
-                    )
-                    .await
-                {
-                    Ok((ctx_text, chunks)) if !chunks.is_empty() => {
-                        tracing::info!(
-                            chunk_count = chunks.len(),
-                            "RAG context injected for introduction"
-                        );
-                        let _ = channel.send(ArenaEvent::RagContextInjected {
-                            speaker_id: self.arbitre.config.id.clone(),
-                            speaker_name: self.arbitre.config.name.clone(),
-                            chunks,
-                        });
-                        intro_search_context = Some(match intro_search_context {
-                            Some(existing) => format!("{existing}\n\n{ctx_text}"),
-                            None => ctx_text,
-                        });
-                    }
-                    Ok(_) => {} // Empty results
-                    Err(e) => {
-                        tracing::warn!(error = %e, "RAG query failed for introduction — continuing");
+        // Skip RAG search when full document injection is active — the full text
+        // is injected directly by the prompt builder.
+        if !self.budget_for(&self.arbitre.config.id).full_document_mode {
+            if let Some(ref rag_store) = self.rag_store {
+                if !rag_store.is_empty() {
+                    let lang = &self.config.discussion_language;
+                    match rag_store
+                        .query(
+                            &self.config.topic,
+                            lang,
+                            &self.ollama_client,
+                            &self.arbitre.config.llm_params,
+                            self.cancel_token.clone(),
+                        )
+                        .await
+                    {
+                        Ok((ctx_text, chunks)) if !chunks.is_empty() => {
+                            tracing::info!(
+                                chunk_count = chunks.len(),
+                                "RAG context injected for introduction"
+                            );
+                            let _ = channel.send(ArenaEvent::RagContextInjected {
+                                speaker_id: self.arbitre.config.id.clone(),
+                                speaker_name: self.arbitre.config.name.clone(),
+                                chunks,
+                            });
+                            intro_search_context = Some(match intro_search_context {
+                                Some(existing) => format!("{existing}\n\n{ctx_text}"),
+                                None => ctx_text,
+                            });
+                        }
+                        Ok(_) => {} // Empty results
+                        Err(e) => {
+                            tracing::warn!(error = %e, "RAG query failed for introduction — continuing");
+                        }
                     }
                 }
             }
@@ -397,12 +547,15 @@ impl DiscussionEngine {
             .iter()
             .map(|g| g.config.name.clone())
             .collect();
+        let intro_full_doc = self.full_document_for(&self.arbitre.config.id);
         let intro_prompt = prompt_builder::build_introduction_prompt(
             &self.config.topic,
             &participant_names,
             &self.config.discussion_language,
             intro_search_context.as_deref(),
             &self.config.discussion_mode,
+            intro_full_doc.as_deref(),
+            self.budget_for(&self.arbitre.config.id),
         );
         let intro_request = self.ollama_client.build_request(
             &self.config.arbitre.system_prompt,
@@ -836,14 +989,18 @@ impl DiscussionEngine {
                     };
 
                     // RAG knowledge base query (after web + wiki)
-                    let rag_ctx = self.process_rag_query(
-                        &speaker_id, &speaker_name, glad_idx, &channel,
-                    ).await;
-                    if let Some(rag) = rag_ctx {
-                        search_ctx = Some(match search_ctx {
-                            Some(existing) => format!("{existing}\n\n{rag}"),
-                            None => rag,
-                        });
+                    // Skip RAG when full document mode is active — the full text
+                    // is injected directly by the prompt builder.
+                    if !self.budget_for(&speaker_id).full_document_mode {
+                        let rag_ctx = self.process_rag_query(
+                            &speaker_id, &speaker_name, glad_idx, &channel,
+                        ).await;
+                        if let Some(rag) = rag_ctx {
+                            search_ctx = Some(match search_ctx {
+                                Some(existing) => format!("{existing}\n\n{rag}"),
+                                None => rag,
+                            });
+                        }
                     }
 
                     search_ctx
@@ -880,6 +1037,10 @@ impl DiscussionEngine {
                 };
 
                 // C.3 INNER THOUGHT + C.4 PUBLIC INTERVENTION
+                // Full document injection: when the budget allows, inject the entire RAG document
+                // directly into the prompt instead of using chunk-based search.
+                let full_doc_text = self.full_document_for(&speaker_id);
+
                 // When think mode is enabled, the model reasons internally (replaces separate thought phase)
                 let use_think = self.should_enable_think(glad_idx);
                 let (thought, content) = if use_think {
@@ -888,7 +1049,7 @@ impl DiscussionEngine {
                         turn = self.current_turn,
                         "Using think mode for intervention"
                     );
-                    let (t, c) = self.process_intervention_think(glad_idx, search_context.as_deref(), dynamic_directive.as_deref(), &channel).await;
+                    let (t, c) = self.process_intervention_think(glad_idx, search_context.as_deref(), dynamic_directive.as_deref(), full_doc_text.as_deref(), &channel).await;
                     // If think mode failed (HTTP 400 = model doesn't support it),
                     // fall back to the normal thought + intervention path
                     if c.is_none() {
@@ -898,7 +1059,7 @@ impl DiscussionEngine {
                         );
                         let thought = self.process_thought(glad_idx, search_context.as_deref(), &channel).await;
                         let content = self
-                            .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), &channel)
+                            .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), full_doc_text.as_deref(), &channel)
                             .await;
                         (thought, content)
                     } else {
@@ -907,7 +1068,7 @@ impl DiscussionEngine {
                 } else {
                     let thought = self.process_thought(glad_idx, search_context.as_deref(), &channel).await;
                     let content = self
-                        .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), &channel)
+                        .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), full_doc_text.as_deref(), &channel)
                         .await;
                     (thought, content)
                 };
@@ -1439,6 +1600,7 @@ impl DiscussionEngine {
             self.config.max_turns,
             search_results,
             &self.config.discussion_mode,
+            self.budget_for(&self.gladiateurs[glad_idx].config.id),
         );
         let request = self.ollama_client.build_request(
             &self.gladiateurs[glad_idx].config.system_prompt,
@@ -1482,6 +1644,7 @@ impl DiscussionEngine {
         thought: Option<&str>,
         search_results: Option<&str>,
         dynamic_directive: Option<&str>,
+        full_document: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> Option<String> {
         // Exclude current speaker from participant names to prevent self-addressing
@@ -1506,6 +1669,8 @@ impl DiscussionEngine {
             &other_names,
             dynamic_directive,
             &self.config.discussion_mode,
+            full_document,
+            self.budget_for(&self.gladiateurs[glad_idx].config.id),
         );
 
         let request = self.ollama_client.build_request(
@@ -1677,6 +1842,7 @@ impl DiscussionEngine {
         glad_idx: usize,
         search_results: Option<&str>,
         dynamic_directive: Option<&str>,
+        full_document: Option<&str>,
         channel: &Channel<ArenaEvent>,
     ) -> (Option<String>, Option<String>) {
         // Exclude current speaker from participant names to prevent self-addressing
@@ -1701,6 +1867,8 @@ impl DiscussionEngine {
             &other_names,
             dynamic_directive,
             &self.config.discussion_mode,
+            full_document,
+            self.budget_for(&self.gladiateurs[glad_idx].config.id),
         );
 
         let mut request = self.ollama_client.build_request(
@@ -2009,6 +2177,7 @@ impl DiscussionEngine {
             &turn_text,
             &self.config.discussion_language,
             &self.config.discussion_mode,
+            self.budget_for(&self.arbitre.config.id),
         );
         let mem_sys = self.memory_summarizer_prompt();
         let request = self.ollama_client.build_request(
@@ -2042,9 +2211,10 @@ impl DiscussionEngine {
 
         // Parse the combined JSON: { "summary": "...", "positions": { ... } }
         if let Ok(parsed) = json_parser::parse_json_response::<MemoryUpdateResponse>(&raw) {
-            memory_manager::update_from_llm_response(&mut self.arbitre.memory, parsed.summary.clone(), parsed.positions.clone());
+            let summary_max = self.budget_for(&self.arbitre.config.id).contextual_summary_chars;
+            memory_manager::update_from_llm_response(&mut self.arbitre.memory, parsed.summary.clone(), parsed.positions.clone(), summary_max);
             for g in &mut self.gladiateurs {
-                memory_manager::update_from_llm_response(&mut g.memory, parsed.summary.clone(), parsed.positions.clone());
+                memory_manager::update_from_llm_response(&mut g.memory, parsed.summary.clone(), parsed.positions.clone(), summary_max);
             }
         } else {
             let end = raw.floor_char_boundary(500);
@@ -2059,6 +2229,7 @@ impl DiscussionEngine {
 
     async fn generate_synthesis(&self, search_results: Option<&str>, channel: &Channel<ArenaEvent>) {
         let document_context = self.build_document_context_for_synthesis();
+        let full_doc_text = self.full_document_for(&self.arbitre.config.id);
         let prompt = prompt_builder::build_synthesis_prompt(
             &self.config.topic,
             &self.arbitre.memory,
@@ -2066,6 +2237,8 @@ impl DiscussionEngine {
             search_results,
             &self.config.discussion_mode,
             document_context.as_deref(),
+            full_doc_text.as_deref(),
+            self.budget_for(&self.arbitre.config.id),
         );
         let request = self.ollama_client.build_request(
             &self.arbitre.config.system_prompt,
