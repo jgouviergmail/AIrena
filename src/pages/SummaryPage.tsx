@@ -68,9 +68,9 @@ export default function SummaryPage() {
     <>
       <TopBar title={t("summary.title")} />
       <div className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-2xl space-y-6">
-          {/* Stats */}
-          <div className="space-y-3">
+        <div className="mx-auto max-w-5xl space-y-6">
+          {/* Stats — narrow */}
+          <div className="mx-auto max-w-2xl space-y-3">
             {/* Topic — prominent */}
             <div className="rounded-xl border border-border bg-card p-4">
               <p className="text-xs text-muted-foreground">{t("summary.topic")}</p>
@@ -118,47 +118,49 @@ export default function SummaryPage() {
             </div>
           </div>
 
-          {/* Tab toggle */}
-          <div className="flex rounded-lg border border-border bg-card p-1">
-            <button
-              onClick={() => setTab("synthesis")}
-              className={cn(
-                "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
-                tab === "synthesis"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {t("summary.tabSynthesis")}
-            </button>
-            <button
-              onClick={() => setTab("discussion")}
-              className={cn(
-                "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
-                tab === "discussion"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {t("summary.tabDiscussion")}
-            </button>
-            {argumentMapMarkdown && (
+          {/* Tab toggle — narrow */}
+          <div className="mx-auto max-w-2xl">
+            <div className="flex rounded-lg border border-border bg-card p-1">
               <button
-                onClick={() => setTab("argumentMap")}
+                onClick={() => setTab("synthesis")}
                 className={cn(
                   "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
-                  tab === "argumentMap"
+                  tab === "synthesis"
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                <Network className="mr-1.5 inline h-3.5 w-3.5" />
-                {t("summary.tabArgumentMap")}
+                {t("summary.tabSynthesis")}
               </button>
-            )}
+              <button
+                onClick={() => setTab("discussion")}
+                className={cn(
+                  "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+                  tab === "discussion"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {t("summary.tabDiscussion")}
+              </button>
+              {argumentMapMarkdown && (
+                <button
+                  onClick={() => setTab("argumentMap")}
+                  className={cn(
+                    "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+                    tab === "argumentMap"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Network className="mr-1.5 inline h-3.5 w-3.5" />
+                  {t("summary.tabArgumentMap")}
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Tab content */}
+          {/* Tab content — full width for tables in synthesis */}
           {tab === "synthesis" ? (
             <div className="rounded-xl border border-border bg-card p-6">
               <h2 className="mb-4 text-lg font-semibold text-foreground">
@@ -178,69 +180,72 @@ export default function SummaryPage() {
             </div>
           )}
 
-          {/* Document download */}
-          {documentContent && documentFormat !== "none" && (
-            <div className="flex justify-center">
-              <button
-                onClick={() => downloadTextFile(documentContent, `airena-document.${documentFormat}`).catch((e) => console.error("Download failed:", e))}
-                className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
-              >
-                <Download className="h-4 w-4" />
-                {t("summary.downloadDocument")} (.{documentFormat})
-              </button>
-            </div>
-          )}
-
-          {/* Argument map download */}
-          {argumentMapMarkdown && (
-            <div className="flex justify-center gap-3">
-              <button
-                onClick={() => downloadTextFile(argumentMapMarkdown, "airena-argument-map.md").catch((e) => console.error("Download failed:", e))}
-                className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
-              >
-                <Download className="h-4 w-4" />
-                {t("summary.downloadArgumentMap")} (.md)
-              </button>
-              {tab === "argumentMap" && (
+          {/* Downloads & actions — narrow */}
+          <div className="mx-auto max-w-2xl space-y-6">
+            {/* Document download */}
+            {documentContent && documentFormat !== "none" && (
+              <div className="flex justify-center">
                 <button
-                  onClick={() => {
-                    const svgHtml = markmapRef.current?.getSvgHtml();
-                    if (svgHtml) {
-                      downloadTextFile(svgHtml, "airena-argument-map.svg").catch((e) => console.error("SVG download failed:", e));
-                    }
-                  }}
+                  onClick={() => downloadTextFile(documentContent, `airena-document.${documentFormat}`).catch((e) => console.error("Download failed:", e))}
                   className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
                 >
                   <Download className="h-4 w-4" />
-                  {t("summary.downloadArgumentMapSvg")} (.svg)
+                  {t("summary.downloadDocument")} (.{documentFormat})
                 </button>
-              )}
-            </div>
-          )}
+              </div>
+            )}
 
-          {/* Actions */}
-          <div className="flex justify-center gap-4">
-            <button
-              onClick={handleHome}
-              className="flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
-            >
-              <Home className="h-4 w-4" />
-              {t("summary.backHome")}
-            </button>
-            <button
-              onClick={() => navigate("/history")}
-              className="flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
-            >
-              <History className="h-4 w-4" />
-              {t("summary.viewHistory")}
-            </button>
-            <button
-              onClick={handleNewDiscussion}
-              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-            >
-              <MessageSquarePlus className="h-4 w-4" />
-              {t("summary.newDiscussion")}
-            </button>
+            {/* Argument map download */}
+            {argumentMapMarkdown && (
+              <div className="flex justify-center gap-3">
+                <button
+                  onClick={() => downloadTextFile(argumentMapMarkdown, "airena-argument-map.md").catch((e) => console.error("Download failed:", e))}
+                  className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                >
+                  <Download className="h-4 w-4" />
+                  {t("summary.downloadArgumentMap")} (.md)
+                </button>
+                {tab === "argumentMap" && (
+                  <button
+                    onClick={() => {
+                      const svgHtml = markmapRef.current?.getSvgHtml();
+                      if (svgHtml) {
+                        downloadTextFile(svgHtml, "airena-argument-map.svg").catch((e) => console.error("SVG download failed:", e));
+                      }
+                    }}
+                    className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                  >
+                    <Download className="h-4 w-4" />
+                    {t("summary.downloadArgumentMapSvg")} (.svg)
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={handleHome}
+                className="flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+              >
+                <Home className="h-4 w-4" />
+                {t("summary.backHome")}
+              </button>
+              <button
+                onClick={() => navigate("/history")}
+                className="flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+              >
+                <History className="h-4 w-4" />
+                {t("summary.viewHistory")}
+              </button>
+              <button
+                onClick={handleNewDiscussion}
+                className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                <MessageSquarePlus className="h-4 w-4" />
+                {t("summary.newDiscussion")}
+              </button>
+            </div>
           </div>
         </div>
       </div>
