@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  AlertCircle,
   ArrowDown,
   ArrowUp,
   Check,
@@ -349,7 +348,7 @@ export default function SettingsPage() {
 
           {/* Ollama */}
           <Section title={t("settings.ollama")} icon={Server}>
-            <Field label={t("settings.ollamaUrl")}>
+            <Field label={<><Globe className="inline h-3.5 w-3.5 mr-1 text-primary" />{t("settings.ollamaUrl")}</>}>
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -396,100 +395,131 @@ export default function SettingsPage() {
             </Field>
 
             {ollamaConnected && models.length > 0 && (
-              <Field label={t("settings.ollamaModel")}>
-                <div className="flex items-center gap-2">
-                  <Server className="h-4 w-4 text-primary" />
-                  <select
-                    value={settings.ollamaModel}
-                    onChange={(e) => {
-                      const model = e.target.value;
-                      userChangedModelRef.current = true;
-                      updateSettings({ ollamaModel: model });
-                      if (model) {
-                        preloadModel(model);
+              <Field label={<><Server className="inline h-3.5 w-3.5 mr-1 text-primary" />{t("settings.ollamaModel")}</>}>
+                <div className="rounded-md border border-border/50 bg-muted/30 px-3 py-2">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {t("settings.thinkModeExplanation")}
+                  </p>
+                </div>
+                <select
+                  value={settings.ollamaModel}
+                  onChange={(e) => {
+                    const model = e.target.value;
+                    userChangedModelRef.current = true;
+                    updateSettings({ ollamaModel: model });
+                    if (model) {
+                      preloadModel(model);
+                    }
+                  }}
+                  disabled={preloading}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                >
+                  <option value="">--</option>
+                  {models.map((m) => (
+                    <option key={m.name} value={m.name}>
+                      {m.name} ({(m.size / 1e9).toFixed(1)} GB)
+                    </option>
+                  ))}
+                </select>
+                {/* Model status — pill badge matching Ollama connection status */}
+                {(preloading || preloadDone || preloadError) && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-muted-foreground">{t("settings.ollamaStatus")}</span>
+                    {preloading ? (
+                      <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        {t("settings.modelPreloading")}
+                      </div>
+                    ) : preloadDone ? (
+                      <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-green-500/10 text-green-500">
+                        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                        {t("settings.modelPreloaded")}
+                      </div>
+                    ) : (
+                      <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-destructive/10 text-destructive">
+                        <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+                        {t("settings.modelPreloadError")}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Think mode — pill badge */}
+                {preloadDone && !preloading && modelBudgetInfo && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-muted-foreground">{t("settings.thinkModeLabel")}</span>
+                    <div
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium",
+                        modelBudgetInfo.supportsThink
+                          ? "bg-green-500/10 text-green-500"
+                          : "bg-amber-500/10 text-amber-500",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "h-1.5 w-1.5 rounded-full",
+                          modelBudgetInfo.supportsThink ? "bg-green-500" : "bg-amber-500",
+                        )}
+                      />
+                      {modelBudgetInfo.supportsThink
+                        ? t("settings.thinkAvailable")
+                        : t("settings.thinkUnavailable")}
+                    </div>
+                  </div>
+                )}
+              </Field>
+            )}
+            {ollamaConnected && models.length > 0 && <div className="border-t border-border" />}
+
+            {ollamaConnected && models.length > 0 && (
+              <Field label={<><Database className="inline h-3.5 w-3.5 mr-1 text-purple-500" />{t("settings.embeddingModel")}</>}>
+                <div className="rounded-md border border-border/50 bg-muted/30 px-3 py-2">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {t("settings.embeddingModelDesc")}
+                  </p>
+                </div>
+                <select
+                  value={settings.embeddingModel}
+                  onChange={async (e) => {
+                    const model = e.target.value;
+                    updateSettings({ embeddingModel: model });
+                    try {
+                      // Force save so backend reads the new embedding model, then refresh VRAM info
+                      await saveSettings();
+                      if (settings.ollamaModel) {
+                        fetchModelBudgetInfo(settings.ollamaModel, false);
                       }
-                    }}
-                    disabled={preloading}
-                    className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-                  >
-                    <option value="">--</option>
-                    {models.map((m) => (
+                    } catch (err: unknown) {
+                      toast.error(t("settings.saveError"), extractErrorMessage(err));
+                    }
+                  }}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <option value="">{t("settings.embeddingModelAuto")}</option>
+                  {/* Embedding-oriented models first */}
+                  {models
+                    .filter((m) => /embed|nomic/i.test(m.name))
+                    .map((m) => (
                       <option key={m.name} value={m.name}>
                         {m.name} ({(m.size / 1e9).toFixed(1)} GB)
                       </option>
                     ))}
-                  </select>
-                </div>
-                {preloading && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    {t("settings.modelPreloading")}
-                  </div>
-                )}
-                {preloadDone && !preloading && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-green-500">
-                    <Check className="h-3 w-3" />
-                    {t("settings.modelPreloaded")}
-                  </div>
-                )}
-                {preloadError && !preloading && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-destructive">
-                    <AlertCircle className="h-3 w-3" />
-                    {t("settings.modelPreloadError")}
-                  </div>
-                )}
+                  {/* Separator if there are embedding models */}
+                  {models.some((m) => /embed|nomic/i.test(m.name)) && (
+                    <option disabled>───</option>
+                  )}
+                  {/* Other models */}
+                  {models
+                    .filter((m) => !/embed|nomic/i.test(m.name))
+                    .map((m) => (
+                      <option key={m.name} value={m.name}>
+                        {m.name} ({(m.size / 1e9).toFixed(1)} GB)
+                      </option>
+                    ))}
+                </select>
               </Field>
             )}
-
-            {ollamaConnected && models.length > 0 && (
-              <Field label={t("settings.embeddingModel")}>
-                <div className="flex items-center gap-2">
-                  <Database className="h-4 w-4 text-purple-500" />
-                  <select
-                    value={settings.embeddingModel}
-                    onChange={async (e) => {
-                      const model = e.target.value;
-                      updateSettings({ embeddingModel: model });
-                      try {
-                        // Force save so backend reads the new embedding model, then refresh VRAM info
-                        await saveSettings();
-                        if (settings.ollamaModel) {
-                          fetchModelBudgetInfo(settings.ollamaModel, false);
-                        }
-                      } catch (err: unknown) {
-                        toast.error(t("settings.saveError"), extractErrorMessage(err));
-                      }
-                    }}
-                    className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    <option value="">{t("settings.embeddingModelAuto")}</option>
-                    {/* Embedding-oriented models first */}
-                    {models
-                      .filter((m) => /embed|nomic/i.test(m.name))
-                      .map((m) => (
-                        <option key={m.name} value={m.name}>
-                          {m.name} ({(m.size / 1e9).toFixed(1)} GB)
-                        </option>
-                      ))}
-                    {/* Separator if there are embedding models */}
-                    {models.some((m) => /embed|nomic/i.test(m.name)) && (
-                      <option disabled>───</option>
-                    )}
-                    {/* Other models */}
-                    {models
-                      .filter((m) => !/embed|nomic/i.test(m.name))
-                      .map((m) => (
-                        <option key={m.name} value={m.name}>
-                          {m.name} ({(m.size / 1e9).toFixed(1)} GB)
-                        </option>
-                      ))}
-                  </select>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t("settings.embeddingModelDesc")}
-                </p>
-              </Field>
-            )}
+            {ollamaConnected && models.length > 0 && <div className="border-t border-border" />}
 
             {/* Ollama initialization indicator */}
             {initializingOllama && !ollamaInitialized && (
@@ -501,7 +531,7 @@ export default function SettingsPage() {
 
             {/* Context window size (numCtx) + VRAM indicator */}
             {ollamaConnected && settings.ollamaModel && (
-              <Field label={<><Layers className="inline h-3.5 w-3.5 mr-1" />{t("settings.numCtxLabel")}</>}>
+              <Field label={<><Layers className="inline h-3.5 w-3.5 mr-1 text-primary" />{t("settings.numCtxLabel")}</>}>
                 {/* 1. Explanatory text (directly under title) */}
                 <div className="rounded-md border border-border/50 bg-muted/30 px-3 py-2">
                   <p className="text-xs text-muted-foreground leading-relaxed">
@@ -513,6 +543,8 @@ export default function SettingsPage() {
                 <VramIndicator
                   info={modelBudgetInfo}
                   loading={modelBudgetLoading || initializingOllama}
+                  hideThinkIndicator
+                  hideWarnings
                   onRefresh={async () => {
                     if (settings.ollamaModel) {
                       try {
@@ -558,7 +590,35 @@ export default function SettingsPage() {
                     </button>
                   )}
                 </div>
+
+                {/* VRAM warnings (positioned under numCtx input) */}
+                {modelBudgetInfo && modelBudgetInfo.warnings.length > 0 && (
+                  <div className="space-y-0.5">
+                    {modelBudgetInfo.warnings.map((w, i) => (
+                      <p key={i} className="text-xs text-amber-500">{w}</p>
+                    ))}
+                  </div>
+                )}
               </Field>
+            )}
+            {ollamaConnected && settings.ollamaModel && <div className="border-t border-border" />}
+
+            {/* Token Budget Priorities (inside Ollama section) */}
+            {ollamaConnected && settings.ollamaModel && (
+              <>
+                <Field label={<><Layers className="inline h-3.5 w-3.5 mr-1 text-primary" />{t("settings.tokenBudget")}</>}>
+                  <div className="rounded-md border border-border/50 bg-muted/30 px-3 py-2">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      {t("settings.tokenBudgetDesc")}
+                    </p>
+                  </div>
+                  <TokenBudgetPriorities
+                    value={settings.tokenBudgetPriorities}
+                    onChange={(json) => updateSettings({ tokenBudgetPriorities: json })}
+                  />
+                </Field>
+                <div className="border-t border-border" />
+              </>
             )}
 
             {!ollamaConnected && (
@@ -643,45 +703,46 @@ export default function SettingsPage() {
                   />
                 </Field>
 
-                <Field label={t("settings.tavilyUsageCount")}>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="number"
-                        min={0}
-                        max={1000}
-                        value={settings.tavilyUsageCount}
-                        onChange={(e) =>
-                          updateSettings({
-                            tavilyUsageCount: Math.max(
-                              0,
-                              Math.min(1000, parseInt(e.target.value) || 0),
-                            ),
-                          })
-                        }
-                        className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                      />
-                      <span className="text-sm text-muted-foreground">
-                        / 1000 ({t("settings.tavilyFree")})
-                      </span>
-                    </div>
-                    <div className="h-2 w-full rounded-full bg-muted">
-                      <div
-                        className={cn(
-                          "h-2 rounded-full transition-all",
-                          settings.tavilyUsageCount > 800
-                            ? "bg-destructive"
-                            : settings.tavilyUsageCount > 500
-                              ? "bg-yellow-500"
-                              : "bg-primary",
-                        )}
-                        style={{
-                          width: `${Math.min(100, (settings.tavilyUsageCount / 1000) * 100)}%`,
-                        }}
-                      />
-                    </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <label className="text-sm font-medium text-muted-foreground whitespace-nowrap">
+                      {t("settings.tavilyUsageCount")}
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1000}
+                      value={settings.tavilyUsageCount}
+                      onChange={(e) =>
+                        updateSettings({
+                          tavilyUsageCount: Math.max(
+                            0,
+                            Math.min(1000, parseInt(e.target.value) || 0),
+                          ),
+                        })
+                      }
+                      className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-sm text-muted-foreground whitespace-nowrap">
+                      / 1000 ({t("settings.tavilyFree")})
+                    </span>
                   </div>
-                </Field>
+                  <div className="h-2 w-full rounded-full bg-muted">
+                    <div
+                      className={cn(
+                        "h-2 rounded-full transition-all",
+                        settings.tavilyUsageCount > 800
+                          ? "bg-destructive"
+                          : settings.tavilyUsageCount > 500
+                            ? "bg-yellow-500"
+                            : "bg-primary",
+                      )}
+                      style={{
+                        width: `${Math.min(100, (settings.tavilyUsageCount / 1000) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                  </div>
 
                 <Field label={t("settings.tavilyHistory")}>
                   {(() => {
@@ -733,16 +794,6 @@ export default function SettingsPage() {
             )}
           </Section>
 
-          {/* Token Budget Priorities */}
-          <Section title={t("settings.tokenBudget")} icon={Layers}>
-            <p className="text-sm text-muted-foreground">
-              {t("settings.tokenBudgetDesc")}
-            </p>
-            <TokenBudgetPriorities
-              value={settings.tokenBudgetPriorities}
-              onChange={(json) => updateSettings({ tokenBudgetPriorities: json })}
-            />
-          </Section>
         </div>
       </div>
     </>

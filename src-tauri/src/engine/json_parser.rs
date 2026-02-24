@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::de::DeserializeOwned;
 
+use crate::constants;
 use crate::models::emotion::EmotionDelta;
 use crate::models::message::ReactionType;
 use crate::models::moderation::{ModerationResult, RawReaction};
@@ -425,6 +426,39 @@ fn extract_first_json_object(raw: &str) -> Option<String> {
     None
 }
 
+/// Extract the extractions array directly by finding the key ("extractions" or "results")
+/// and then extracting the `[...]` array that follows.
+/// Handles malformed JSON where the wrapper object has duplicate keys or trailing garbage.
+fn extract_extractions_array_direct(raw: &str) -> Option<Vec<RawArgumentExtraction>> {
+    for key in &["\"extractions\"", "\"results\""] {
+        if let Some(key_pos) = raw.find(key) {
+            let after_key = &raw[key_pos + key.len()..];
+            // Skip whitespace and colon
+            let trimmed = after_key.trim_start();
+            if let Some(rest) = trimmed.strip_prefix(':') {
+                let rest = rest.trim_start();
+                if rest.starts_with('[') {
+                    if let Some(arr_str) = extract_first_json_object(rest) {
+                        if let Ok(v) = serde_json::from_str::<Vec<RawArgumentExtraction>>(&arr_str) {
+                            if !v.is_empty() {
+                                return Some(v);
+                            }
+                        }
+                        // Try with fix_common_json_issues on the extracted array
+                        let cleaned = fix_common_json_issues(&arr_str);
+                        if let Ok(v) = serde_json::from_str::<Vec<RawArgumentExtraction>>(&cleaned) {
+                            if !v.is_empty() {
+                                return Some(v);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn fix_common_json_issues(raw: &str) -> String {
     let mut result = String::with_capacity(raw.len());
 
@@ -527,7 +561,6 @@ fn safe_truncate(s: &str, max_bytes: usize) -> String {
 
 // ── Argument map extraction ──────────────────────────────────────────
 
-use crate::constants;
 use crate::models::argument_map::ArgumentType;
 
 /// Parsed argument ready for merging into the argument map.
@@ -575,6 +608,22 @@ struct WrappedExtractions {
     extractions: Vec<RawArgumentExtraction>,
 }
 
+/// Check whether a thesis label is meaningful (not a bare number, index, or trivially short).
+/// LLMs sometimes return thesis indices ("4", "9") instead of label text when existing
+/// theses are presented as a numbered list.
+pub(crate) fn is_valid_thesis_label(label: &str) -> bool {
+    let trimmed = label.trim();
+    // Reject purely numeric strings (indices the LLM copied from the list)
+    if trimmed.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    // Reject labels shorter than the minimum (likely garbage or partial IDs)
+    if trimmed.len() < constants::ARGMAP_MIN_THESIS_LABEL_CHARS {
+        return false;
+    }
+    true
+}
+
 /// Parse argument extraction JSON from an LLM response.
 /// Uses multi-layer JSON extraction and fuzzy speaker name matching.
 pub fn parse_argument_extraction(
@@ -609,14 +658,25 @@ pub fn parse_argument_extraction(
                         v
                     }
                     _ => {
-                        tracing::warn!(
-                            wrapped_err = %e1,
-                            array_err = %e2,
-                            raw_len = raw.len(),
-                            raw_tail = %super::truncate_tail(raw, 200),
-                            "Argument extraction: JSON parse failed all formats"
-                        );
-                        return vec![];
+                        // Last resort: extract the extractions array directly from the key position.
+                        // Handles malformed JSON where the model duplicates keys or adds trailing garbage
+                        // (e.g. {"extractions":[{...}],"extractions"  ]}).
+                        if let Some(v) = extract_extractions_array_direct(raw) {
+                            tracing::info!(
+                                count = v.len(),
+                                "Parsed via direct array extraction from key position"
+                            );
+                            v
+                        } else {
+                            tracing::warn!(
+                                wrapped_err = %e1,
+                                array_err = %e2,
+                                raw_len = raw.len(),
+                                raw_tail = %super::truncate_tail(raw, 200),
+                                "Argument extraction: JSON parse failed all formats"
+                            );
+                            return vec![];
+                        }
                     }
                 }
             }
@@ -647,10 +707,8 @@ pub fn parse_argument_extraction(
             let new_theses: Vec<String> = ext
                 .new_theses
                 .into_iter()
-                .map(|t| {
-                    super::truncate_str(&t, constants::ARGMAP_MAX_THESIS_LABEL).to_string()
-                })
-                .filter(|t| !t.is_empty())
+                .map(|t| super::truncate_at_word_boundary(&t, constants::ARGMAP_MAX_THESIS_LABEL))
+                .filter(|t| !t.is_empty() && is_valid_thesis_label(t))
                 .collect();
 
             let arguments: Vec<ParsedArgument> = ext
@@ -667,8 +725,7 @@ pub fn parse_argument_extraction(
                         _ => ArgumentType::Support,
                     };
                     ParsedArgument {
-                        text: super::truncate_str(&a.text, constants::ARGMAP_MAX_ARGUMENT_LABEL)
-                            .to_string(),
+                        text: super::truncate_at_word_boundary(&a.text, constants::ARGMAP_MAX_ARGUMENT_LABEL),
                         arg_type,
                         for_thesis: a.for_thesis.filter(|s| !s.is_empty()),
                         against_thesis: a.against_thesis.filter(|s| !s.is_empty()),
@@ -1247,5 +1304,52 @@ mod tests {
         let (text, doc) = extract_and_strip_document(raw);
         assert_eq!(text, "Before\nAfter");
         assert_eq!(doc.unwrap(), "Content");
+    }
+
+    // ── Thesis label validation ─────────────────────────────────────
+
+    #[test]
+    fn test_valid_thesis_label_accepts_normal() {
+        assert!(is_valid_thesis_label("L'IA crée plus d'emplois qu'elle n'en détruit"));
+    }
+
+    #[test]
+    fn test_valid_thesis_label_rejects_numeric() {
+        assert!(!is_valid_thesis_label("4"));
+        assert!(!is_valid_thesis_label("12"));
+        assert!(!is_valid_thesis_label(" 9 "));
+    }
+
+    #[test]
+    fn test_valid_thesis_label_rejects_short() {
+        assert!(!is_valid_thesis_label("AI"));
+        assert!(!is_valid_thesis_label("ok"));
+        assert!(!is_valid_thesis_label("thesis"));
+    }
+
+    #[test]
+    fn test_valid_thesis_label_accepts_min_length() {
+        // Exactly at the minimum (8 chars)
+        assert!(is_valid_thesis_label("AI helps"));
+    }
+
+    // ── Argument extraction with numeric filtering ──────────────────
+
+    #[test]
+    fn test_arg_extraction_filters_numeric_theses() {
+        let raw = r#"{"extractions": [{"speaker": "Alice", "new_theses": ["4", "L'IA est bénéfique pour l'emploi", "9"], "arguments": []}]}"#;
+        let result = parse_argument_extraction(raw, &["Alice".to_string()]);
+        assert_eq!(result.len(), 1);
+        // Only the real thesis should remain — "4" and "9" are filtered out
+        assert_eq!(result[0].new_theses.len(), 1);
+        assert_eq!(result[0].new_theses[0], "L'IA est bénéfique pour l'emploi");
+    }
+
+    #[test]
+    fn test_arg_extraction_all_numeric_theses_skips_speaker() {
+        let raw = r#"{"extractions": [{"speaker": "Bob", "new_theses": ["4", "9"], "arguments": []}]}"#;
+        let result = parse_argument_extraction(raw, &["Bob".to_string()]);
+        // All theses were numeric → extraction is empty → speaker is skipped
+        assert!(result.is_empty());
     }
 }

@@ -370,6 +370,7 @@ export interface ModelBudgetInfo {
   recommendedNumCtx: number | null;
   currentNumCtx: number | null;
   ollamaVramMb: number | null;
+  supportsThink: boolean;
   warnings: string[];
 }
 

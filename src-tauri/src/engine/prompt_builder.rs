@@ -516,6 +516,35 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
         user_msg.push('\n');
     }
 
+    // Anti-repetition directive (non-fiction modes only, turn >= 2)
+    if current_turn >= 2 && *mode != DiscussionMode::CollaborativeFiction {
+        let anti_rep = match discussion_language {
+            "en" => "[NOVELTY REQUIREMENT]\n\
+                Each turn, you MUST advance the discussion. Do NOT simply restate:\n\
+                - Arguments, examples, or anecdotes you already used in previous turns\n\
+                - The same statistics, figures, or case studies already cited\n\
+                - The same reactions to arguments others already made\n\
+                You MAY revisit a previous argument ONLY IF you deepen it with a new angle, new evidence, or a new analytical perspective.\n\
+                Otherwise: develop NEW angles, cite NEW facts, explore UNEXPLORED aspects of the topic.\n",
+            "zh" => "[新颖性要求]\n\
+                每轮你必须推进讨论。不要简单地重复：\n\
+                - 你在前几轮已经使用过的论点、例子或轶事\n\
+                - 已经引用过的统计数据、数字或案例研究\n\
+                - 对其他人已经提出的论点的相同反应\n\
+                你可以重新提起之前的论点，但仅限于用新角度、新证据或新的分析视角来深化它。\n\
+                否则：发展新的角度，引用新的事实，探索话题中未被探索的方面。\n",
+            _ => "[EXIGENCE DE NOUVEAUTÉ]\n\
+                À chaque tour, tu DOIS faire avancer la discussion. NE REFORMULE PAS simplement :\n\
+                - Les arguments, exemples ou anecdotes que tu as déjà utilisés aux tours précédents\n\
+                - Les mêmes statistiques, chiffres ou études de cas déjà cités\n\
+                - Les mêmes réactions aux arguments déjà formulés par les autres\n\
+                Tu PEUX reprendre un argument précédent UNIQUEMENT si tu l'approfondis avec un nouvel angle, de nouvelles preuves, ou une nouvelle perspective d'analyse.\n\
+                Sinon : développe de NOUVEAUX angles, cite de NOUVEAUX faits, explore des aspects INEXPLORÉS du sujet.\n",
+        };
+        user_msg.push_str(anti_rep);
+        user_msg.push('\n');
+    }
+
     // Immediate memory (recent turns)
     if *mode == DiscussionMode::CollaborativeFiction {
         // Fiction mode: show full stored segments as continuous narrative for story coherence.
@@ -1031,8 +1060,14 @@ pub fn build_synthesis_prompt(
              Final positions:\n{}{}{}{}\n\n\
              As moderator, produce a structured synthesis:\n\
              {}\n\n\
-             Use Markdown formatting: headings (##), bullet points, **bold** for key ideas. \
+             Use Markdown formatting: headings (##, ###), bullet points, **bold** for key ideas. \
              Be balanced, thorough, and airy — use short paragraphs and whitespace for readability.\n\n\
+             [STRICT FORMAT CONSTRAINT]\n\
+             You MUST NOT use Markdown tables (| ... | syntax) anywhere in your synthesis. Tables render poorly and are FORBIDDEN.\n\
+             For comparisons between speakers, use this structure instead:\n\
+             ### Topic or criterion\n\
+             - **Speaker A** : their position...\n\
+             - **Speaker B** : their position...\n\n\
              IMPORTANT: Write your entire synthesis in English.",
             datetime, mode_desc, topic, memory.contextual_summary, positions, web_block, doc_block, full_doc_block, synth_instructions
         ),
@@ -1042,8 +1077,14 @@ pub fn build_synthesis_prompt(
              最终立场：\n{}{}{}{}\n\n\
              作为主持人，请做出结构化总结：\n\
              {}\n\n\
-             使用Markdown格式：标题（##）、要点列表、**粗体**标记关键观点。\
+             使用Markdown格式：标题（##、###）、要点列表、**粗体**标记关键观点。\
              保持公正、全面、通透——使用短段落和留白提高可读性。\n\n\
+             [严格格式约束]\n\
+             你绝对不能在综合报告中使用Markdown表格（| ... | 语法）。表格渲染效果差，严格禁止使用。\n\
+             对比不同发言者的立场时，请使用以下结构：\n\
+             ### 主题或标准\n\
+             - **发言者A** : 其立场...\n\
+             - **发言者B** : 其立场...\n\n\
              重要：请用中文撰写整篇综合报告。",
             datetime, topic, mode_desc, memory.contextual_summary, positions, web_block, doc_block, full_doc_block, synth_instructions
         ),
@@ -1053,8 +1094,14 @@ pub fn build_synthesis_prompt(
              Positions finales :\n{}{}{}{}\n\n\
              En tant que modérateur, produis une synthèse structurée :\n\
              {}\n\n\
-             Utilise le format Markdown : titres (##), listes à puces, **gras** pour les idées clés. \
+             Utilise le format Markdown : titres (##, ###), listes à puces, **gras** pour les idées clés. \
              Sois équilibré, exhaustif et aéré — utilise des paragraphes courts et de l'espace pour la lisibilité.\n\n\
+             [CONTRAINTE DE FORMAT STRICTE]\n\
+             Tu NE DOIS PAS utiliser de tableaux Markdown (syntaxe | ... |) dans ta synthèse. Les tableaux s'affichent mal et sont INTERDITS.\n\
+             Pour comparer les positions des intervenants, utilise cette structure :\n\
+             ### Thème ou critère\n\
+             - **Intervenant A** : sa position...\n\
+             - **Intervenant B** : sa position...\n\n\
              IMPÉRATIF : Rédige l'intégralité de ta synthèse en français.",
             datetime, mode_desc, topic, memory.contextual_summary, positions, web_block, doc_block, full_doc_block, synth_instructions
         ),
@@ -2235,10 +2282,11 @@ pub fn build_argument_extraction_prompt(
     let theses_list = if existing_theses.is_empty() {
         String::new()
     } else {
+        // Use bullet points (NOT numbered) to prevent the LLM from referencing
+        // theses by index number instead of their full label text.
         existing_theses
             .iter()
-            .enumerate()
-            .map(|(i, t)| format!("  {}. {}", i + 1, t))
+            .map(|t| format!("  - {t}"))
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -2261,9 +2309,14 @@ pub fn build_argument_extraction_prompt(
             Reuse existing thesis labels when a speaker refers to an already-identified thesis.\n\n\
             CRITICAL FORMATTING RULES:\n\
             - Write ALL labels in {lang_name}.\n\
-            - Thesis labels: one short complete sentence summarizing the position (e.g. \"The death penalty does not deter crime\").\n\
-            - Argument text: 1-2 short complete sentences faithfully summarizing the key idea. Must be coherent and self-contained.\n\
-            - NEVER quote verbatim from the discussion. NEVER truncate mid-sentence. NEVER use identifiers like 'Thesis_X_Y'.\n\n\
+            - Thesis labels: ONE concise claim capturing the position (max 15 words). Distill the essence, do not describe.\n\
+              GOOD: \"AI creates more jobs than it destroys\"\n\
+              BAD: \"Artificial intelligence, while transforming existing professions, has an overall positive impact on job creation because it generates new sectors of activity\"\n\
+            - Argument text: ONE concise sentence capturing the key idea (max 25 words). Synthesize, do not quote.\n\
+              GOOD: \"The tech sector created 3M jobs in 5 years, largely offsetting automated positions\"\n\
+              BAD: \"As the AI Expert explained, data shows that the technology sector has experienced considerable growth with the creation of three million jobs over the past five years\"\n\
+            - NEVER quote verbatim from the discussion. NEVER truncate mid-sentence. NEVER use identifiers like 'Thesis_X_Y'.\n\
+            - NEVER use numbers, indices, or IDs to reference theses. Always use the FULL thesis label text.\n\n\
             Respond ONLY with JSON in this format:\n\
             {{\"extractions\": [\n\
               {{\"speaker\": \"Name\", \"new_theses\": [\"short thesis label\"], \"arguments\": [\n\
@@ -2288,9 +2341,14 @@ pub fn build_argument_extraction_prompt(
             当发言者提到已识别的论点时，重用现有的论点标签。\n\n\
             关键格式规则：\n\
             - 所有标签必须用中文。\n\
-            - 论点标签：一句简短完整的句子概括立场（例如\"死刑不能有效遏制犯罪\"）。\n\
-            - 论据文本：1-2句简短完整的句子忠实概括核心观点。必须连贯且自成一体。\n\
-            - 绝不逐字引用讨论内容。绝不截断句子。绝不使用'Thesis_X_Y'等标识符。\n\n\
+            - 论点标签：一句简洁的主张，提炼立场本质（最多15个词）。要提炼，不要描述。\n\
+              好：\"人工智能创造的就业多于其消灭的\"\n\
+              差：\"人工智能虽然正在改变现有职业，但由于它创造了新的活动领域，因此对就业创造总体上产生了积极影响\"\n\
+            - 论据文本：一句简洁的句子捕捉核心观点（最多25个词）。要综合，不要引用。\n\
+              好：\"科技行业5年内创造了300万个就业岗位，大幅抵消了自动化减少的职位\"\n\
+              差：\"正如人工智能专家所解释的，数据显示科技行业在过去五年中经历了相当大的增长，创造了三百万个就业机会\"\n\
+            - 绝不逐字引用讨论内容。绝不截断句子。绝不使用'Thesis_X_Y'等标识符。\n\
+            - 绝不使用数字、索引或ID来引用论点。始终使用论点的完整标签文本。\n\n\
             仅用以下JSON格式回复:\n\
             {{\"extractions\": [\n\
               {{\"speaker\": \"姓名\", \"new_theses\": [\"简短论点标签\"], \"arguments\": [\n\
@@ -2315,9 +2373,14 @@ pub fn build_argument_extraction_prompt(
             Réutilise les labels de thèses existantes quand un intervenant fait référence à une thèse déjà identifiée.\n\n\
             RÈGLES DE FORMAT CRITIQUES :\n\
             - Écris TOUS les labels en français.\n\
-            - Labels de thèse : une phrase courte et complète résumant la position (ex: \"La peine de mort ne dissuade pas le crime\").\n\
-            - Texte d'argument : 1-2 phrases courtes et complètes résumant fidèlement l'idée clé. Doit être cohérent et autonome.\n\
-            - JAMAIS de citation verbatim de la discussion. JAMAIS de phrase tronquée. JAMAIS d'identifiants comme 'Thesis_X_Y'.\n\n\
+            - Labels de thèse : UNE proposition concise capturant la position (max 15 mots). Distille l'essence, ne décris pas.\n\
+              BON : \"L'IA crée plus d'emplois qu'elle n'en détruit\"\n\
+              MAUVAIS : \"L'intelligence artificielle, bien qu'elle transforme les métiers existants, a un impact globalement positif sur la création d'emplois car elle génère de nouveaux secteurs d'activité\"\n\
+            - Texte d'argument : UNE phrase concise capturant l'idée-clé (max 25 mots). Synthétise, ne cite pas.\n\
+              BON : \"Le secteur tech a créé 3M d'emplois en 5 ans, compensant largement les postes automatisés\"\n\
+              MAUVAIS : \"Comme l'a expliqué l'Expert IA, les données montrent que le secteur technologique a connu une croissance considérable avec la création de trois millions d'emplois au cours des cinq dernières années\"\n\
+            - JAMAIS de citation verbatim de la discussion. JAMAIS de phrase tronquée. JAMAIS d'identifiants comme 'Thesis_X_Y'.\n\
+            - JAMAIS de numéro, indice ou ID pour référencer une thèse. Toujours utiliser le TEXTE COMPLET du label de la thèse.\n\n\
             Réponds UNIQUEMENT avec du JSON dans ce format :\n\
             {{\"extractions\": [\n\
               {{\"speaker\": \"Nom\", \"new_theses\": [\"label court de thèse\"], \"arguments\": [\n\

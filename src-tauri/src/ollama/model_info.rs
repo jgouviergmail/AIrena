@@ -63,6 +63,8 @@ pub struct ModelBudgetInfo {
     /// VRAM (MiB) currently used by all Ollama models (from `/api/ps` `size_vram`).
     /// Helps the user understand the VRAM breakdown (Ollama vs system vs free).
     pub ollama_vram_mb: Option<u64>,
+    /// Whether the model's template supports think/reasoning mode.
+    pub supports_think: bool,
     /// Warnings emitted during analysis.
     pub warnings: Vec<String>,
 }
@@ -159,6 +161,14 @@ fn dtype_bytes_from_quantization(_quantization: &str) -> f64 {
     // KV cache in Ollama is always f16 by default regardless of model quantization.
     // Only OLLAMA_KV_CACHE_TYPE=q8_0 or q4_0 would change this, which is rare.
     constants::KV_CACHE_DTYPE_BYTES as f64
+}
+
+// ── Think mode detection ──────────────────────────────────────────────────
+
+/// Detect whether a model supports think/reasoning mode by inspecting its Ollama template.
+/// Models that support thinking include `{{- if .Think }}` or similar Go template directives.
+pub fn detect_think_support(template: &str) -> bool {
+    template.contains(".Think")
 }
 
 // ── VRAM detection ───────────────────────────────────────────────────────
@@ -314,6 +324,7 @@ pub async fn build_model_budget_info(
     let mut all_warnings = Vec::new();
 
     let arch = parse_arch_info(show);
+    let supports_think = detect_think_support(&show.template);
     if arch.is_none() {
         all_warnings.push("Could not parse model architecture — num_ctx recommendation unavailable.".to_string());
     }
@@ -348,6 +359,7 @@ pub async fn build_model_budget_info(
         recommended_num_ctx,
         current_num_ctx: None,
         ollama_vram_mb,
+        supports_think,
         warnings: all_warnings,
     }
 }
@@ -661,5 +673,15 @@ mod tests {
         assert_eq!(arch.head_dim, 128, "Should compute embedding_length / head_count");
         // head_count_kv defaults to head_count when missing
         assert_eq!(arch.head_count_kv, 16);
+    }
+
+    #[test]
+    fn test_detect_think_support() {
+        // DeepSeek R1 style template
+        assert!(detect_think_support("{{- if .Think }}<think>{{ .Think }}</think>{{- end }}{{ .Content }}"));
+        // Standard model without think
+        assert!(!detect_think_support("{{ .System }}\n{{ .Prompt }}"));
+        // Empty template
+        assert!(!detect_think_support(""));
     }
 }

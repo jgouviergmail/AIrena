@@ -1,7 +1,7 @@
 # AIrena — Documentation Technique
 
-> **Version** : 1.10
-> **Dernière mise à jour** : 2026-02-14
+> **Version** : 1.12.1
+> **Dernière mise à jour** : 2026-02-24
 > **Auteur** : jgouv
 > **Identifiant** : `com.jgouv.airena`
 
@@ -345,6 +345,14 @@ pub struct AppState {
 
 ### 6.4 Moteur de discussion (Engine)
 
+#### Constantes LLM (constants.rs)
+
+| Constante | Valeur | Description |
+|---|---|---|
+| `LLM_DEFAULT_NUM_PREDICT` | 2048 | Budget tokens par défaut par réponse |
+| `SYNTHESIS_NUM_PREDICT` | 4096 | Budget tokens pour la synthèse (2× le défaut, retry avec 2× en cas de troncature) |
+| `THINK_NUM_PREDICT_MULTIPLIER` | 3 | Multiplicateur num_predict pour les modèles en mode think |
+
 #### Orchestrateur (`engine/orchestrator.rs` — ~2800 lignes)
 
 Le cœur de l'application. Exécute la boucle de discussion complète dans une tâche tokio.
@@ -495,6 +503,8 @@ Extraction robuste de JSON depuis les réponses LLM :
 4. Nettoyage des erreurs JSON courantes + retry
 
 **Matching flou de noms** (4 niveaux) : exact → sans article → préfixe ≥3 → contient ≥4.
+
+**Validation des labels** : `is_valid_thesis_label()` (`pub(crate)`) rejette les labels purement numériques et ceux de moins de `ARGMAP_MIN_THESIS_LABEL_CHARS` (8) caractères. Utilisée dans le parsing ET dans l'orchestrateur (garde anti-création).
 
 ### 6.5 Modèles de données
 
@@ -812,18 +822,22 @@ pub struct ArgumentMap {
 
 #### Flux d'extraction
 
-1. **Après chaque tour** (à partir du tour 2), l'orchestrateur appelle `build_argument_extraction_prompt()` avec le contexte des interventions récentes et la carte existante
+1. **Après chaque tour** (à partir du tour 2), l'orchestrateur appelle `build_argument_extraction_prompt()` avec le contexte des interventions récentes et la carte existante (sous forme de bullet points, pas de liste numérotée)
 2. Le LLM retourne un JSON avec les nouvelles thèses/arguments
-3. `parse_argument_extraction()` dans `json_parser.rs` parse la réponse avec fuzzy matching des noms
-4. Les résultats sont fusionnés avec la carte existante (ajout uniquement, pas de suppression)
-5. `ArgumentMap::to_markdown()` convertit en markdown hiérarchique (structure `# Topic / ## Speaker / ### Thesis / - Arg`)
-6. L'événement `ArgumentMapUpdated` est émis avec le markdown, le nombre de thèses et d'arguments
+3. `parse_argument_extraction()` dans `json_parser.rs` parse la réponse avec fuzzy matching des noms + filtrage `is_valid_thesis_label()` (rejette les labels numériques et < 8 chars)
+4. **Résolution numérique** : si le LLM retourne un index numérique (ex. « 3 ») au lieu d'un label, l'orchestrateur tente de le résoudre vers la thèse existante à cet index
+5. **Garde anti-création** : les nouvelles thèses ne sont créées que si le label passe `is_valid_thesis_label()`
+6. Les résultats sont fusionnés avec la carte existante (ajout uniquement, pas de suppression)
+7. `ArgumentMap::to_markdown()` convertit en markdown hiérarchique (structure `# Topic / ## Speaker / ### Thesis / - Arg`)
+8. L'événement `ArgumentMapUpdated` est émis avec le markdown, le nombre de thèses et d'arguments
 
 #### Rendu frontend
 
 - **MarkmapViewer** (`components/mindmap/MarkmapViewer.tsx`) : composant `forwardRef` wrappant `markmap-lib` + `markmap-view`
   - `useImperativeHandle` expose `getSvgHtml()` pour l'export SVG
   - Options markmap : `autoFit`, `maxWidth: 250`, `spacingHorizontal: 80`, `spacingVertical: 8`
+  - **Export SVG complet** : `buildStandaloneSvg()` utilise `getBBox()` sur le `<g>` principal pour capturer l'intégralité du contenu (pas seulement le viewport visible), supprime le transform D3 zoom/pan, conserve les classes markmap et la CSS variable `--markmap-max-width`
+  - **Off-screen rendering** : sur la page Résumé, un `MarkmapViewer` est monté hors-écran (position absolute, -9999px) avec des dimensions réelles (1200×800px) quand l'onglet actif n'est pas la carte — permet l'export SVG depuis n'importe quel onglet
 - **MindmapSidebar** (`components/mindmap/MindmapSidebar.tsx`) : sidebar droite avec header, badge compteurs, légende, collapse
 
 #### Configuration (constants.rs)
@@ -831,8 +845,9 @@ pub struct ArgumentMap {
 | Constante | Valeur | Description |
 |---|---|---|
 | `ARGMAP_CONTEXT_CHARS` | 600 | Caractères par message dans le contexte d'extraction |
-| `ARGMAP_MAX_THESIS_LABEL` | 60 | Caractères max pour un label de thèse |
-| `ARGMAP_MAX_ARGUMENT_LABEL` | 100 | Caractères max pour un label d'argument |
+| `ARGMAP_MIN_THESIS_LABEL_CHARS` | 8 | Longueur minimale pour un label de thèse valide (filtre les indices numériques) |
+| `ARGMAP_MAX_THESIS_LABEL` | 200 | Caractères max pour un label de thèse |
+| `ARGMAP_MAX_ARGUMENT_LABEL` | 400 | Caractères max pour un label d'argument |
 | `ARGMAP_MAX_THESES` | 20 | Nombre max de thèses |
 | `ARGMAP_MAX_ARGUMENTS` | 100 | Nombre total max d'arguments |
 | `ARGMAP_NUM_PREDICT` | 4096 | num_predict pour l'extraction |
@@ -1276,6 +1291,45 @@ AIrena/
 ---
 
 ## 15. Changelog
+
+### v1.12.1 (2026-02-24) — Synthèse élargie, Validation labels, Export SVG complet
+
+**Backend** :
+- `SYNTHESIS_NUM_PREDICT = 4096` — budget tokens dédié pour la synthèse (2× le défaut) ; retry automatique avec budget doublé si la synthèse est tronquée (absence de conclusion)
+- `ARGMAP_MIN_THESIS_LABEL_CHARS = 8` — nouvelle constante pour la validation minimale des labels de thèse
+- `is_valid_thesis_label()` (`pub(crate)`) dans `json_parser.rs` — rejette les labels purement numériques et les labels < 8 chars
+- **Anti-numérique dans le prompt** : les thèses existantes sont présentées en bullet points (pas de liste numérotée) + instruction explicite trilingue interdisant les indices
+- **Résolution numérique** dans l'orchestrateur : si le LLM retourne un index numérique, tente de le résoudre vers la thèse existante
+- **Garde anti-création** : les nouvelles thèses ne sont créées que si le label passe la validation
+- `ARGMAP_MAX_THESIS_LABEL` ajusté de 60 → 200 et `ARGMAP_MAX_ARGUMENT_LABEL` de 100 → 400
+- Retry de synthèse clone depuis `synth_params` (boosté) au lieu de l'original
+- 6 nouveaux tests unitaires pour la validation des labels
+
+**Frontend** :
+- `buildStandaloneSvg()` dans `MarkmapViewer.tsx` — utilise `getBBox()` sur le `<g>` principal pour capturer l'intégralité du contenu SVG (pas seulement le viewport visible), supprime le transform D3, préserve les classes markmap et `--markmap-max-width`
+- Off-screen `MarkmapViewer` sur la page Résumé — monté avec dimensions réelles (1200×800px) hors-écran pour permettre l'export SVG depuis n'importe quel onglet
+- Whitelist des classes SVG à l'export (conserve markmap/mm-*, supprime Tailwind)
+- 16 nouvelles constantes `BUDGET_*` (Token Budget floors + ceilings) dans `constants.rs`
+
+### v1.12 (2026-02-22) — Optimisation contexte & Waterfall
+
+**Backend** :
+- Système de waterfall adaptatif pour l'allocation du budget de tokens entre les sections du prompt
+- 16 constantes `BUDGET_FLOOR_*` et `BUDGET_CEIL_*` pour contrôler l'allocation par section
+
+### v1.11.2 (2026-02-19) — Fix synthèse
+
+**Backend** :
+- Fix de la synthèse tronquée via augmentation du num_predict
+
+### v1.11.1 (2026-02-18) — Fix mineur
+
+- Corrections mineures de stabilité
+
+### v1.11 (2026-02-17) — Illustration
+
+**Frontend** :
+- Illustration de la page d'accueil
 
 ### v1.10 (2026-02-14) — Carte des arguments & Améliorations UX
 

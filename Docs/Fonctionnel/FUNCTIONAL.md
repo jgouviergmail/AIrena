@@ -1,7 +1,7 @@
 # AIrena — Documentation Fonctionnelle
 
-> **Version** : 1.10
-> **Dernière mise à jour** : 2026-02-14
+> **Version** : 1.12.1
+> **Dernière mise à jour** : 2026-02-24
 > **Auteur** : jgouv
 
 ---
@@ -605,7 +605,7 @@ Les réactions sont :
 - Conclusions ou questions ouvertes
 - Adaptée au mode de discussion (ex. en co-construction, synthèse du livrable)
 
-La synthèse est streamée en temps réel (token par token).
+La synthèse est streamée en temps réel (token par token). Le budget de tokens pour la synthèse est doublé par rapport aux interventions normales (`SYNTHESIS_NUM_PREDICT = 4096`) pour éviter toute troncature sur les discussions riches. En cas de synthèse tronquée (absence de conclusion), un retry automatique est effectué avec un budget encore doublé.
 
 ### Page de résumé
 
@@ -806,7 +806,7 @@ Le thème est persisté dans les paramètres et s'applique immédiatement au bas
 | Télécharger la discussion | Exporte le fil complet en fichier texte |
 | Télécharger le document | Exporte le document collaboratif (si co-construction) |
 | Télécharger la carte (MD) | Exporte la carte des arguments en markdown (si activée) |
-| Télécharger la carte (SVG) | Exporte la carte des arguments en SVG vectoriel (si activée) |
+| Télécharger la carte (SVG) | Exporte la carte des arguments en SVG vectoriel **complet** (si activée) |
 
 ### Depuis l'historique
 
@@ -815,6 +815,8 @@ Mêmes options de téléchargement disponibles depuis la vue détaillée d'une d
 ### Format d'export
 
 Les exports utilisent le sélecteur de fichier natif Windows (dialogue « Enregistrer sous »). Le format est du texte brut (.txt), le format du document collaboratif (.md, .csv), ou SVG pour la carte des arguments.
+
+L'export SVG de la carte des arguments est disponible depuis **tous les onglets** (synthèse, discussion ou carte). Le SVG exporté contient l'**intégralité** de la carte (toutes les thèses et arguments), indépendamment de la portion visible à l'écran (zoom/pan).
 
 ---
 
@@ -964,11 +966,19 @@ La carte est organisée hiérarchiquement :
 - **Résumé / Historique** : onglet dédié avec la même visualisation
 - **Export** : téléchargement en markdown (.md) ou en SVG (.svg)
 
+### Validation des labels
+
+Le système vérifie la qualité des labels extraits par le LLM :
+- **Longueur minimale** : les labels de thèse doivent contenir au moins 8 caractères (`ARGMAP_MIN_THESIS_LABEL_CHARS`) — filtre les indices numériques et les labels trop courts
+- **Anti-numérique** : les labels purement numériques (ex. « 4 », « 9 ») sont rejetés — le prompt interdit explicitement l'utilisation de numéros ou d'indices pour référencer les thèses
+- **Résolution automatique** : si le LLM retourne un index numérique (ex. « 3 »), le système tente de le résoudre vers la thèse existante correspondante
+- Les labels sont tronqués proprement (aux limites de mots) si nécessaire
+
 ### Contraintes
 
-- Les labels sont courts (thèses ≤ 60 caractères, arguments ≤ 100 caractères)
+- Les labels sont courts (thèses ≤ 200 caractères, arguments ≤ 400 caractères)
 - Maximum 20 thèses et 100 arguments
-- Les labels sont en langage naturel dans la langue de discussion (pas d'identifiants techniques)
+- Les labels sont en langage naturel dans la langue de discussion (pas d'identifiants techniques ni de numéros)
 - La carte est persistée dans l'historique sous forme markdown
 
 ---
@@ -1010,6 +1020,34 @@ La carte est organisée hiérarchiquement :
 ---
 
 ## 26. Changelog
+
+### v1.12.1 (2026-02-24) — Synthèse élargie & Optimisation contexte
+
+**Améliorations** :
+- **Synthèse élargie** : `SYNTHESIS_NUM_PREDICT = 4096` (2× le budget par défaut) pour des synthèses plus complètes ; retry automatique avec budget doublé en cas de troncature
+- **Optimisation du contexte** : système de waterfall adaptatif pour la gestion du budget de tokens dans les prompts
+- **Export SVG complet** : l'export de la carte des arguments capture l'intégralité du contenu (pas seulement la partie visible) via `getBBox()` sur l'élément SVG principal
+
+### v1.12 (2026-02-22) — Optimisation contexte & Waterfall
+
+**Améliorations** :
+- **Budget de contexte adaptatif** : système de waterfall qui alloue dynamiquement les tokens entre les sections du prompt (mémoire, directives, RAG, recherche) en fonction du `num_ctx` disponible
+- **Constantes Token Budget** : 16 nouvelles constantes `BUDGET_*` (floors + ceilings) pour un contrôle fin de l'allocation par section
+
+### v1.11.2 (2026-02-19) — Fix synthèse
+
+**Corrections** :
+- Fix de la synthèse tronquée : augmentation du `num_predict` pour la synthèse
+
+### v1.11.1 (2026-02-18) — Fix mineur
+
+**Corrections** :
+- Corrections mineures de stabilité
+
+### v1.11 (2026-02-17) — Illustration
+
+**Nouvelles fonctionnalités** :
+- Illustration de la page d'accueil
 
 ### v1.10 (2026-02-14) — Carte des arguments & Améliorations UX
 

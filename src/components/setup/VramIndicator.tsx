@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Cpu, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle, Cpu, Loader2, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ModelBudgetInfo } from "@/lib/types";
 
@@ -7,9 +7,11 @@ interface Props {
   info: ModelBudgetInfo | null;
   loading: boolean;
   onRefresh?: () => void;
+  hideThinkIndicator?: boolean;
+  hideWarnings?: boolean;
 }
 
-export function VramIndicator({ info, loading, onRefresh }: Props) {
+export function VramIndicator({ info, loading, onRefresh, hideThinkIndicator, hideWarnings }: Props) {
   const { t } = useTranslation();
 
   if (loading) {
@@ -85,8 +87,25 @@ export function VramIndicator({ info, loading, onRefresh }: Props) {
         </div>
       )}
 
+      {/* Think mode support — independent of VRAM detection */}
+      {!hideThinkIndicator && (
+        <div className="flex items-center gap-1.5 text-xs">
+          {info.supportsThink ? (
+            <>
+              <CheckCircle className="h-3 w-3 shrink-0 text-green-600" />
+              <span className="text-green-600">{t("setup.thinkModeSupported")}</span>
+            </>
+          ) : (
+            <>
+              <AlertTriangle className="h-3 w-3 shrink-0 text-amber-500" />
+              <span className="text-amber-500">{t("setup.thinkModeNotSupported")}</span>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Warnings */}
-      {info.warnings.length > 0 && (
+      {!hideWarnings && info.warnings.length > 0 && (
         <div className="space-y-0.5">
           {info.warnings.map((w, i) => (
             <p key={i} className="text-xs text-amber-500">{w}</p>

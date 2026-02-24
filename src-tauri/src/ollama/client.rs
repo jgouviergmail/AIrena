@@ -8,6 +8,25 @@ use super::types::{ChatRequest, ChatResponse, ModelInfo, PsResponse, ShowRespons
 use crate::constants;
 use crate::models::settings::LlmParams;
 
+/// Strip `<think>...</think>` blocks from text.
+/// Some thinking models leak these tags into the content field; this ensures clean output.
+pub fn strip_think_tags(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+    while let Some(start) = remaining.find("<think>") {
+        result.push_str(&remaining[..start]);
+        if let Some(end) = remaining[start..].find("</think>") {
+            remaining = &remaining[start + end + "</think>".len()..];
+        } else {
+            // Unclosed <think> tag — strip everything from here
+            remaining = "";
+            break;
+        }
+    }
+    result.push_str(remaining);
+    result.trim().to_string()
+}
+
 /// Result of a streaming chat with think mode
 pub struct ChatStreamResult {
     pub content: String,
@@ -33,6 +52,11 @@ impl OllamaClient {
         }
     }
 
+    /// Get the configured model name.
+    pub fn model_name(&self) -> &str {
+        &self.model
+    }
+
     /// Validate that the model exists BEFORE starting a discussion
     pub async fn validate_model(&self) -> Result<(), OllamaError> {
         let models = self.list_models().await?;
@@ -45,7 +69,8 @@ impl OllamaClient {
         Ok(())
     }
 
-    /// Chat streaming with retry and timeout
+    /// Chat streaming with retry and timeout.
+    /// Strips any residual `<think>` tags from the content for safety.
     /// NOTE: on_token must be Send to cross .await boundaries
     pub async fn chat_streaming(
         &self,
@@ -56,7 +81,7 @@ impl OllamaClient {
         let result = self
             .chat_streaming_with_think(request, on_token, |_| {}, cancel)
             .await?;
-        Ok(result.content)
+        Ok(strip_think_tags(&result.content))
     }
 
     /// Chat streaming with think mode — separate callbacks for content and thinking tokens.
@@ -89,13 +114,17 @@ impl OllamaClient {
         Err(OllamaError::ConnectionLost)
     }
 
-    /// Chat without streaming (for JSON responses like reactions, moderation)
+    /// Chat without streaming (for JSON responses like reactions, moderation).
+    /// Strips any residual `<think>` tags from the content for safety.
     pub async fn chat(
         &self,
         request: &ChatRequest,
         cancel: CancellationToken,
     ) -> Result<String, OllamaError> {
-        self.chat_streaming(request, |_| {}, cancel).await
+        let result = self
+            .chat_streaming_with_think(request, |_| {}, |_| {}, cancel)
+            .await?;
+        Ok(strip_think_tags(&result.content))
     }
 
     /// Unified NDJSON streaming — buffered parsing with Vec<u8>.
@@ -389,5 +418,52 @@ impl OllamaClient {
             }),
             think: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_think_tags_no_tags() {
+        assert_eq!(strip_think_tags("Hello world"), "Hello world");
+    }
+
+    #[test]
+    fn test_strip_think_tags_simple() {
+        assert_eq!(
+            strip_think_tags("<think>reasoning here</think>The answer is 42."),
+            "The answer is 42."
+        );
+    }
+
+    #[test]
+    fn test_strip_think_tags_multiline() {
+        let input = "<think>\nLet me think about this...\nOk I got it.\n</think>\nHere is my response.";
+        assert_eq!(strip_think_tags(input), "Here is my response.");
+    }
+
+    #[test]
+    fn test_strip_think_tags_multiple() {
+        let input = "<think>first</think>Hello <think>second</think>world";
+        assert_eq!(strip_think_tags(input), "Hello world");
+    }
+
+    #[test]
+    fn test_strip_think_tags_unclosed() {
+        // Unclosed think tag — strip from <think> to end
+        let input = "Before <think>reasoning without close";
+        assert_eq!(strip_think_tags(input), "Before");
+    }
+
+    #[test]
+    fn test_strip_think_tags_empty_after_strip() {
+        assert_eq!(strip_think_tags("<think>only thinking</think>"), "");
+    }
+
+    #[test]
+    fn test_strip_think_tags_no_content() {
+        assert_eq!(strip_think_tags(""), "");
     }
 }

@@ -47,7 +47,8 @@ The Rust backend is a single library crate (`airena_lib`). `main.rs` just calls 
 - **state.rs** — `AppState` holds `engine_cmd_tx` (mpsc channel to running engine), `cancel_token`, `db` connection, and `rag_store` (RAG document store). Uses `std::sync::Mutex` (not tokio) because locks are never held across `.await`. Helper methods: `get_settings()`, `clear_engine_slots()`.
 - **constants.rs** — Centralized tunable parameters (memory limits, truncation sizes, prompt thresholds, RAG quotas). All magic numbers extracted here.
 - **commands/** — Tauri IPC handlers grouped by domain: `discussion.rs`, `ollama.rs`, `settings.rs`, `history.rs`, `rag.rs`
-- **engine/mod.rs** — Shared utilities: `truncate_str()`, `truncate_tail()` (UTF-8–safe), `apply_i8_clamped()` (emotion delta)
+- **engine/mod.rs** — Shared utilities: `truncate_str()`, `truncate_tail()` (UTF-8–safe), `truncate_at_word_boundary()` (truncates at last space, appends `"…"`), `apply_i8_clamped()` (emotion delta)
+- **engine/token_budget.rs** — Waterfall token budget system: computes per-speaker character budgets from `num_ctx`, model params, and user-configured section priorities. `TokenBudget::compute()` allocates in strict rank order (floor → proportional fill → ceiling). `BudgetSection` enum (9 variants), `SectionPriority` (rank + floor/ceiling), `TokenBudgetPreview` for frontend display
 - **engine/orchestrator.rs** — `DiscussionEngine`: the main discussion loop. Handles introduction → turn loop (speaker order → web/wiki search → directive → prompt → stream → reactions → emotions → memory → moderation) → synthesis → end.
 - **engine/turn_manager.rs** — Turn distribution: Sequential, Random, Democratic (masked Borda voting via parallel LLM calls), Authoritarian (IArbitre decides)
 - **engine/prompt_builder.rs** — Builds context-aware prompts for each speaker turn, reactions, emotions, synthesis, and end-of-discussion awareness

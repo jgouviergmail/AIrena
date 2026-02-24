@@ -3,7 +3,7 @@ import { MathText } from "./MathText";
 import type { DiffResult } from "@/lib/document-diff";
 
 /** Lightweight markdown: headings (#/##/###), **bold**, *italic*, `code`, ```code blocks```,
- *  bullet/numbered lists (- item / 1. item), horizontal rules (---), tables, paragraphs.
+ *  bullet/numbered lists (- item / 1. item), horizontal rules (---), pipe tables, paragraphs.
  *  Uses line-by-line block detection to handle mixed content correctly.
  *  Optional diffResult prop enables line-level highlighting of changed blocks. */
 export function SimpleMd({ text, diffResult }: { text: string; diffResult?: DiffResult | null }) {

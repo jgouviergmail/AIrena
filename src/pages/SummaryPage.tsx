@@ -161,7 +161,7 @@ export default function SummaryPage() {
           </div>
 
           {/* Tab content — full width for tables in synthesis */}
-          {tab === "synthesis" ? (
+          {tab === "synthesis" && (
             <div className="rounded-xl border border-border bg-card p-6">
               <h2 className="mb-4 text-lg font-semibold text-foreground">
                 {t("summary.tabSynthesis")}
@@ -172,10 +172,22 @@ export default function SummaryPage() {
                 <p className="text-sm text-muted-foreground">{t("summary.noSynthesis")}</p>
               )}
             </div>
-          ) : tab === "discussion" ? (
+          )}
+          {tab === "discussion" && (
             <ReadOnlyFeed messages={messages} participants={participants} />
-          ) : (
+          )}
+          {tab === "argumentMap" && (
             <div className="rounded-xl border border-border bg-card p-2" style={{ height: 400 }}>
+              <MarkmapViewer ref={markmapRef} markdown={argumentMapMarkdown!} />
+            </div>
+          )}
+          {/* Off-screen MarkmapViewer — keeps ref alive for SVG export from any tab.
+              Needs real dimensions (not sr-only 1×1px) so markmap can compute layout. */}
+          {argumentMapMarkdown && tab !== "argumentMap" && (
+            <div
+              aria-hidden="true"
+              style={{ position: "absolute", left: "-9999px", width: "1200px", height: "800px" }}
+            >
               <MarkmapViewer ref={markmapRef} markdown={argumentMapMarkdown} />
             </div>
           )}
@@ -205,20 +217,18 @@ export default function SummaryPage() {
                   <Download className="h-4 w-4" />
                   {t("summary.downloadArgumentMap")} (.md)
                 </button>
-                {tab === "argumentMap" && (
-                  <button
-                    onClick={() => {
-                      const svgHtml = markmapRef.current?.getSvgHtml();
-                      if (svgHtml) {
-                        downloadTextFile(svgHtml, "airena-argument-map.svg").catch((e) => console.error("SVG download failed:", e));
-                      }
-                    }}
-                    className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
-                  >
-                    <Download className="h-4 w-4" />
-                    {t("summary.downloadArgumentMapSvg")} (.svg)
-                  </button>
-                )}
+                <button
+                  onClick={() => {
+                    const svgHtml = markmapRef.current?.getSvgHtml();
+                    if (svgHtml) {
+                      downloadTextFile(svgHtml, "airena-argument-map.svg").catch((e) => console.error("SVG download failed:", e));
+                    }
+                  }}
+                  className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                >
+                  <Download className="h-4 w-4" />
+                  {t("summary.downloadArgumentMapSvg")} (.svg)
+                </button>
               </div>
             )}
 

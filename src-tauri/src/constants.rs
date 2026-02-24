@@ -223,6 +223,13 @@ pub const MODERATION_BAN_MIN_TURNS: u32 = 1;
 /// Maximum ban duration (turns) that IArbitre can issue.
 pub const MODERATION_BAN_MAX_TURNS: u32 = 3;
 
+// ── Search deduplication ──────────────────────────────────────────────
+
+/// Minimum character length (byte length) for substring-based dedup matching.
+/// Below this threshold, only exact (case-insensitive) match is checked to avoid
+/// false positives (e.g. "IA" blocking "IA et éducation").
+pub const SEARCH_DEDUP_MIN_SUBSTRING_LEN: usize = 8;
+
 // ── Search rendering ────────────────────────────────────────────────────
 
 /// Maximum number of web search results rendered into the prompt context.
@@ -254,6 +261,12 @@ pub const THINK_CONTRADICTED_BOOST: f64 = 0.10;
 /// Maximum think mode probability (cap to keep it non-systematic).
 pub const THINK_MAX_PROBABILITY: f64 = 0.60;
 
+/// Multiplier applied to num_predict for all requests from thinking models.
+/// `num_predict` caps the total generated tokens (thinking + content). Without the
+/// multiplier, reasoning consumes the entire budget and content is empty.
+/// Applied transparently in `DiscussionEngine::build_discussion_request()`.
+pub const THINK_NUM_PREDICT_MULTIPLIER: i32 = 3;
+
 // ── Temperature adjustments ─────────────────────────────────────────────
 
 /// Temperature boost when a speaker has difficulty generating content.
@@ -281,6 +294,11 @@ pub const LLM_DEFAULT_TOP_K: u32 = 40;
 
 /// Default max tokens to generate per response.
 pub const LLM_DEFAULT_NUM_PREDICT: i32 = 2048;
+
+/// num_predict for synthesis generation (comprehensive summary of entire debate).
+/// Synthesis is a single, long-form output that must cover all participants and arguments.
+/// 2× default to avoid truncation on rich discussions.
+pub const SYNTHESIS_NUM_PREDICT: i32 = 4096;
 
 /// Default context window size (tokens).
 pub const LLM_DEFAULT_NUM_CTX: u32 = 8192;
@@ -409,11 +427,17 @@ pub const BUDGET_CEIL_POSITIONAL_MAP_PER_PARTICIPANT: usize = 200;
 /// Characters kept per message in argument extraction context.
 pub const ARGMAP_CONTEXT_CHARS: usize = 600;
 
-/// Maximum characters for a thesis label (one short complete sentence).
-pub const ARGMAP_MAX_THESIS_LABEL: usize = 100;
+/// Minimum characters for a thesis label to be considered valid.
+/// Filters out numeric indices, single words, and garbage labels.
+pub const ARGMAP_MIN_THESIS_LABEL_CHARS: usize = 8;
 
-/// Maximum characters for an argument label (1-2 short complete sentences).
-pub const ARGMAP_MAX_ARGUMENT_LABEL: usize = 200;
+/// Maximum bytes for a thesis label (one short complete sentence).
+/// Truncation uses word boundaries to avoid mid-word cuts.
+pub const ARGMAP_MAX_THESIS_LABEL: usize = 200;
+
+/// Maximum bytes for an argument label (1-2 short complete sentences).
+/// Truncation uses word boundaries to avoid mid-word cuts.
+pub const ARGMAP_MAX_ARGUMENT_LABEL: usize = 400;
 
 /// Maximum number of theses in the argument map.
 pub const ARGMAP_MAX_THESES: usize = 20;
