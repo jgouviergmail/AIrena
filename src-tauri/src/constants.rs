@@ -442,8 +442,21 @@ pub const ARGMAP_MAX_ARGUMENT_LABEL: usize = 400;
 /// Maximum number of theses in the argument map.
 pub const ARGMAP_MAX_THESES: usize = 20;
 
-/// Maximum total number of arguments across all theses.
+/// Maximum total number of arguments across all theses (recursive count).
 pub const ARGMAP_MAX_ARGUMENTS: usize = 100;
+
+/// Maximum nesting depth for arguments below a thesis.
+/// Allows chains like: Support → Counter → Refutation → Evidence (depth 4).
+/// If a target argument is at max depth, the new argument attaches flat to the thesis.
+pub const ARGMAP_MAX_ARGUMENT_DEPTH: usize = 4;
+
+/// Maximum number of existing argument lines shown in the extraction prompt.
+/// Only used to cap context size — arguments at all depths are included recursively.
+pub const ARGMAP_PROMPT_MAX_EXISTING_ARGUMENTS: usize = 60;
+
+/// Maximum characters for argument labels in the extraction prompt context.
+/// Shorter than ARGMAP_MAX_ARGUMENT_LABEL to keep the prompt compact.
+pub const ARGMAP_PROMPT_LABEL_CHARS: usize = 100;
 
 /// Minimum num_predict for argument map extraction (generous for quality JSON output).
 pub const ARGMAP_NUM_PREDICT: i32 = 4096;

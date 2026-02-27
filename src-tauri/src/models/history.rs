@@ -33,6 +33,8 @@ pub struct SaveDiscussionRequest {
     pub document_format: String,
     #[serde(default)]
     pub argument_map_md: String,
+    #[serde(default)]
+    pub argument_map_md_by_speaker: String,
 }
 
 /// Lightweight summary for listing discussions (no messages).
@@ -69,4 +71,5 @@ pub struct DiscussionDetail {
     pub document_content: String,
     pub document_format: String,
     pub argument_map_md: String,
+    pub argument_map_md_by_speaker: String,
 }

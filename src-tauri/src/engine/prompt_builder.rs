@@ -2275,22 +2275,10 @@ fn build_mode_aware_instruction(
 /// Build a prompt for extracting arguments and theses from recent exchanges.
 pub fn build_argument_extraction_prompt(
     recent_context: &str,
-    existing_theses: &[String],
+    existing_arguments_context: &str,
     topic: &str,
     lang: &str,
 ) -> String {
-    let theses_list = if existing_theses.is_empty() {
-        String::new()
-    } else {
-        // Use bullet points (NOT numbered) to prevent the LLM from referencing
-        // theses by index number instead of their full label text.
-        existing_theses
-            .iter()
-            .map(|t| format!("  - {t}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
     let lang_name = match lang {
         "en" => "English",
         "zh" => "Chinese",
@@ -2300,11 +2288,11 @@ pub fn build_argument_extraction_prompt(
     match lang {
         "en" => format!(
             "Topic: {topic}\n\n\
-            {theses_section}\
+            {existing_section}\
             Recent exchanges:\n{recent_context}\n\n\
             Analyze these exchanges and extract:\n\
             - New theses (main positions or claims) not already listed above\n\
-            - Arguments supporting, countering, or providing evidence for theses\n\
+            - Arguments supporting, countering, or providing evidence for theses or for existing arguments\n\
             Ignore speakers who only greet, moderate, or ask questions without taking a position.\n\
             Reuse existing thesis labels when a speaker refers to an already-identified thesis.\n\n\
             CRITICAL FORMATTING RULES:\n\
@@ -2316,27 +2304,29 @@ pub fn build_argument_extraction_prompt(
               GOOD: \"The tech sector created 3M jobs in 5 years, largely offsetting automated positions\"\n\
               BAD: \"As the AI Expert explained, data shows that the technology sector has experienced considerable growth with the creation of three million jobs over the past five years\"\n\
             - NEVER quote verbatim from the discussion. NEVER truncate mid-sentence. NEVER use identifiers like 'Thesis_X_Y'.\n\
-            - NEVER use numbers, indices, or IDs to reference theses. Always use the FULL thesis label text.\n\n\
+            - NEVER use numbers, indices, or IDs to reference theses. Always use the FULL thesis label text.\n\
+            - When an argument directly responds to a specific existing argument (not the thesis itself), set targets_argument to that argument's text. Otherwise set it to null.\n\n\
             Respond ONLY with JSON in this format:\n\
             {{\"extractions\": [\n\
               {{\"speaker\": \"Name\", \"new_theses\": [\"short thesis label\"], \"arguments\": [\n\
                 {{\"text\": \"argument text\", \"type\": \"support|counter|evidence\",\n\
-                 \"for_thesis\": \"thesis label or null\", \"against_thesis\": \"thesis label or null\"}}\n\
+                 \"for_thesis\": \"thesis label or null\", \"against_thesis\": \"thesis label or null\",\n\
+                 \"targets_argument\": \"text of the argument it responds to, or null\"}}\n\
               ]}}\n\
             ]}}",
-            theses_section = if theses_list.is_empty() {
+            existing_section = if existing_arguments_context.is_empty() {
                 String::new()
             } else {
-                format!("Already identified theses:\n{theses_list}\n\n")
+                format!("Already identified theses and arguments:\n{existing_arguments_context}\n\n")
             },
         ),
         "zh" => format!(
             "主题: {topic}\n\n\
-            {theses_section}\
+            {existing_section}\
             最近的对话:\n{recent_context}\n\n\
             分析这些对话并提取:\n\
             - 新论点（尚未在上面列出的主要立场或主张）\n\
-            - 支持、反驳或为论点提供证据的论据\n\
+            - 支持、反驳或为论点或现有论据提供证据的论据\n\
             忽略只打招呼、主持或提问而不表态的发言者。\n\
             当发言者提到已识别的论点时，重用现有的论点标签。\n\n\
             关键格式规则：\n\
@@ -2348,27 +2338,29 @@ pub fn build_argument_extraction_prompt(
               好：\"科技行业5年内创造了300万个就业岗位，大幅抵消了自动化减少的职位\"\n\
               差：\"正如人工智能专家所解释的，数据显示科技行业在过去五年中经历了相当大的增长，创造了三百万个就业机会\"\n\
             - 绝不逐字引用讨论内容。绝不截断句子。绝不使用'Thesis_X_Y'等标识符。\n\
-            - 绝不使用数字、索引或ID来引用论点。始终使用论点的完整标签文本。\n\n\
+            - 绝不使用数字、索引或ID来引用论点。始终使用论点的完整标签文本。\n\
+            - 当一个论据直接回应一个已存在的特定论据（而非论点本身）时，在targets_argument中填写该论据的文本。否则设为null。\n\n\
             仅用以下JSON格式回复:\n\
             {{\"extractions\": [\n\
               {{\"speaker\": \"姓名\", \"new_theses\": [\"简短论点标签\"], \"arguments\": [\n\
                 {{\"text\": \"论据文本\", \"type\": \"support|counter|evidence\",\n\
-                 \"for_thesis\": \"论点标签或null\", \"against_thesis\": \"论点标签或null\"}}\n\
+                 \"for_thesis\": \"论点标签或null\", \"against_thesis\": \"论点标签或null\",\n\
+                 \"targets_argument\": \"所回应的论据文本，或null\"}}\n\
               ]}}\n\
             ]}}",
-            theses_section = if theses_list.is_empty() {
+            existing_section = if existing_arguments_context.is_empty() {
                 String::new()
             } else {
-                format!("已识别的论点:\n{theses_list}\n\n")
+                format!("已识别的论点和论据:\n{existing_arguments_context}\n\n")
             },
         ),
         _ => format!(
             "Sujet : {topic}\n\n\
-            {theses_section}\
+            {existing_section}\
             Échanges récents :\n{recent_context}\n\n\
             Analyse ces échanges et extrais :\n\
             - Les nouvelles thèses (positions ou affirmations principales) non encore listées ci-dessus\n\
-            - Les arguments soutenant, contrant ou apportant des preuves pour des thèses\n\
+            - Les arguments soutenant, contrant ou apportant des preuves pour des thèses ou des arguments existants\n\
             Ignore les intervenants qui ne font que saluer, modérer ou poser des questions sans prendre position.\n\
             Réutilise les labels de thèses existantes quand un intervenant fait référence à une thèse déjà identifiée.\n\n\
             RÈGLES DE FORMAT CRITIQUES :\n\
@@ -2380,18 +2372,20 @@ pub fn build_argument_extraction_prompt(
               BON : \"Le secteur tech a créé 3M d'emplois en 5 ans, compensant largement les postes automatisés\"\n\
               MAUVAIS : \"Comme l'a expliqué l'Expert IA, les données montrent que le secteur technologique a connu une croissance considérable avec la création de trois millions d'emplois au cours des cinq dernières années\"\n\
             - JAMAIS de citation verbatim de la discussion. JAMAIS de phrase tronquée. JAMAIS d'identifiants comme 'Thesis_X_Y'.\n\
-            - JAMAIS de numéro, indice ou ID pour référencer une thèse. Toujours utiliser le TEXTE COMPLET du label de la thèse.\n\n\
+            - JAMAIS de numéro, indice ou ID pour référencer une thèse. Toujours utiliser le TEXTE COMPLET du label de la thèse.\n\
+            - Quand un argument répond directement à un argument existant spécifique (pas la thèse elle-même), place dans targets_argument le texte de cet argument. Sinon met null.\n\n\
             Réponds UNIQUEMENT avec du JSON dans ce format :\n\
             {{\"extractions\": [\n\
               {{\"speaker\": \"Nom\", \"new_theses\": [\"label court de thèse\"], \"arguments\": [\n\
                 {{\"text\": \"texte de l'argument\", \"type\": \"support|counter|evidence\",\n\
-                 \"for_thesis\": \"label thèse ou null\", \"against_thesis\": \"label thèse ou null\"}}\n\
+                 \"for_thesis\": \"label thèse ou null\", \"against_thesis\": \"label thèse ou null\",\n\
+                 \"targets_argument\": \"texte de l'argument auquel il répond, ou null\"}}\n\
               ]}}\n\
             ]}}",
-            theses_section = if theses_list.is_empty() {
+            existing_section = if existing_arguments_context.is_empty() {
                 String::new()
             } else {
-                format!("Thèses déjà identifiées :\n{theses_list}\n\n")
+                format!("Thèses et arguments déjà identifiés :\n{existing_arguments_context}\n\n")
             },
         ),
     }

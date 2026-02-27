@@ -570,6 +570,7 @@ pub struct ParsedArgument {
     pub arg_type: ArgumentType,
     pub for_thesis: Option<String>,
     pub against_thesis: Option<String>,
+    pub targets_argument: Option<String>,
 }
 
 /// Parsed extraction result for one speaker.
@@ -600,6 +601,8 @@ struct RawArgument {
     for_thesis: Option<String>,
     #[serde(default)]
     against_thesis: Option<String>,
+    #[serde(default, alias = "target_argument", alias = "parent_argument")]
+    targets_argument: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -729,6 +732,7 @@ pub fn parse_argument_extraction(
                         arg_type,
                         for_thesis: a.for_thesis.filter(|s| !s.is_empty()),
                         against_thesis: a.against_thesis.filter(|s| !s.is_empty()),
+                        targets_argument: a.targets_argument.filter(|s| !s.is_empty()),
                     }
                 })
                 .collect();

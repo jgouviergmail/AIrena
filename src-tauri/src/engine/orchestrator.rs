@@ -3253,17 +3253,12 @@ impl DiscussionEngine {
             .collect::<Vec<_>>()
             .join("\n");
 
-        // Collect existing thesis labels
-        let existing_theses: Vec<String> = self
-            .argument_map
-            .theses
-            .iter()
-            .map(|t| t.label.clone())
-            .collect();
+        // Build existing theses + arguments context for the extraction prompt
+        let existing_context = self.build_existing_arguments_context();
 
         let prompt = prompt_builder::build_argument_extraction_prompt(
             &recent_context,
-            &existing_theses,
+            &existing_context,
             &self.config.topic,
             &self.config.discussion_language,
         );
@@ -3351,6 +3346,7 @@ impl DiscussionEngine {
         self.merge_extractions(extractions);
 
         let md = self.argument_map.to_markdown(&self.config.topic);
+        let md_speaker = self.argument_map.to_markdown_by_speaker(&self.config.topic);
         tracing::info!(
             turn = self.current_turn,
             theses = self.argument_map.theses_count(),
@@ -3360,12 +3356,57 @@ impl DiscussionEngine {
         );
         let _ = channel.send(ArenaEvent::ArgumentMapUpdated {
             markdown: md,
+            markdown_by_speaker: md_speaker,
             theses_count: self.argument_map.theses_count() as u32,
             arguments_count: self.argument_map.arguments_count() as u32,
         });
     }
 
     /// Merge parsed extractions into the accumulated argument map.
+    /// Format existing theses and their arguments (all depths) for the extraction prompt.
+    /// Arguments are rendered recursively with indentation, truncated for prompt compactness,
+    /// and capped at `ARGMAP_PROMPT_MAX_EXISTING_ARGUMENTS` total argument lines.
+    fn build_existing_arguments_context(&self) -> String {
+        if self.argument_map.theses.is_empty() {
+            return String::new();
+        }
+        let mut lines = Vec::new();
+        let mut arg_count = 0;
+
+        for thesis in &self.argument_map.theses {
+            lines.push(format!("  - {}", thesis.label));
+            Self::collect_argument_lines(
+                &thesis.arguments,
+                &mut lines,
+                &mut arg_count,
+                2, // starting indent level (2 = "    - ")
+            );
+        }
+
+        lines.join("\n")
+    }
+
+    /// Recursively collect argument lines with indentation for the extraction prompt.
+    fn collect_argument_lines(
+        arguments: &[ArgumentNode],
+        lines: &mut Vec<String>,
+        arg_count: &mut usize,
+        indent_level: usize,
+    ) {
+        for arg in arguments {
+            if *arg_count >= constants::ARGMAP_PROMPT_MAX_EXISTING_ARGUMENTS {
+                return;
+            }
+            let indent = "  ".repeat(indent_level);
+            let icon = ArgumentMap::arg_icon(&arg.arg_type);
+            let label = truncate_at_word_boundary(&arg.label, constants::ARGMAP_PROMPT_LABEL_CHARS);
+            lines.push(format!("{indent}- {icon} {}: {label}", arg.speaker_name));
+            *arg_count += 1;
+
+            Self::collect_argument_lines(&arg.children, lines, arg_count, indent_level + 1);
+        }
+    }
+
     fn merge_extractions(&mut self, extractions: Vec<json_parser::ParsedArgumentExtraction>) {
         for ext in extractions {
             // Resolve speaker_id from speaker_name
@@ -3406,7 +3447,7 @@ impl DiscussionEngine {
                 }
             }
 
-            // Attach arguments to theses
+            // Attach arguments to theses (or to existing arguments as children)
             for arg in &ext.arguments {
                 if self.argument_map.arguments_count() >= constants::ARGMAP_MAX_ARGUMENTS {
                     break;
@@ -3483,23 +3524,75 @@ impl DiscussionEngine {
                         .rposition(|t| t.speaker_id == speaker_id)
                 };
 
-                if let Some(idx) = resolved_idx {
-                    let thesis_id = self.argument_map.theses[idx].id.clone();
-                    let arg_count = self.argument_map.theses[idx].arguments.len();
-                    let arg_id = format!("a-{}-{}", idx, arg_count);
-                    self.argument_map.theses[idx].arguments.push(ArgumentNode {
-                        id: arg_id,
-                        label: arg.text.clone(),
-                        arg_type: arg.arg_type.clone(),
-                        speaker_id: speaker_id.clone(),
-                        speaker_name: ext.speaker_name.clone(),
-                        targets_thesis_id: if arg.arg_type == ArgumentType::Counter {
-                            Some(thesis_id)
-                        } else {
-                            None
-                        },
-                    });
+                let Some(thesis_idx) = resolved_idx else {
+                    continue;
+                };
+
+                // Step 2: If targets_argument is set, try to attach as child of existing argument
+                if let Some(target_arg_label) = &arg.targets_argument {
+                    // Strip trailing ellipsis — the extraction prompt truncates argument labels
+                    // with `truncate_at_word_boundary` which appends "…". LLMs copy this
+                    // truncated text into targets_argument, breaking containment matching.
+                    let target_lower = target_arg_label.trim_end_matches('…').to_lowercase();
+
+                    // Pass 1 (immutable): check if target argument exists and is within depth cap
+                    let target_depth = self.argument_map.theses[thesis_idx]
+                        .arguments
+                        .iter()
+                        .find_map(|a| a.find_depth_by_label(&target_lower, 1));
+
+                    if let Some(depth) = target_depth {
+                        if depth < constants::ARGMAP_MAX_ARGUMENT_DEPTH {
+                            // Pass 2 (mutable): find the argument and push child
+                            let arg_id = format!("a-{}", self.argument_map.arguments_count());
+                            let thesis_id = self.argument_map.theses[thesis_idx].id.clone();
+                            let child_node = ArgumentNode {
+                                id: arg_id,
+                                label: arg.text.clone(),
+                                arg_type: arg.arg_type.clone(),
+                                speaker_id: speaker_id.clone(),
+                                speaker_name: ext.speaker_name.clone(),
+                                targets_thesis_id: if arg.arg_type == ArgumentType::Counter {
+                                    Some(thesis_id)
+                                } else {
+                                    None
+                                },
+                                children: vec![],
+                            };
+                            for root_arg in &mut self.argument_map.theses[thesis_idx].arguments {
+                                if let Some(parent) = root_arg.find_by_label_mut(&target_lower) {
+                                    parent.children.push(child_node);
+                                    break;
+                                }
+                            }
+                            continue; // attached as child, skip flat attachment
+                        }
+                        tracing::info!(
+                            target_arg = %target_arg_label,
+                            depth = depth,
+                            max = constants::ARGMAP_MAX_ARGUMENT_DEPTH,
+                            "Argument depth cap exceeded, attaching flat to thesis"
+                        );
+                    }
+                    // else: target argument not found in this thesis, fall through to flat attachment
                 }
+
+                // Step 3: Flat attachment to thesis root
+                let thesis_id = self.argument_map.theses[thesis_idx].id.clone();
+                let arg_id = format!("a-{}", self.argument_map.arguments_count());
+                self.argument_map.theses[thesis_idx].arguments.push(ArgumentNode {
+                    id: arg_id,
+                    label: arg.text.clone(),
+                    arg_type: arg.arg_type.clone(),
+                    speaker_id: speaker_id.clone(),
+                    speaker_name: ext.speaker_name.clone(),
+                    targets_thesis_id: if arg.arg_type == ArgumentType::Counter {
+                        Some(thesis_id)
+                    } else {
+                        None
+                    },
+                    children: vec![],
+                });
             }
         }
     }

@@ -170,6 +170,7 @@ export interface SaveDiscussionRequest {
   documentContent: string;
   documentFormat: string;
   argumentMapMd: string;
+  argumentMapMdBySpeaker: string;
 }
 
 export interface DiscussionSummary {
@@ -200,6 +201,7 @@ export interface DiscussionDetail {
   documentContent: string;
   documentFormat: string;
   argumentMapMd: string;
+  argumentMapMdBySpeaker: string;
 }
 
 // ArenaEvent — tagged union (discriminated via "type" field)
@@ -306,6 +308,7 @@ export type ArenaEvent =
       type: "argumentMapUpdated";
       data: {
         markdown: string;
+        markdownBySpeaker: string;
         thesesCount: number;
         argumentsCount: number;
       };

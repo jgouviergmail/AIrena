@@ -121,6 +121,16 @@ pub async fn initialize(db: &Connection) -> Result<(), tokio_rusqlite::Error> {
                 "ALTER TABLE discussions ADD COLUMN argument_map_md TEXT NOT NULL DEFAULT '';"
             )?;
         }
+        // Migration: add argument_map_md_by_speaker column to discussions (idempotent)
+        let has_argument_map_md_by_speaker: bool = conn
+            .prepare("PRAGMA table_info(discussions)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .any(|col| col.as_deref() == Ok("argument_map_md_by_speaker"));
+        if !has_argument_map_md_by_speaker {
+            conn.execute_batch(
+                "ALTER TABLE discussions ADD COLUMN argument_map_md_by_speaker TEXT NOT NULL DEFAULT '';"
+            )?;
+        }
         Ok(())
     })
     .await

@@ -205,3 +205,21 @@ export async function downloadTextFile(
     await writeTextFile(path, content);
   }
 }
+
+/**
+ * Save multiple text files to a user-chosen folder.
+ * Opens a single folder picker, then writes all files into that folder.
+ */
+export async function downloadMultipleTextFiles(
+  files: { content: string; fileName: string }[],
+): Promise<void> {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+  const { join } = await import("@tauri-apps/api/path");
+  const folder = await open({ directory: true, multiple: false });
+  if (typeof folder !== "string") return;
+  for (const file of files) {
+    const filePath = await join(folder, file.fileName);
+    await writeTextFile(filePath, file.content);
+  }
+}

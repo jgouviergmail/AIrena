@@ -64,6 +64,7 @@ interface ArenaState {
   documentFormat: DocumentFormat;
   documentLastEditor: string | null;
   argumentMapMarkdown: string;
+  argumentMapMarkdownBySpeaker: string;
   argumentMapThesesCount: number;
   argumentMapArgumentsCount: number;
   directives: Map<string, DirectiveData>;
@@ -110,6 +111,7 @@ const initialState = {
   documentFormat: "none" as DocumentFormat,
   documentLastEditor: null as string | null,
   argumentMapMarkdown: "",
+  argumentMapMarkdownBySpeaker: "",
   argumentMapThesesCount: 0,
   argumentMapArgumentsCount: 0,
   directives: new Map<string, DirectiveData>(),
@@ -344,6 +346,7 @@ export const useArenaStore = create<ArenaState>((set) => ({
       case "argumentMapUpdated":
         set({
           argumentMapMarkdown: event.data.markdown,
+          argumentMapMarkdownBySpeaker: event.data.markdownBySpeaker,
           argumentMapThesesCount: event.data.thesesCount,
           argumentMapArgumentsCount: event.data.argumentsCount,
           activityStatus: { type: "argumentMap" },
@@ -500,6 +503,7 @@ export const useArenaStore = create<ArenaState>((set) => ({
             documentContent: arenaState.documentContent,
             documentFormat: arenaState.documentFormat,
             argumentMapMd: arenaState.argumentMapMarkdown,
+            argumentMapMdBySpeaker: arenaState.argumentMapMarkdownBySpeaker,
           }).catch((err) =>
             console.error("Failed to save discussion history:", err),
           );
@@ -535,6 +539,7 @@ export const useArenaStore = create<ArenaState>((set) => ({
       documentFormat: "none" as DocumentFormat,
       documentLastEditor: null,
       argumentMapMarkdown: "",
+      argumentMapMarkdownBySpeaker: "",
       argumentMapThesesCount: 0,
       argumentMapArgumentsCount: 0,
       directives: new Map<string, DirectiveData>(),

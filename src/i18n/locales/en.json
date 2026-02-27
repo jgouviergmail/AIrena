@@ -391,7 +391,7 @@
     "newDiscussion": "New discussion",
     "noSynthesis": "(No synthesis available)",
     "tabSynthesis": "Synthesis",
-    "tabDiscussion": "Full discussion",
+    "tabDiscussion": "Discussion",
     "viewHistory": "History",
     "model": "Model",
     "participantsList": "Participants",
@@ -399,8 +399,9 @@
     "downloadDocument": "Download document",
     "discussionMode": "Discussion type",
     "tabArgumentMap": "Argument Map",
-    "downloadArgumentMap": "Export argument map",
-    "downloadArgumentMapSvg": "Export map as SVG"
+    "tabArgumentMapBySpeaker": "Map by GladIAteurs",
+    "downloadArgumentMap": "Export maps as text",
+    "downloadArgumentMapSvg": "Export maps as images"
   },
   "mindmap": {
     "title": "Argument Map",
@@ -409,7 +410,9 @@
     "legendSupport": "Support",
     "legendCounter": "Counter",
     "legendEvidence": "Evidence",
-    "collapse": "Collapse map"
+    "collapse": "Collapse map",
+    "viewByThesis": "By thesis",
+    "viewBySpeaker": "By speaker"
   },
   "document": {
     "title": "Shared document",

@@ -1,7 +1,7 @@
 # AIrena — Documentation Fonctionnelle
 
-> **Version** : 1.12.1
-> **Dernière mise à jour** : 2026-02-24
+> **Version** : 1.13
+> **Dernière mise à jour** : 2026-02-27
 > **Auteur** : jgouv
 
 ---
@@ -322,6 +322,7 @@ Le document est mis à jour par chaque GladIAteur à son tour, qui contribue au 
 Visible uniquement si la **carte des arguments** est activée dans le setup :
 
 - Affiche une **mindmap interactive** (arbre de thèses et d'arguments) générée automatiquement à partir des interventions
+- **Toggle de vue** : bascule entre vue par thèse (thesis-centric) et vue par GladIAteur (speaker-centric)
 - **Badge de compteurs** : nombre de thèses (T) et d'arguments (A) extraits
 - **Légende** : ✅ Pour (soutien), ❌ Contre (opposition), 📊 Preuves
 - Repliable/dépliable (texte vertical quand replié)
@@ -615,12 +616,14 @@ Après la synthèse, l'utilisateur accède à la page de résumé avec :
 |---|---|
 | **Onglet Synthèse** | Texte complet de la synthèse |
 | **Onglet Discussion** | Fil complet en lecture seule |
-| **Onglet Carte des arguments** | Mindmap interactive des thèses et arguments (si activée) |
+| **Onglet Carte des arguments** | Mindmap interactive des thèses organisées par thèse (vue thesis-centric, si activée) |
+| **Onglet Carte par GladIAteurs** | Mindmap des arguments organisés par orateur (vue speaker-centric, si activée) |
 | **Badge de mode** | Mode de discussion affiché (si différent de « Débat ») |
-| **Statistiques** | Nombre de tours, modèle utilisé, participants |
-| **Téléchargement** | Export de la synthèse ou discussion en fichier texte |
-| **Téléchargement carte** | Export de la carte des arguments en SVG ou Markdown (si activée) |
+| **Statistiques** | Nombre de tours, modèle utilisé, participants (composant `StatCard` partagé) |
+| **Liste des participants** | Emojis et noms de tous les participants avec badge IArbitre |
 | **Téléchargement document** | Export du document collaboratif (si co-construction) |
+| **Téléchargement cartes (MD)** | Export des 2 cartes des arguments en markdown via sélection de dossier (si activées) |
+| **Téléchargement cartes (SVG)** | Export des 2 cartes en SVG vectoriel complet via sélection de dossier (si activées) |
 | **Nouvelle discussion** | Retour à la configuration |
 | **Voir dans l'historique** | Navigation vers l'historique |
 
@@ -643,9 +646,9 @@ La page d'historique affiche toutes les discussions sauvegardées avec :
 La vue détaillée permet de :
 - Relire l'intégralité de la discussion en mode lecture seule
 - Consulter la synthèse
-- Consulter la carte des arguments (si activée lors de la discussion)
+- Consulter les deux cartes des arguments (par thèse et par GladIAteur, si activées lors de la discussion)
 - Voir les réactions, les bans, les recherches
-- Télécharger le contenu (texte, SVG, markdown)
+- Télécharger les cartes en markdown ou SVG (multi-fichier via sélection de dossier)
 - Consulter le document collaboratif (si co-construction)
 
 ### Sauvegarde automatique
@@ -655,7 +658,7 @@ Chaque discussion terminée est automatiquement sauvegardée dans la base de don
 - La synthèse
 - Les métadonnées (participants, mode, format, modèle)
 - Le document collaboratif (si applicable)
-- La carte des arguments en markdown (si activée)
+- Les deux cartes des arguments en markdown (par thèse + par GladIAteur, si activées)
 
 ---
 
@@ -802,21 +805,19 @@ Le thème est persisté dans les paramètres et s'applique immédiatement au bas
 
 | Action | Description |
 |---|---|
-| Télécharger la synthèse | Exporte le texte de synthèse en fichier texte |
-| Télécharger la discussion | Exporte le fil complet en fichier texte |
 | Télécharger le document | Exporte le document collaboratif (si co-construction) |
-| Télécharger la carte (MD) | Exporte la carte des arguments en markdown (si activée) |
-| Télécharger la carte (SVG) | Exporte la carte des arguments en SVG vectoriel **complet** (si activée) |
+| Exporter les cartes en texte (.md) | Exporte les 2 cartes des arguments en markdown dans un dossier choisi (si activées) |
+| Exporter les cartes en image (.svg) | Exporte les 2 cartes en SVG vectoriel complet dans un dossier choisi (si activées) |
 
 ### Depuis l'historique
 
-Mêmes options de téléchargement disponibles depuis la vue détaillée d'une discussion.
+Mêmes options de téléchargement disponibles depuis la vue détaillée d'une discussion (cartes MD + SVG multi-fichiers).
 
 ### Format d'export
 
-Les exports utilisent le sélecteur de fichier natif Windows (dialogue « Enregistrer sous »). Le format est du texte brut (.txt), le format du document collaboratif (.md, .csv), ou SVG pour la carte des arguments.
+Les exports de document et de fichier unique utilisent le sélecteur de fichier natif Windows (dialogue « Enregistrer sous »). Les exports multi-fichiers (cartes des arguments) utilisent un sélecteur de **dossier** puis écrivent les fichiers dans le dossier choisi.
 
-L'export SVG de la carte des arguments est disponible depuis **tous les onglets** (synthèse, discussion ou carte). Le SVG exporté contient l'**intégralité** de la carte (toutes les thèses et arguments), indépendamment de la portion visible à l'écran (zoom/pan).
+L'export SVG de la carte des arguments est disponible depuis **tous les onglets** (synthèse, discussion ou carte). Le SVG exporté contient l'**intégralité** de la carte (toutes les thèses et arguments), indépendamment de la portion visible à l'écran (zoom/pan). Deux fichiers SVG sont générés : « Carte des arguments » (vue par thèse) et « Carte des arguments par gladiateurs » (vue par orateur).
 
 ---
 
@@ -930,14 +931,33 @@ La carte des arguments est activée via un toggle dans l'étape 1 du setup (« P
 
 ### Structure de la carte
 
-La carte est organisée hiérarchiquement :
+La carte existe en **deux vues** complémentaires :
+
+#### Vue thesis-centric (par thèse)
+
+Chaque thèse est une branche principale, les arguments sont imbriqués récursivement :
+
+```
+# [Sujet de discussion]
+## [Thèse 1] ([Orateur])
+- ✅ [Orateur A]: [Argument de soutien]
+  - ❌ [Orateur B]: [Contre-argument]
+    - ✅ [Orateur A]: [Réfutation]
+      - 📊 [Orateur A]: [Preuve]
+## [Thèse 2] ([Orateur])
+- ✅ [Orateur B]: [Support]
+```
+
+#### Vue speaker-centric (par GladIAteur)
+
+Les arguments sont regroupés par orateur, avec les sous-arguments imbriqués :
 
 ```
 # [Sujet de discussion]
 ## [Orateur 1]
 ### [Thèse 1]
 - ✅ [Argument de soutien]
-- 📊 [Preuve/Evidence]
+  - ❌ [Sous-contre-argument]
 ### → [Thèse d'un autre orateur]
 - ❌ [Contre-argument]
 ## [Orateur 2]
@@ -945,26 +965,32 @@ La carte est organisée hiérarchiquement :
 ...
 ```
 
+### Arguments récursifs
+
+Les arguments peuvent avoir des **sous-arguments** imbriqués (contre-arguments, réfutations, preuves). La profondeur est limitée à 4 niveaux (`ARGMAP_MAX_ARGUMENT_DEPTH`). Si le LLM cible un argument existant via `targets_argument`, le nouveau noeud est attaché en enfant de cet argument. Si la cible n'est pas trouvée ou que la profondeur max est atteinte, l'argument est rattaché directement à la thèse (fallback plat).
+
 ### Types d'arguments
 
 | Type | Icône | Description |
 |---|---|---|
-| **Support** | ✅ | Argument en faveur d'une thèse |
-| **Counter** | ❌ | Contre-argument s'opposant à une thèse |
+| **Support** | ✅ | Argument en faveur d'une thèse ou d'un argument parent |
+| **Counter** | ❌ | Contre-argument s'opposant à une thèse ou un argument parent |
 | **Evidence** | 📊 | Preuve, donnée factuelle ou exemple concret |
 
 ### Mécanisme d'extraction
 
 1. Après chaque tour (à partir du tour 2), le LLM analyse les interventions
 2. Il identifie les nouvelles thèses et arguments en les rattachant aux thèses existantes ou en en créant de nouvelles
-3. La carte est fusionnée avec la version précédente (les thèses existantes sont enrichies, pas dupliquées)
-4. Le résultat est converti en markdown hiérarchique pour le rendu mindmap
+3. **Ciblage d'argument** : le LLM peut spécifier `targets_argument` pour créer un sous-argument (contre-argument à un argument existant, réfutation, etc.)
+4. La carte est fusionnée avec la version précédente (les thèses existantes sont enrichies, pas dupliquées)
+5. Le résultat est converti en deux markdowns hiérarchiques : vue par thèse et vue par orateur
+6. Les deux markdowns sont émis et persistés séparément
 
 ### Affichage
 
-- **Arena** : sidebar droite avec rendu interactif via [markmap](https://markmap.js.org/)
-- **Résumé / Historique** : onglet dédié avec la même visualisation
-- **Export** : téléchargement en markdown (.md) ou en SVG (.svg)
+- **Arena** : sidebar droite avec rendu interactif via [markmap](https://markmap.js.org/) et toggle thesis/speaker view
+- **Résumé / Historique** : deux onglets dédiés (« Carte des arguments » et « Carte par GladIAteurs ») avec la même visualisation
+- **Export** : téléchargement multi-fichier en markdown (.md) ou en SVG (.svg) via sélection de dossier
 
 ### Validation des labels
 
@@ -978,8 +1004,9 @@ Le système vérifie la qualité des labels extraits par le LLM :
 
 - Les labels sont courts (thèses ≤ 200 caractères, arguments ≤ 400 caractères)
 - Maximum 20 thèses et 100 arguments
+- Profondeur max de sous-arguments : 4 niveaux (`ARGMAP_MAX_ARGUMENT_DEPTH`)
 - Les labels sont en langage naturel dans la langue de discussion (pas d'identifiants techniques ni de numéros)
-- La carte est persistée dans l'historique sous forme markdown
+- Les deux cartes (par thèse + par orateur) sont persistées dans l'historique sous forme markdown
 
 ---
 
@@ -1027,6 +1054,21 @@ Le système vérifie la qualité des labels extraits par le LLM :
 - **Synthèse élargie** : `SYNTHESIS_NUM_PREDICT = 4096` (2× le budget par défaut) pour des synthèses plus complètes ; retry automatique avec budget doublé en cas de troncature
 - **Optimisation du contexte** : système de waterfall adaptatif pour la gestion du budget de tokens dans les prompts
 - **Export SVG complet** : l'export de la carte des arguments capture l'intégralité du contenu (pas seulement la partie visible) via `getBBox()` sur l'élément SVG principal
+
+### v1.13 (2026-02-27) — Arguments récursifs & Double vue carte
+
+**Nouvelles fonctionnalités** :
+- **Arguments récursifs** : les arguments peuvent avoir des sous-arguments imbriqués (contre-arguments, réfutations, preuves) jusqu'à 4 niveaux de profondeur
+- **Double vue carte des arguments** : vue par thèse (thesis-centric) et vue par GladIAteur (speaker-centric), dans la sidebar Arena, le Résumé et l'Historique
+- **Toggle de vue** dans la sidebar carte (Arena) pour basculer entre les deux vues
+- **Onglets séparés** dans le Résumé et l'Historique : « Carte des arguments » + « Carte par GladIAteurs »
+- **Export multi-fichier** : les exports MD et SVG génèrent 2 fichiers (un par vue) dans un dossier choisi par l'utilisateur
+
+**Améliorations** :
+- `targets_argument` dans l'extraction LLM — permet au LLM de cibler un argument existant pour créer un sous-argument
+- Persistance des deux markdowns en base de données (nouvelle colonne `argument_map_md_by_speaker`)
+- Composant `StatCard` partagé entre SummaryPage et HistoryDetailPage (DRY)
+- Unicité des recherches + anti-répétition + détection du mode think
 
 ### v1.12 (2026-02-22) — Optimisation contexte & Waterfall
 

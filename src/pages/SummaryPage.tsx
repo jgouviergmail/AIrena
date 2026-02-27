@@ -9,19 +9,22 @@ import { useSetupStore } from "@/stores/useSetupStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { getProfileEmoji, ROLE_EMOJIS } from "@/lib/profile-emoji";
 import { SimpleMd } from "@/components/shared/SimpleMd";
+import { StatCard } from "@/components/shared/StatCard";
 import { MarkmapViewer } from "@/components/mindmap/MarkmapViewer";
 import type { MarkmapViewerHandle } from "@/components/mindmap/MarkmapViewer";
 import { cn } from "@/lib/utils";
-import { downloadTextFile } from "@/lib/tauri-api";
+import { downloadTextFile, downloadMultipleTextFiles } from "@/lib/tauri-api";
 import type { ParticipantInfo, SpeakerRole } from "@/lib/types";
 
 export default function SummaryPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [tab, setTab] = useState<"synthesis" | "discussion" | "argumentMap">("synthesis");
+  const [tab, setTab] = useState<"synthesis" | "discussion" | "argumentMap" | "argumentMapBySpeaker">("synthesis");
   const markmapRef = useRef<MarkmapViewerHandle>(null);
+  const markmapBySpeakerRef = useRef<MarkmapViewerHandle>(null);
   const synthesis = useArenaStore((s) => s.synthesis);
   const argumentMapMarkdown = useArenaStore((s) => s.argumentMapMarkdown);
+  const argumentMapMarkdownBySpeaker = useArenaStore((s) => s.argumentMapMarkdownBySpeaker);
   const currentTurn = useArenaStore((s) => s.currentTurn);
   const messages = useArenaStore((s) => s.messages);
   const topic = useSetupStore((s) => s.topic);
@@ -119,7 +122,7 @@ export default function SummaryPage() {
           </div>
 
           {/* Tab toggle — narrow */}
-          <div className="mx-auto max-w-2xl">
+          <div className="mx-auto max-w-2xl space-y-1.5">
             <div className="flex rounded-lg border border-border bg-card p-1">
               <button
                 onClick={() => setTab("synthesis")}
@@ -143,7 +146,9 @@ export default function SummaryPage() {
               >
                 {t("summary.tabDiscussion")}
               </button>
-              {argumentMapMarkdown && (
+            </div>
+            {argumentMapMarkdown && (
+              <div className="flex rounded-lg border border-border bg-card p-1">
                 <button
                   onClick={() => setTab("argumentMap")}
                   className={cn(
@@ -156,8 +161,22 @@ export default function SummaryPage() {
                   <Network className="mr-1.5 inline h-3.5 w-3.5" />
                   {t("summary.tabArgumentMap")}
                 </button>
-              )}
-            </div>
+                {argumentMapMarkdownBySpeaker && (
+                  <button
+                    onClick={() => setTab("argumentMapBySpeaker")}
+                    className={cn(
+                      "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+                      tab === "argumentMapBySpeaker"
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <Users className="mr-1.5 inline h-3.5 w-3.5" />
+                    {t("summary.tabArgumentMapBySpeaker")}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Tab content — full width for tables in synthesis */}
@@ -181,14 +200,27 @@ export default function SummaryPage() {
               <MarkmapViewer ref={markmapRef} markdown={argumentMapMarkdown!} />
             </div>
           )}
-          {/* Off-screen MarkmapViewer — keeps ref alive for SVG export from any tab.
-              Needs real dimensions (not sr-only 1×1px) so markmap can compute layout. */}
+          {tab === "argumentMapBySpeaker" && (
+            <div className="rounded-xl border border-border bg-card p-2" style={{ height: 400 }}>
+              <MarkmapViewer ref={markmapBySpeakerRef} markdown={argumentMapMarkdownBySpeaker!} />
+            </div>
+          )}
+          {/* Off-screen MarkmapViewers — keep refs alive for SVG export from any tab.
+              Need real dimensions (not sr-only 1×1px) so markmap can compute layout. */}
           {argumentMapMarkdown && tab !== "argumentMap" && (
             <div
               aria-hidden="true"
               style={{ position: "absolute", left: "-9999px", width: "1200px", height: "800px" }}
             >
               <MarkmapViewer ref={markmapRef} markdown={argumentMapMarkdown} />
+            </div>
+          )}
+          {argumentMapMarkdownBySpeaker && tab !== "argumentMapBySpeaker" && (
+            <div
+              aria-hidden="true"
+              style={{ position: "absolute", left: "-9999px", width: "1200px", height: "800px" }}
+            >
+              <MarkmapViewer ref={markmapBySpeakerRef} markdown={argumentMapMarkdownBySpeaker} />
             </div>
           )}
 
@@ -211,7 +243,12 @@ export default function SummaryPage() {
             {argumentMapMarkdown && (
               <div className="flex justify-center gap-3">
                 <button
-                  onClick={() => downloadTextFile(argumentMapMarkdown, "airena-argument-map.md").catch((e) => console.error("Download failed:", e))}
+                  onClick={() => downloadMultipleTextFiles([
+                    { content: argumentMapMarkdown, fileName: "AIrena - Carte des arguments.md" },
+                    ...(argumentMapMarkdownBySpeaker
+                      ? [{ content: argumentMapMarkdownBySpeaker, fileName: "AIrena - Carte des arguments par gladiateurs.md" }]
+                      : []),
+                  ]).catch((e) => console.error("Download failed:", e))}
                   className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
                 >
                   <Download className="h-4 w-4" />
@@ -219,9 +256,13 @@ export default function SummaryPage() {
                 </button>
                 <button
                   onClick={() => {
-                    const svgHtml = markmapRef.current?.getSvgHtml();
-                    if (svgHtml) {
-                      downloadTextFile(svgHtml, "airena-argument-map.svg").catch((e) => console.error("SVG download failed:", e));
+                    const files: { content: string; fileName: string }[] = [];
+                    const svgThesis = markmapRef.current?.getSvgHtml();
+                    if (svgThesis) files.push({ content: svgThesis, fileName: "AIrena - Carte des arguments.svg" });
+                    const svgSpeaker = markmapBySpeakerRef.current?.getSvgHtml();
+                    if (svgSpeaker) files.push({ content: svgSpeaker, fileName: "AIrena - Carte des arguments par gladiateurs.svg" });
+                    if (files.length > 0) {
+                      downloadMultipleTextFiles(files).catch((e) => console.error("SVG download failed:", e));
                     }
                   }}
                   className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
@@ -260,34 +301,6 @@ export default function SummaryPage() {
         </div>
       </div>
     </>
-  );
-}
-
-
-function StatCard({
-  label,
-  value,
-  icon,
-  truncate,
-}: {
-  label: string;
-  value: string;
-  icon?: React.ReactNode;
-  truncate?: boolean;
-}) {
-  return (
-    <div className="rounded-xl border border-border bg-card p-3 text-center">
-      <div className="flex items-center justify-center gap-1">
-        {icon}
-        <p className="text-xs text-muted-foreground">{label}</p>
-      </div>
-      <p
-        className={`mt-1 text-sm font-semibold text-foreground ${truncate ? "truncate" : ""}`}
-        title={truncate ? value : undefined}
-      >
-        {value}
-      </p>
-    </div>
   );
 }
 

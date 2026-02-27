@@ -212,8 +212,8 @@ pub async fn save_discussion(
             .unwrap_or_else(|_| "[]".to_string());
 
         tx.execute(
-            "INSERT INTO discussions (id, topic, discussion_language, model_name, participants_json, total_turns, synthesis, created_at, discussion_mode, document_content, document_format, argument_map_md)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            "INSERT INTO discussions (id, topic, discussion_language, model_name, participants_json, total_turns, synthesis, created_at, discussion_mode, document_content, document_format, argument_map_md, argument_map_md_by_speaker)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO NOTHING",
             rusqlite::params![
                 request.id,
@@ -228,6 +228,7 @@ pub async fn save_discussion(
                 request.document_content,
                 request.document_format,
                 request.argument_map_md,
+                request.argument_map_md_by_speaker,
             ],
         )?;
 
@@ -311,7 +312,7 @@ pub async fn get_discussion(
         // Fetch discussion metadata
         let disc = conn
             .prepare(
-                "SELECT id, topic, discussion_language, model_name, participants_json, total_turns, synthesis, created_at, discussion_mode, document_content, document_format, argument_map_md
+                "SELECT id, topic, discussion_language, model_name, participants_json, total_turns, synthesis, created_at, discussion_mode, document_content, document_format, argument_map_md, argument_map_md_by_speaker
                  FROM discussions WHERE id = ?1",
             )?
             .query_row(rusqlite::params![id], |row| {
@@ -332,6 +333,7 @@ pub async fn get_discussion(
                     document_content: row.get::<_, String>(9).unwrap_or_else(|_| String::new()),
                     document_format: row.get::<_, String>(10).unwrap_or_else(|_| "none".to_string()),
                     argument_map_md: row.get::<_, String>(11).unwrap_or_default(),
+                    argument_map_md_by_speaker: row.get::<_, String>(12).unwrap_or_default(),
                 })
             })
             .optional()?;

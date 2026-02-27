@@ -1,7 +1,7 @@
 # AIrena — Documentation Technique
 
-> **Version** : 1.12.1
-> **Dernière mise à jour** : 2026-02-24
+> **Version** : 1.13
+> **Dernière mise à jour** : 2026-02-27
 > **Auteur** : jgouv
 > **Identifiant** : `com.jgouv.airena`
 
@@ -637,7 +637,8 @@ discussions (
     discussion_mode TEXT DEFAULT 'debate',
     document_content TEXT DEFAULT '',
     document_format TEXT DEFAULT 'none',
-    argument_map_md TEXT DEFAULT ''
+    argument_map_md TEXT DEFAULT '',
+    argument_map_md_by_speaker TEXT DEFAULT ''
 )
 
 -- Messages
@@ -813,6 +814,7 @@ pub struct ArgumentNode {
     pub speaker_id: String,
     pub speaker_name: String,
     pub targets_thesis_id: Option<String>,
+    pub children: Vec<ArgumentNode>,  // sous-arguments récursifs
 }
 
 pub struct ArgumentMap {
@@ -820,16 +822,21 @@ pub struct ArgumentMap {
 }
 ```
 
+**Méthodes `ArgumentNode`** : `count_all()` (récursif), `find_depth_by_label()` (recherche immutable), `find_by_label_mut()` (recherche mutable pour insertion).
+
+**Méthodes `ArgumentMap`** : `arguments_count()` (récursif via `count_all()`), `to_markdown()` (vue thesis-centric), `to_markdown_by_speaker()` (vue speaker-centric).
+
 #### Flux d'extraction
 
-1. **Après chaque tour** (à partir du tour 2), l'orchestrateur appelle `build_argument_extraction_prompt()` avec le contexte des interventions récentes et la carte existante (sous forme de bullet points, pas de liste numérotée)
-2. Le LLM retourne un JSON avec les nouvelles thèses/arguments
+1. **Après chaque tour** (à partir du tour 2), l'orchestrateur appelle `build_argument_extraction_prompt()` avec le contexte des interventions récentes et la carte existante (sous forme de bullet points avec indentation pour les sous-arguments, pas de liste numérotée)
+2. Le LLM retourne un JSON avec les nouvelles thèses/arguments, incluant optionnellement `targets_argument` pour cibler un argument existant
 3. `parse_argument_extraction()` dans `json_parser.rs` parse la réponse avec fuzzy matching des noms + filtrage `is_valid_thesis_label()` (rejette les labels numériques et < 8 chars)
 4. **Résolution numérique** : si le LLM retourne un index numérique (ex. « 3 ») au lieu d'un label, l'orchestrateur tente de le résoudre vers la thèse existante à cet index
 5. **Garde anti-création** : les nouvelles thèses ne sont créées que si le label passe `is_valid_thesis_label()`
-6. Les résultats sont fusionnés avec la carte existante (ajout uniquement, pas de suppression)
-7. `ArgumentMap::to_markdown()` convertit en markdown hiérarchique (structure `# Topic / ## Speaker / ### Thesis / - Arg`)
-8. L'événement `ArgumentMapUpdated` est émis avec le markdown, le nombre de thèses et d'arguments
+6. **Insertion arborescente** : si `targets_argument` est défini, recherche récursive (`find_depth_by_label` puis `find_by_label_mut`) — si trouvé et profondeur < `ARGMAP_MAX_ARGUMENT_DEPTH`, le nouvel argument est ajouté en enfant ; sinon fallback plat sur la thèse
+7. Les résultats sont fusionnés avec la carte existante (ajout uniquement, pas de suppression)
+8. `ArgumentMap::to_markdown()` génère la vue thesis-centric et `to_markdown_by_speaker()` génère la vue speaker-centric
+9. L'événement `ArgumentMapUpdated` est émis avec les deux markdowns, le nombre de thèses et d'arguments
 
 #### Rendu frontend
 
@@ -837,8 +844,8 @@ pub struct ArgumentMap {
   - `useImperativeHandle` expose `getSvgHtml()` pour l'export SVG
   - Options markmap : `autoFit`, `maxWidth: 250`, `spacingHorizontal: 80`, `spacingVertical: 8`
   - **Export SVG complet** : `buildStandaloneSvg()` utilise `getBBox()` sur le `<g>` principal pour capturer l'intégralité du contenu (pas seulement le viewport visible), supprime le transform D3 zoom/pan, conserve les classes markmap et la CSS variable `--markmap-max-width`
-  - **Off-screen rendering** : sur la page Résumé, un `MarkmapViewer` est monté hors-écran (position absolute, -9999px) avec des dimensions réelles (1200×800px) quand l'onglet actif n'est pas la carte — permet l'export SVG depuis n'importe quel onglet
-- **MindmapSidebar** (`components/mindmap/MindmapSidebar.tsx`) : sidebar droite avec header, badge compteurs, légende, collapse
+  - **Off-screen rendering** : sur les pages Résumé et Historique, deux `MarkmapViewer` sont montés hors-écran (position absolute, -9999px) avec des dimensions réelles (1200×800px) quand les onglets carte ne sont pas actifs — permet l'export SVG des deux vues depuis n'importe quel onglet
+- **MindmapSidebar** (`components/mindmap/MindmapSidebar.tsx`) : sidebar droite avec header, badge compteurs, légende, toggle thesis/speaker view, collapse
 
 #### Configuration (constants.rs)
 
@@ -850,6 +857,9 @@ pub struct ArgumentMap {
 | `ARGMAP_MAX_ARGUMENT_LABEL` | 400 | Caractères max pour un label d'argument |
 | `ARGMAP_MAX_THESES` | 20 | Nombre max de thèses |
 | `ARGMAP_MAX_ARGUMENTS` | 100 | Nombre total max d'arguments |
+| `ARGMAP_MAX_ARGUMENT_DEPTH` | 4 | Profondeur max de sous-arguments sous une thèse |
+| `ARGMAP_PROMPT_MAX_EXISTING_ARGUMENTS` | 60 | Cap d'arguments existants dans le prompt d'extraction |
+| `ARGMAP_PROMPT_LABEL_CHARS` | 100 | Troncature des labels d'arguments dans le contexte prompt |
 | `ARGMAP_NUM_PREDICT` | 4096 | num_predict pour l'extraction |
 | `ARGMAP_NUM_CTX` | 16384 | Taille du contexte pour l'extraction |
 | `ARGMAP_TEMPERATURE` | 0.3 | Température basse pour un JSON structuré |
@@ -908,9 +918,9 @@ pub enum CommandError {
 | **HomePage** | Point d'entrée ; actions « Nouvelle discussion » et « Historique » |
 | **SetupPage** | 4 étapes : sujet → IArbitre → GladIAteurs → modes/options → lancement |
 | **ArenaPage** | Feed temps réel + sidebar émotions + sidebar document + sidebar mindmap + contrôles + indicateur d'activité |
-| **SummaryPage** | Onglets synthèse/discussion/carte des arguments, stats, téléchargement (texte, MD, SVG) |
+| **SummaryPage** | Onglets synthèse/discussion/carte par thèse/carte par GladIAteur, stats (StatCard partagé), exports multi-fichier (MD, SVG) |
 | **HistoryPage** | Liste avec emojis participants, timestamps, suppression |
-| **HistoryDetailPage** | Détail complet avec onglets (synthèse/discussion/carte) et téléchargement |
+| **HistoryDetailPage** | Détail complet avec onglets (synthèse/discussion/carte par thèse/carte par GladIAteur), stats (StatCard partagé), exports multi-fichier |
 | **SettingsPage** | Username, langue, thème, URL Ollama, modèle, Tavily API |
 
 ### 7.3 Stores Zustand
@@ -926,7 +936,8 @@ pub enum CommandError {
 | `emotions` | `Map<id, EmotionalProfile>` | Profils émotionnels courants |
 | `synthesis` | `string` | Texte de synthèse complété |
 | `documentContent` | `string` | Document collaboratif (co-construction) |
-| `argumentMapMarkdown` | `string` | Carte des arguments en markdown (pour markmap) |
+| `argumentMapMarkdown` | `string` | Carte des arguments en markdown — vue thesis-centric (pour markmap) |
+| `argumentMapMarkdownBySpeaker` | `string` | Carte des arguments en markdown — vue speaker-centric (pour markmap) |
 | `activityStatus` | `ActivityStatus \| null` | Activité en cours du moteur (type + speakerName) |
 
 **Méthode critique** : `handleEvent(event: ArenaEvent)` — dispatch des 30+ types d'événements.
@@ -1010,6 +1021,7 @@ Paramètres globaux de l'application + profils + modèles Ollama.
 |---|---|
 | SimpleMd | Rendu markdown riche (~250 lignes) : titres (h1-h3), **gras**, *italique*, `code inline`, blocs de code avec coloration, listes (bullet + numbered), tableaux pipe-delimited, règles horizontales, intégration MathText pour LaTeX |
 | MathText | Rendu LaTeX via KaTeX |
+| StatCard | Carte de statistique réutilisable (label, valeur, icône, troncature optionnelle) — partagé entre SummaryPage et HistoryDetailPage |
 | ErrorBoundary | Attrape les erreurs React ; UI de fallback |
 
 ### 7.5 Hooks
@@ -1029,7 +1041,7 @@ const { flushed, pushToken, clearSpeaker, clearAll } = useTokenBuffer(60);
 | Fichier | Exports principaux |
 |---|---|
 | `lib/types.ts` | Toutes les interfaces TypeScript (+ types RAG) |
-| `lib/tauri-api.ts` | Wrappers IPC Tauri (28 commandes + `downloadTextFile()` via plugin dialog/fs) |
+| `lib/tauri-api.ts` | Wrappers IPC Tauri (28 commandes + `downloadTextFile()` + `downloadMultipleTextFiles()` via plugin dialog/fs/path) |
 | `lib/utils.ts` | `cn()` — clsx + tailwind-merge |
 | `lib/logger.ts` | Logger singleton (buffer circulaire 500 entrées) |
 | `lib/profile-emoji.ts` | `getProfileEmoji(name, prompt)` — matching 3 niveaux (exact → regex → hash) |
@@ -1252,7 +1264,7 @@ AIrena/
 │   │   ├── mindmap/           # MarkmapViewer, MindmapSidebar
 │   │   ├── layout/            # AppShell, Sidebar, TopBar, ResizeDivider
 │   │   ├── setup/             # LlmParamsForm, PersonaEditor, EmojiPicker
-│   │   ├── shared/            # SimpleMd, MathText
+│   │   ├── shared/            # SimpleMd, MathText, StatCard
 │   │   └── common/            # ErrorBoundary
 │   ├── hooks/                 # useTokenBuffer
 │   ├── lib/                   # types, tauri-api, utils, logger, profile-emoji, document-diff
@@ -1291,6 +1303,34 @@ AIrena/
 ---
 
 ## 15. Changelog
+
+### v1.13 (2026-02-27) — Arguments récursifs & Double vue carte
+
+**Nouveaux fichiers** :
+- `components/shared/StatCard.tsx` — Composant de carte statistique partagé (DRY entre SummaryPage et HistoryDetailPage)
+
+**Backend** :
+- `ArgumentNode.children: Vec<ArgumentNode>` — sous-arguments récursifs avec `#[serde(default)]` (backward compatible)
+- `ArgumentNode::count_all()`, `find_depth_by_label()`, `find_by_label_mut()` — méthodes récursives pour la navigation dans l'arbre
+- `ArgumentMap::to_markdown_by_speaker()` — nouvelle vue speaker-centric du markdown
+- `ParsedArgument.targets_argument: Option<String>` — ciblage d'argument existant pour créer des sous-arguments
+- `build_existing_arguments_context()` dans orchestrator — contexte récursif tronqué pour le prompt d'extraction
+- Insertion arborescente dans `merge_extractions()` — 2-pass borrow checker pattern (immutable depth check → mutable insertion)
+- Ellipsis stripping dans le fuzzy matching — `trim_end_matches('…')` avant comparaison
+- 3 nouvelles constantes : `ARGMAP_MAX_ARGUMENT_DEPTH`, `ARGMAP_PROMPT_MAX_EXISTING_ARGUMENTS`, `ARGMAP_PROMPT_LABEL_CHARS`
+- Migration DB : colonne `argument_map_md_by_speaker` sur la table `discussions`
+- `SaveDiscussionRequest` + `DiscussionDetail` : nouveau champ `argument_map_md_by_speaker`
+- 2 nouveaux tests unitaires : `test_to_markdown_recursive`, `test_arguments_count_recursive`
+
+**Frontend** :
+- `downloadMultipleTextFiles()` dans `tauri-api.ts` — export multi-fichier via sélection de dossier (plugin dialog + fs + path)
+- `argumentMapMarkdownBySpeaker` dans useArenaStore — nouveau champ pour la vue speaker-centric
+- SummaryPage : 4 onglets (synthèse, discussion, carte par thèse, carte par GladIAteur), 2 refs MarkmapViewer, exports multi-fichier
+- HistoryDetailPage : aligné avec SummaryPage (4 onglets, 2 refs MarkmapViewer, exports multi-fichier)
+- `StatCard` extrait en composant partagé (`components/shared/StatCard.tsx`)
+- MindmapSidebar : toggle thesis/speaker view
+- i18n : nouvelles clés `tabArgumentMapBySpeaker`, `downloadArgumentMap`, `downloadArgumentMapSvg` (FR/EN/ZH)
+- Off-screen MarkmapViewers sur SummaryPage et HistoryDetailPage pour export SVG des deux vues depuis tout onglet
 
 ### v1.12.1 (2026-02-24) — Synthèse élargie, Validation labels, Export SVG complet
 

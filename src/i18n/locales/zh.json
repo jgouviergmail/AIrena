@@ -391,7 +391,7 @@
     "newDiscussion": "新讨论",
     "noSynthesis": "（暂无总结）",
     "tabSynthesis": "总结",
-    "tabDiscussion": "完整讨论",
+    "tabDiscussion": "讨论",
     "viewHistory": "历史记录",
     "model": "模型",
     "participantsList": "参与者",
@@ -399,8 +399,9 @@
     "downloadDocument": "下载文档",
     "discussionMode": "讨论类型",
     "tabArgumentMap": "论证图谱",
-    "downloadArgumentMap": "导出论证图谱",
-    "downloadArgumentMapSvg": "导出图谱为SVG"
+    "tabArgumentMapBySpeaker": "按辩手图谱",
+    "downloadArgumentMap": "导出图谱为文本",
+    "downloadArgumentMapSvg": "导出图谱为图片"
   },
   "mindmap": {
     "title": "论证图谱",
@@ -409,7 +410,9 @@
     "legendSupport": "支持",
     "legendCounter": "反对",
     "legendEvidence": "证据",
-    "collapse": "折叠图谱"
+    "collapse": "折叠图谱",
+    "viewByThesis": "按论点",
+    "viewBySpeaker": "按发言人"
   },
   "document": {
     "title": "共享文档",

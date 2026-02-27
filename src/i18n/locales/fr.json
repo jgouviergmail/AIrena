@@ -391,7 +391,7 @@
     "newDiscussion": "Nouvelle discussion",
     "noSynthesis": "(Aucune synthèse disponible)",
     "tabSynthesis": "Synthèse",
-    "tabDiscussion": "Discussion complète",
+    "tabDiscussion": "Discussion",
     "viewHistory": "Historique",
     "model": "Modèle",
     "participantsList": "Participants",
@@ -399,8 +399,9 @@
     "downloadDocument": "Télécharger le document",
     "discussionMode": "Type d'échange",
     "tabArgumentMap": "Carte des arguments",
-    "downloadArgumentMap": "Exporter la carte des arguments",
-    "downloadArgumentMapSvg": "Exporter la carte en SVG"
+    "tabArgumentMapBySpeaker": "Carte par GladIAteurs",
+    "downloadArgumentMap": "Exporter les cartes en texte",
+    "downloadArgumentMapSvg": "Exporter les cartes en image"
   },
   "mindmap": {
     "title": "Carte des arguments",
@@ -409,7 +410,9 @@
     "legendSupport": "Pour (soutien)",
     "legendCounter": "Contre (opposition)",
     "legendEvidence": "Preuves",
-    "collapse": "Réduire la carte"
+    "collapse": "Réduire la carte",
+    "viewByThesis": "Par thèse",
+    "viewBySpeaker": "Par intervenant"
   },
   "history": {
     "title": "Historique des discussions",

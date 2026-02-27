@@ -1,15 +1,24 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, Network } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { MarkmapViewer } from "@/components/mindmap/MarkmapViewer";
 import { useArenaStore } from "@/stores/useArenaStore";
+
+type ArgMapView = "thesis" | "speaker";
 
 export function MindmapSidebar({ width = 350 }: { width?: number }) {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [view, setView] = useState<ArgMapView>("thesis");
   const markdown = useArenaStore((s) => s.argumentMapMarkdown);
+  const markdownBySpeaker = useArenaStore(
+    (s) => s.argumentMapMarkdownBySpeaker,
+  );
   const thesesCount = useArenaStore((s) => s.argumentMapThesesCount);
   const argumentsCount = useArenaStore((s) => s.argumentMapArgumentsCount);
+
+  const activeMarkdown = view === "thesis" ? markdown : markdownBySpeaker;
 
   if (isCollapsed) {
     return (
@@ -55,10 +64,38 @@ export function MindmapSidebar({ width = 350 }: { width?: number }) {
         </button>
       </div>
 
+      {/* View toggle */}
+      {markdown && (
+        <div className="flex shrink-0 gap-1 border-b border-border px-3 py-1.5">
+          <button
+            onClick={() => setView("thesis")}
+            className={cn(
+              "flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+              view === "thesis"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t("mindmap.viewByThesis")}
+          </button>
+          <button
+            onClick={() => setView("speaker")}
+            className={cn(
+              "flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+              view === "speaker"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t("mindmap.viewBySpeaker")}
+          </button>
+        </div>
+      )}
+
       {/* Mind map content */}
       <div className="flex-1 overflow-hidden">
-        {markdown ? (
-          <MarkmapViewer markdown={markdown} />
+        {activeMarkdown ? (
+          <MarkmapViewer markdown={activeMarkdown} />
         ) : (
           <div className="flex h-full items-center justify-center px-4">
             <p className="text-center text-sm text-muted-foreground italic">

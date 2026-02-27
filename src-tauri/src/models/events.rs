@@ -140,6 +140,7 @@ pub enum ArenaEvent {
     #[serde(rename_all = "camelCase")]
     ArgumentMapUpdated {
         markdown: String,
+        markdown_by_speaker: String,
         theses_count: u32,
         arguments_count: u32,
     },
