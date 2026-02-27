@@ -373,6 +373,7 @@
       "webSearch": "{{name}} recherche sur le web...",
       "wikiSearch": "{{name}} consulte Wikipédia...",
       "ragInjection": "Injection de connaissances RAG...",
+      "ragCacheHit": "RAG (cache) pour {{name}}...",
       "emotions": "Mise à jour des émotions...",
       "argumentMap": "Mise à jour de la carte des arguments...",
       "synthesis": "Rédaction de la synthèse...",

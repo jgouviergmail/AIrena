@@ -373,6 +373,7 @@
       "webSearch": "{{name}} is searching the web...",
       "wikiSearch": "{{name}} is consulting Wikipedia...",
       "ragInjection": "Injecting RAG knowledge...",
+      "ragCacheHit": "RAG (cached) for {{name}}...",
       "emotions": "Updating emotional states...",
       "argumentMap": "Updating argument map...",
       "synthesis": "Writing synthesis...",

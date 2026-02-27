@@ -12,16 +12,19 @@ use crate::state::AppState;
 #[tauri::command]
 pub async fn import_rag_document(
     file_path: String,
+    skip_embeddings: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<RagDocumentInfo, CommandError> {
-    // 1. Determine effective embedding model
+    let skip_emb = skip_embeddings.unwrap_or(false);
+
+    // 1. Determine effective embedding model (only required when computing embeddings)
     let settings = state.get_settings().await?;
     let effective_model = if settings.embedding_model.is_empty() {
         settings.ollama_model.clone()
     } else {
         settings.embedding_model.clone()
     };
-    if effective_model.is_empty() {
+    if !skip_emb && effective_model.is_empty() {
         return Err(CommandError::Rag(
             "No Ollama model configured. Please configure a model in Settings.".to_string(),
         ));
@@ -48,12 +51,13 @@ pub async fn import_rag_document(
         guard.as_ref().unwrap().embedding_client().clone()
     };
 
-    // 4. Validate embedding model exists (first import only — subsequent imports reuse store)
-    // This is a lightweight check; actual embedding will validate further
-    emb_client
-        .validate_model()
-        .await
-        .map_err(|e| CommandError::Rag(format!("Embedding model error: {e}")))?;
+    // 4. Validate embedding model exists (skip when deferring embeddings)
+    if !skip_emb {
+        emb_client
+            .validate_model()
+            .await
+            .map_err(|e| CommandError::Rag(format!("Embedding model error: {e}")))?;
+    }
 
     // 5. Get existing embedding dimension for consistency check
     let existing_dim = {
@@ -93,8 +97,30 @@ pub async fn import_rag_document(
     tracing::info!(
         file = %parsed.file_name,
         chunk_count = chunks.len(),
+        skip_embeddings = skip_emb,
         "RAG document chunked"
     );
+
+    if skip_emb {
+        // Full injection mode: store text + BM25 only, defer embeddings
+        let info = {
+            let mut guard = AppState::lock_or_recover(&state.rag_store);
+            let store = guard.as_mut().ok_or_else(|| {
+                CommandError::Rag("RAG store disappeared unexpectedly".to_string())
+            })?;
+            store.add_document_text_only(&parsed, &doc_id, chunks)
+        };
+
+        tracing::info!(
+            doc_id = %info.doc_id,
+            file = %info.file_name,
+            chunks = info.chunk_count,
+            chars = info.char_count,
+            "RAG document imported (text-only, embeddings deferred)"
+        );
+
+        return Ok(info);
+    }
 
     // 8. Embed all chunks (async, may take time for first call loading the model)
     let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();

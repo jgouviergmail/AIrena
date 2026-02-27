@@ -58,6 +58,9 @@ pub struct RagStore {
     full_texts: HashMap<String, String>,
     /// Global chunk counter (used as BM25 doc_id, monotonically increasing)
     next_chunk_id: usize,
+    /// Whether chunk embeddings have been computed. False when documents were
+    /// imported with `add_document_text_only()` (lazy embedding for full injection).
+    embeddings_ready: bool,
 }
 
 impl RagStore {
@@ -69,6 +72,7 @@ impl RagStore {
             documents: HashMap::new(),
             full_texts: HashMap::new(),
             next_chunk_id: 0,
+            embeddings_ready: true, // empty store has nothing to compute
         }
     }
 
@@ -77,19 +81,25 @@ impl RagStore {
         &self.embedding_client
     }
 
-    /// Add a document with pre-computed embeddings.
-    /// Parsing, chunking, and embedding are done OUTSIDE the Mutex lock.
-    pub fn add_document_with_embeddings(
+    /// Internal: insert chunks into the store. Embeddings are either pre-computed
+    /// (`Some`) or deferred (`None` → `Vec::new()`, sets `embeddings_ready = false`).
+    fn add_document_inner(
         &mut self,
         doc: &ParsedDocument,
         doc_id: &str,
         chunks: Vec<TextChunk>,
-        embeddings: Vec<Vec<f32>>,
+        embeddings: Option<Vec<Vec<f32>>>,
     ) -> RagDocumentInfo {
         let char_count = doc.text.len();
         let chunk_count = chunks.len();
 
-        for (chunk, embedding) in chunks.into_iter().zip(embeddings.into_iter()) {
+        if embeddings.is_none() {
+            self.embeddings_ready = false;
+        }
+        let mut emb_iter = embeddings.into_iter().flatten();
+
+        for chunk in chunks {
+            let embedding = emb_iter.next().unwrap_or_default();
             let tokens = bm25::tokenize(&chunk.text);
             let global_id = self.next_chunk_id;
             self.next_chunk_id += 1;
@@ -116,6 +126,29 @@ impl RagStore {
         self.documents.insert(doc_id.to_string(), info.clone());
         self.full_texts.insert(doc_id.to_string(), doc.text.clone());
         info
+    }
+
+    /// Add a document with pre-computed embeddings.
+    /// Parsing, chunking, and embedding are done OUTSIDE the Mutex lock.
+    pub fn add_document_with_embeddings(
+        &mut self,
+        doc: &ParsedDocument,
+        doc_id: &str,
+        chunks: Vec<TextChunk>,
+        embeddings: Vec<Vec<f32>>,
+    ) -> RagDocumentInfo {
+        self.add_document_inner(doc, doc_id, chunks, Some(embeddings))
+    }
+
+    /// Add a document without embeddings (text + BM25 only).
+    /// Embeddings will be computed lazily via `ensure_embeddings()` if needed.
+    pub fn add_document_text_only(
+        &mut self,
+        doc: &ParsedDocument,
+        doc_id: &str,
+        chunks: Vec<TextChunk>,
+    ) -> RagDocumentInfo {
+        self.add_document_inner(doc, doc_id, chunks, None)
     }
 
     /// Remove a document and rebuild the BM25 index.
@@ -173,9 +206,39 @@ impl RagStore {
         Some(result)
     }
 
-    /// Dimension of the stored embeddings (None if no chunks).
+    /// Dimension of the stored embeddings (None if no chunks with embeddings).
+    /// Filters out text-only chunks (empty embedding) to avoid false `Some(0)`.
     pub fn embedding_dim(&self) -> Option<usize> {
-        self.chunks.first().map(|c| c.embedding.len())
+        self.chunks
+            .iter()
+            .find(|c| !c.embedding.is_empty())
+            .map(|c| c.embedding.len())
+    }
+
+    /// Compute embeddings for all chunks if not already done. No-op if ready.
+    /// Called lazily before the first RAG query when documents were imported text-only.
+    pub async fn ensure_embeddings(&mut self) -> Result<(), OllamaError> {
+        if self.embeddings_ready {
+            return Ok(());
+        }
+
+        let texts: Vec<String> = self.chunks.iter().map(|c| c.text.clone()).collect();
+        if texts.is_empty() {
+            self.embeddings_ready = true;
+            return Ok(());
+        }
+
+        tracing::info!(
+            chunk_count = texts.len(),
+            "Computing deferred embeddings for RAG fallback"
+        );
+        let embeddings = self.embedding_client.embed_batch(&texts).await?;
+
+        for (chunk, embedding) in self.chunks.iter_mut().zip(embeddings) {
+            chunk.embedding = embedding;
+        }
+        self.embeddings_ready = true;
+        Ok(())
     }
 
     /// Full hybrid retrieval pipeline:
@@ -608,6 +671,7 @@ mod tests {
             documents: HashMap::new(),
             full_texts: HashMap::new(),
             next_chunk_id: 1,
+            embeddings_ready: true,
         };
 
         let selected = vec![(0, 0.95)];
@@ -633,6 +697,7 @@ mod tests {
             documents: HashMap::new(),
             full_texts: HashMap::new(),
             next_chunk_id: 1,
+            embeddings_ready: true,
         };
 
         let selected = vec![(0, 0.95)];
@@ -656,6 +721,7 @@ mod tests {
             documents: HashMap::new(),
             full_texts: HashMap::new(),
             next_chunk_id: 1,
+            embeddings_ready: true,
         };
 
         let selected = vec![(0, 0.95)];
@@ -684,6 +750,7 @@ mod tests {
             documents: HashMap::new(),
             full_texts: HashMap::new(),
             next_chunk_id: 0,
+            embeddings_ready: true,
         };
         assert_eq!(store.total_char_count(), 0);
     }
@@ -712,6 +779,7 @@ mod tests {
             documents: docs,
             full_texts: HashMap::new(),
             next_chunk_id: 0,
+            embeddings_ready: true,
         };
         assert_eq!(store.total_char_count(), 350);
     }
@@ -725,6 +793,7 @@ mod tests {
             documents: HashMap::new(),
             full_texts: HashMap::new(),
             next_chunk_id: 0,
+            embeddings_ready: true,
         };
         assert!(store.get_full_text().is_none());
     }
@@ -748,6 +817,7 @@ mod tests {
             documents: docs,
             full_texts,
             next_chunk_id: 0,
+            embeddings_ready: true,
         };
         let text = store.get_full_text().unwrap();
         assert!(text.contains("[notes.md]"));
@@ -782,6 +852,7 @@ mod tests {
             documents: docs,
             full_texts,
             next_chunk_id: 0,
+            embeddings_ready: true,
         };
         let text = store.get_full_text().unwrap();
         let first_pos = text.find("[first.txt]").unwrap();

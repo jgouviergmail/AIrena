@@ -373,6 +373,7 @@
       "webSearch": "{{name}} 正在搜索网络...",
       "wikiSearch": "{{name}} 正在查阅维基百科...",
       "ragInjection": "注入RAG知识...",
+      "ragCacheHit": "RAG（缓存）{{name}}...",
       "emotions": "更新情绪状态...",
       "argumentMap": "更新论证图谱...",
       "synthesis": "撰写综合总结...",

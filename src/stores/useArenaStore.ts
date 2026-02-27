@@ -26,7 +26,7 @@ interface StreamBufferCallbacks {
 
 /** Real-time engine activity for the status bar */
 interface ActivityStatus {
-  type: "thinking" | "writing" | "reacting" | "webSearch" | "wikiSearch" | "ragInjection" | "emotions" | "argumentMap" | "synthesis" | "determining";
+  type: "thinking" | "writing" | "reacting" | "webSearch" | "wikiSearch" | "ragInjection" | "ragCacheHit" | "emotions" | "argumentMap" | "synthesis" | "determining";
   speakerName?: string;
 }
 
@@ -339,7 +339,10 @@ export const useArenaStore = create<ArenaState>((set) => ({
           ragChunkCount: s.ragChunkCount + event.data.chunks.length,
           _pendingRagCount: s._pendingRagCount + event.data.chunks.length,
           _pendingRagChunks: [...s._pendingRagChunks, ...event.data.chunks],
-          activityStatus: { type: "ragInjection" as const, speakerName: event.data.speakerName },
+          activityStatus: {
+            type: event.data.cached ? "ragCacheHit" as const : "ragInjection" as const,
+            speakerName: event.data.speakerName,
+          },
         }));
         break;
 

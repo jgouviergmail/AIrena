@@ -172,8 +172,12 @@ export async function deleteAllDiscussionHistory(): Promise<void> {
 
 export async function importRagDocument(
   filePath: string,
+  skipEmbeddings?: boolean,
 ): Promise<RagDocumentInfo> {
-  return await invoke<RagDocumentInfo>("import_rag_document", { filePath });
+  return await invoke<RagDocumentInfo>("import_rag_document", {
+    filePath,
+    skipEmbeddings: skipEmbeddings ?? false,
+  });
 }
 
 export async function removeRagDocument(docId: string): Promise<boolean> {

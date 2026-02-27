@@ -302,6 +302,7 @@ export type ArenaEvent =
         speakerId: string;
         speakerName: string;
         chunks: RagChunkInfo[];
+        cached?: boolean;
       };
     }
   | {

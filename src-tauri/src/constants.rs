@@ -352,6 +352,10 @@ pub const RAG_EMBED_TIMEOUT_SECS: u64 = 60;
 /// Maximum characters for RAG context injected into prompts.
 pub const RAG_MAX_CONTEXT_LEN: usize = 5000;
 
+/// Number of speaker turns a per-speaker RAG cache entry remains valid.
+/// After this many turns for the same speaker, the next RAG query runs the full pipeline.
+pub const RAG_CACHE_TTL_TURNS: u32 = 3;
+
 // ── Token Budget ──────────────────────────────────────────────────────
 
 /// Conservative chars-per-token ratio for Latin languages (FR, EN, etc.).

@@ -1831,15 +1831,34 @@ fn build_full_document_block(full_document: Option<&str>, max_chars: usize, lang
     let (header, instruction) = match lang {
         "en" => (
             "[REFERENCE DOCUMENT — Imported Knowledge Base]",
-            "Use this document as your primary knowledge source. Cite specific facts, data, or passages naturally in your reasoning.",
+            "CRITICAL INSTRUCTION: Read and memorize the entire content of this document carefully. \
+             This document has been provided to you specifically so that you can draw on its content \
+             during the discussion. Internalize the information, concepts, data, and details it contains. \
+             Then, throughout the conversation, spontaneously and naturally leverage this knowledge \
+             whenever it is relevant to the topic being discussed — whether to support an argument, \
+             enrich your reasoning, correct an inaccuracy, or bring a concrete element into the exchange. \
+             Never ignore this document: it is your primary knowledge base for this discussion.",
         ),
         "zh" => (
             "[参考文档 — 导入的知识库]",
-            "将此文档作为你的主要知识来源。在推理中自然地引用具体事实、数据或段落。",
+            "关键指令：请仔细阅读并记忆本文档的全部内容。\
+             本文档专门提供给你，以便你在讨论中利用其内容。\
+             请内化其中的信息、概念、数据和细节。\
+             然后在整个对话过程中，每当与讨论主题相关时，\
+             自发而自然地运用这些知识——无论是支持论点、丰富推理、\
+             纠正不准确之处，还是为交流带来具体的元素。\
+             切勿忽视本文档：它是你在本次讨论中的主要知识库。",
         ),
         _ => (
             "[DOCUMENT DE RÉFÉRENCE — Base de connaissances importée]",
-            "Utilise ce document comme source principale de connaissances. Cite naturellement des faits, données ou passages précis dans ton raisonnement.",
+            "INSTRUCTION CRITIQUE : Lis et mémorise attentivement l'intégralité du contenu de ce document. \
+             Ce document t'a été fourni spécifiquement pour que tu puisses t'appuyer sur son contenu \
+             au cours de la discussion. Intériorise les informations, concepts, données et détails qu'il contient. \
+             Puis, tout au long de la conversation, exploite spontanément et naturellement ces connaissances \
+             chaque fois qu'elles sont pertinentes par rapport au sujet discuté — que ce soit pour étayer \
+             un argument, enrichir ton raisonnement, corriger une inexactitude, ou apporter un élément \
+             concret à l'échange. N'ignore jamais ce document : c'est ta base de connaissances principale \
+             pour cette discussion.",
         ),
     };
     format!("\n\n{}\n{}\n\n--- DOCUMENT ---\n{}\n--- FIN ---", header, instruction, truncated)
@@ -2784,7 +2803,7 @@ mod tests {
         let result = build_full_document_block(Some(&long_doc), 100, "en");
         // The document text should be truncated to ~100 chars
         assert!(result.contains("REFERENCE DOCUMENT"));
-        // The result should NOT contain all 10K chars
-        assert!(result.len() < 500, "Block should be truncated, got {} chars", result.len());
+        // The result should NOT contain all 10K chars (instruction + header + delimiters ≈ 700 chars)
+        assert!(result.len() < 1000, "Block should be truncated, got {} chars", result.len());
     }
 }

@@ -1107,7 +1107,7 @@ function StepKnowledge() {
     try {
       for (const filePath of paths) {
         try {
-          const doc = await api.importRagDocument(filePath);
+          const doc = await api.importRagDocument(filePath, documentInjectionMode === "fullInjection");
           addRagDocument(doc);
         } catch (e: unknown) {
           const detail = extractErrorMessage(e);

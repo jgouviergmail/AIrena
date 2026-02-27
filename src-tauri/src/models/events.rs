@@ -135,6 +135,9 @@ pub enum ArenaEvent {
         speaker_id: String,
         speaker_name: String,
         chunks: Vec<crate::rag::RagChunkInfo>,
+        /// Whether this result was served from the per-speaker cache.
+        #[serde(default)]
+        cached: bool,
     },
     /// Argument map updated after turn analysis
     #[serde(rename_all = "camelCase")]

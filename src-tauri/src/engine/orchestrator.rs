@@ -87,6 +87,13 @@ struct MemoryUpdateResponse {
     positions: HashMap<String, String>,
 }
 
+/// Cached RAG query result for a single speaker.
+struct RagCacheEntry {
+    cached_at_turn: u32,
+    context_text: String,
+    chunks: Vec<crate::rag::RagChunkInfo>,
+}
+
 pub struct DiscussionEngine {
     discussion_id: String,
     config: DiscussionConfig,
@@ -132,6 +139,8 @@ pub struct DiscussionEngine {
     document_content: String,
     /// In-memory RAG store (taken from AppState, dropped with engine)
     rag_store: Option<RagStore>,
+    /// Per-speaker RAG query cache: speaker_id → cached result.
+    rag_cache: HashMap<String, RagCacheEntry>,
     /// Whether to extract and track argument map
     argument_map_enabled: bool,
     /// Accumulated argument map across all turns
@@ -310,6 +319,7 @@ impl DiscussionEngine {
             forced_wiki_done: HashSet::new(),
             document_content: String::new(),
             rag_store,
+            rag_cache: HashMap::new(),
             argument_map_enabled: false,
             argument_map: ArgumentMap::default(),
             budgets,
@@ -601,37 +611,54 @@ impl DiscussionEngine {
         // Skip RAG search when full document injection is active — the full text
         // is injected directly by the prompt builder.
         if !self.budget_for(&self.arbitre.config.id).full_document_mode {
-            if let Some(ref rag_store) = self.rag_store {
-                if !rag_store.is_empty() {
-                    let lang = &self.config.discussion_language;
-                    match rag_store
-                        .query(
-                            &self.config.topic,
-                            lang,
-                            &self.ollama_client,
-                            &self.arbitre.config.llm_params,
-                            self.cancel_token.clone(),
-                        )
-                        .await
-                    {
-                        Ok((ctx_text, chunks)) if !chunks.is_empty() => {
-                            tracing::info!(
-                                chunk_count = chunks.len(),
-                                "RAG context injected for introduction"
-                            );
-                            let _ = channel.send(ArenaEvent::RagContextInjected {
-                                speaker_id: self.arbitre.config.id.clone(),
-                                speaker_name: self.arbitre.config.name.clone(),
-                                chunks,
-                            });
-                            intro_search_context = Some(match intro_search_context {
-                                Some(existing) => format!("{existing}\n\n{ctx_text}"),
-                                None => ctx_text,
-                            });
-                        }
-                        Ok(_) => {} // Empty results
-                        Err(e) => {
-                            tracing::warn!(error = %e, "RAG query failed for introduction — continuing");
+            // Ensure embeddings are computed (no-op if already done).
+            // Skip query entirely on failure — embed_one() inside query() would also fail.
+            let embeddings_ok = if let Some(ref mut store) = self.rag_store {
+                match store.ensure_embeddings().await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to compute deferred embeddings for introduction");
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+
+            if embeddings_ok {
+                if let Some(ref rag_store) = self.rag_store {
+                    if !rag_store.is_empty() {
+                        let lang = &self.config.discussion_language;
+                        match rag_store
+                            .query(
+                                &self.config.topic,
+                                lang,
+                                &self.ollama_client,
+                                &self.arbitre.config.llm_params,
+                                self.cancel_token.clone(),
+                            )
+                            .await
+                        {
+                            Ok((ctx_text, chunks)) if !chunks.is_empty() => {
+                                tracing::info!(
+                                    chunk_count = chunks.len(),
+                                    "RAG context injected for introduction"
+                                );
+                                let _ = channel.send(ArenaEvent::RagContextInjected {
+                                    speaker_id: self.arbitre.config.id.clone(),
+                                    speaker_name: self.arbitre.config.name.clone(),
+                                    chunks,
+                                    cached: false,
+                                });
+                                intro_search_context = Some(match intro_search_context {
+                                    Some(existing) => format!("{existing}\n\n{ctx_text}"),
+                                    None => ctx_text,
+                                });
+                            }
+                            Ok(_) => {} // Empty results
+                            Err(e) => {
+                                tracing::warn!(error = %e, "RAG query failed for introduction — continuing");
+                            }
                         }
                     }
                 }
@@ -2747,35 +2774,68 @@ impl DiscussionEngine {
 
     /// Query the RAG store for relevant chunks and emit event.
     /// Returns formatted context string for prompt injection, or None.
+    /// Uses per-speaker cache with TTL to avoid redundant queries.
     async fn process_rag_query(
-        &self,
+        &mut self,
         speaker_id: &str,
         speaker_name: &str,
         glad_idx: usize,
         channel: &Channel<ArenaEvent>,
     ) -> Option<String> {
-        let rag_store = self.rag_store.as_ref()?;
-        if rag_store.is_empty() {
+        if self.rag_store.as_ref().is_none_or(|s| s.is_empty()) {
             return None;
         }
 
-        // Build query context: topic + recent exchanges (reuse existing helpers)
+        // 1. Cache hit check
+        if let Some(entry) = self.rag_cache.get(speaker_id) {
+            if self.current_turn.saturating_sub(entry.cached_at_turn) < constants::RAG_CACHE_TTL_TURNS {
+                tracing::info!(
+                    speaker = %speaker_name,
+                    turn = self.current_turn,
+                    cached_at = entry.cached_at_turn,
+                    "RAG cache hit"
+                );
+                let _ = channel.send(ArenaEvent::RagContextInjected {
+                    speaker_id: speaker_id.to_string(),
+                    speaker_name: speaker_name.to_string(),
+                    chunks: entry.chunks.clone(),
+                    cached: true,
+                });
+                return Some(entry.context_text.clone());
+            }
+        }
+
+        // 2. Ensure embeddings are computed (no-op if already done)
+        if let Some(ref mut store) = self.rag_store {
+            if let Err(e) = store.ensure_embeddings().await {
+                tracing::warn!(error = %e, "Failed to compute deferred embeddings");
+                return None;
+            }
+        }
+
+        // 3. Build query context
         let topic = truncate_str(&self.config.topic, constants::ORCH_TOPIC_FOR_SEARCH);
         let recent_raw = self.build_recent_exchanges(glad_idx);
         let recent = truncate_str(&recent_raw, constants::ORCH_RECENT_FOR_SEARCH);
         let context = format!("{topic}\n\n{recent}");
-        let lang = &self.config.discussion_language;
 
-        match rag_store
-            .query(
-                &context,
-                lang,
-                &self.ollama_client,
-                &self.gladiateurs[glad_idx].config.llm_params,
-                self.cancel_token.clone(),
-            )
-            .await
-        {
+        // 4. Query RAG store — bind result to release borrow before cache insert
+        let result = {
+            let rag_store = self.rag_store.as_ref()?;
+            let lang = &self.config.discussion_language;
+            rag_store
+                .query(
+                    &context,
+                    lang,
+                    &self.ollama_client,
+                    &self.gladiateurs[glad_idx].config.llm_params,
+                    self.cancel_token.clone(),
+                )
+                .await
+        };
+
+        // 5. Process result + cache insert
+        match result {
             Ok((ctx_text, chunks)) if !chunks.is_empty() => {
                 tracing::info!(
                     speaker = %speaker_name,
@@ -2787,11 +2847,17 @@ impl DiscussionEngine {
                 let _ = channel.send(ArenaEvent::RagContextInjected {
                     speaker_id: speaker_id.to_string(),
                     speaker_name: speaker_name.to_string(),
+                    chunks: chunks.clone(),
+                    cached: false,
+                });
+                self.rag_cache.insert(speaker_id.to_string(), RagCacheEntry {
+                    cached_at_turn: self.current_turn,
+                    context_text: ctx_text.clone(),
                     chunks,
                 });
                 Some(ctx_text)
             }
-            Ok(_) => None, // Empty results
+            Ok(_) => None, // Empty results — not cached, will retry next turn
             Err(crate::ollama::error::OllamaError::Cancelled) => None,
             Err(e) => {
                 tracing::warn!(
