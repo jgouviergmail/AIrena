@@ -1304,7 +1304,7 @@ AIrena/
 
 ## 15. Changelog
 
-### v1.13 (2026-02-27) — Arguments récursifs & Double vue carte
+### v1.14 (2026-02-27) — Arguments récursifs & Double vue carte
 
 **Nouveaux fichiers** :
 - `components/shared/StatCard.tsx` — Composant de carte statistique partagé (DRY entre SummaryPage et HistoryDetailPage)

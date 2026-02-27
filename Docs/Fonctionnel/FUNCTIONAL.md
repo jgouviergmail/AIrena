@@ -1048,14 +1048,7 @@ Le système vérifie la qualité des labels extraits par le LLM :
 
 ## 26. Changelog
 
-### v1.12.1 (2026-02-24) — Synthèse élargie & Optimisation contexte
-
-**Améliorations** :
-- **Synthèse élargie** : `SYNTHESIS_NUM_PREDICT = 4096` (2× le budget par défaut) pour des synthèses plus complètes ; retry automatique avec budget doublé en cas de troncature
-- **Optimisation du contexte** : système de waterfall adaptatif pour la gestion du budget de tokens dans les prompts
-- **Export SVG complet** : l'export de la carte des arguments capture l'intégralité du contenu (pas seulement la partie visible) via `getBBox()` sur l'élément SVG principal
-
-### v1.13 (2026-02-27) — Arguments récursifs & Double vue carte
+### v1.14 (2026-02-27) — Arguments récursifs & Double vue carte
 
 **Nouvelles fonctionnalités** :
 - **Arguments récursifs** : les arguments peuvent avoir des sous-arguments imbriqués (contre-arguments, réfutations, preuves) jusqu'à 4 niveaux de profondeur
@@ -1069,6 +1062,13 @@ Le système vérifie la qualité des labels extraits par le LLM :
 - Persistance des deux markdowns en base de données (nouvelle colonne `argument_map_md_by_speaker`)
 - Composant `StatCard` partagé entre SummaryPage et HistoryDetailPage (DRY)
 - Unicité des recherches + anti-répétition + détection du mode think
+
+### v1.13 (2026-02-24) — Synthèse élargie & Optimisation contexte
+
+**Améliorations** :
+- **Synthèse élargie** : `SYNTHESIS_NUM_PREDICT = 4096` (2× le budget par défaut) pour des synthèses plus complètes ; retry automatique avec budget doublé en cas de troncature
+- **Optimisation du contexte** : système de waterfall adaptatif pour la gestion du budget de tokens dans les prompts
+- **Export SVG complet** : l'export de la carte des arguments capture l'intégralité du contenu (pas seulement la partie visible) via `getBBox()` sur l'élément SVG principal
 
 ### v1.12 (2026-02-22) — Optimisation contexte & Waterfall
 
