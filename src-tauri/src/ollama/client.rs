@@ -273,19 +273,18 @@ impl OllamaClient {
         Ok(count)
     }
 
-    /// Preload a model into Ollama's memory by sending a minimal chat request.
-    /// This avoids cold-start delays when the discussion starts.
+    /// Preload a model into Ollama's memory without generating any tokens.
+    /// Uses POST `/api/generate` with no prompt — Ollama loads the model and
+    /// returns immediately with `done_reason: "load"`.
     ///
     /// # Arguments
     /// - `num_ctx` — Context size to allocate. **Critical**: without this, Ollama
     ///   uses the model's native context length (often 128K), which can consume
     ///   all available VRAM just for the KV cache.
     pub async fn preload_model(&self, num_ctx: Option<u32>) -> Result<(), OllamaError> {
-        let url = format!("{}/api/chat", self.base_url);
+        let url = format!("{}/api/generate", self.base_url);
         let mut body = serde_json::json!({
             "model": self.model,
-            "messages": [{"role": "user", "content": "hello"}],
-            "stream": false,
             "keep_alive": "5m"
         });
         if let Some(ctx) = num_ctx {
