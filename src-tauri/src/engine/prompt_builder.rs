@@ -7,6 +7,7 @@ use crate::models::message::{Message, SpeakerRole};
 use crate::tavily::TavilySearchResponse;
 use crate::wikipedia::WikiSearchResponse;
 
+use super::focus::Focus;
 use super::mode_prompts;
 use super::truncate_str as truncate;
 use super::truncate_tail;
@@ -323,6 +324,7 @@ pub fn build_intervention_prompt(
     mode: &DiscussionMode,
     full_document: Option<&str>,
     budget: &TokenBudget,
+    focus: Option<&Focus>,
 ) -> (String, String) {
     // Detect if the user has spoken in this turn
     let user_has_spoken = current_turn_messages
@@ -641,11 +643,11 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
                     _ => "Tour en cours",
                 };
                 user_msg.push_str(&format!("[{}]\n", label));
-                for msg in &other_msgs {
+                for (msg, chars) in order_current_turn_messages(&other_msgs, focus, budget.current_turn_msg_chars) {
                     user_msg.push_str(&format!(
                         "{}: {}\n",
                         msg.speaker_name,
-                        truncate(&msg.content, budget.current_turn_msg_chars)
+                        truncate(&msg.content, chars)
                     ));
                 }
                 user_msg.push('\n');
@@ -715,6 +717,8 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
         format!("{}{}", directive, &end_awareness)
     } else {
         // Unified mode-aware instructions via compositional templates (all 8 modes)
+        let story_started = memory.immediate.iter().any(|s| !s.messages.is_empty())
+            || current_turn_messages.iter().any(|m| m.role != SpeakerRole::Arbitre);
         build_mode_aware_instruction(
             mode,
             discussion_language,
@@ -724,11 +728,39 @@ INTERDIT : N'utilise AUCUN formatage markdown (pas de #, ##, **, *, -, listes nu
             current_turn,
             user_has_spoken,
             current_turn_messages.is_empty(),
+            story_started,
+            focus,
         )
     };
     user_msg.push_str(&instruction);
 
     (system, user_msg)
+}
+
+/// Order the current-turn messages by relevance for the speaker: the focus
+/// participant's messages go LAST (recency bias) with the full per-message
+/// budget; other participants are truncated harder so the first speaker of the
+/// turn no longer dominates every prompt. User messages keep the full budget.
+/// Without a speaker focus the chronological order and budgets are unchanged.
+fn order_current_turn_messages<'a>(
+    messages: &[&'a Message],
+    focus: Option<&Focus>,
+    full_chars: usize,
+) -> Vec<(&'a Message, usize)> {
+    let Some(focus_name) = focus.and_then(Focus::speaker_name) else {
+        return messages.iter().map(|m| (*m, full_chars)).collect();
+    };
+    if !messages.iter().any(|m| m.speaker_name == focus_name) {
+        return messages.iter().map(|m| (*m, full_chars)).collect();
+    }
+    let reduced = (full_chars / constants::FOCUS_OTHER_MESSAGE_DIVISOR).max(1);
+    let (focus_msgs, others): (Vec<&'a Message>, Vec<&'a Message>) =
+        messages.iter().partition(|m| m.speaker_name == focus_name);
+    others
+        .into_iter()
+        .map(|m| (m, if m.role == SpeakerRole::User { full_chars } else { reduced }))
+        .chain(focus_msgs.into_iter().map(|m| (m, full_chars)))
+        .collect()
 }
 
 /// Parse OCEAN personality values from a system prompt containing "O=X C=X E=X A=X N=X".
@@ -1237,41 +1269,45 @@ pub fn build_emotion_analysis_prompt(
     events_summary: &str,
     lang: &str,
 ) -> String {
+    let cap = constants::EMOTION_LLM_DELTA_CAP;
+    let key = constants::EMOTION_STAGNATION_JSON_KEY;
     match lang {
         "en" => format!(
             "Analyze the emotional evolution of each participant based on the recent exchanges.\n\n\
-             Participants and their current emotions:\n{}\n\n\
+             Participants and their current emotions (reactions and sanctions of this turn are ALREADY reflected in these values):\n{}\n\n\
              Recent exchanges:\n{}\n\n\
-             Events this turn:\n{}\n\n\
-             For EACH participant, provide signed deltas (positive or negative integers) for how their emotions should change.\n\
-             Keep deltas in the range [-15, +15]. Use 0 for axes that shouldn't change.\n\
-             Consider: tone, content, reactions received, contradictions, support, engagement level.\n\n\
+             Events this turn (already applied — for context only):\n{}\n\n\
+             For EACH participant, provide signed deltas (positive or negative integers) reflecting ONLY the tone and content of what they said and heard — \
+             do NOT re-count likes, dislikes or bans.\n\
+             Keep deltas in the range [-{cap}, +{cap}]. Use 0 for axes that shouldn't change; most axes should stay at 0 on an ordinary turn.\n\
+             Also set \"{key}\" to true ONLY if the exchanges repeat earlier points without any new idea, fact or angle; otherwise false.\n\n\
              Respond with ONLY a JSON object:\n\
-             {{\"Participant Name\": {{\"engagement\": 0, \"accord\": 0, \"confiance\": 0, \"frustration\": 0, \"curiosite\": 0, \"enthousiasme\": 0}}, ...}}",
+             {{\"Participant Name\": {{\"engagement\": 0, \"accord\": 0, \"confiance\": 0, \"frustration\": 0, \"curiosite\": 0, \"enthousiasme\": 0}}, ..., \"{key}\": false}}",
             participants_json, recent_context, events_summary
         ),
         "zh" => format!(
             "根据最近的对话分析每位参与者的情绪变化。\n\n\
-             参与者及其当前情绪：\n{}\n\n\
+             参与者及其当前情绪（本轮的反应和处罚已经反映在这些数值中）：\n{}\n\n\
              最近的对话：\n{}\n\n\
-             本轮事件：\n{}\n\n\
-             为每位参与者提供情绪变化的有符号增量（正数或负数整数）。\n\
-             增量范围为 [-15, +15]。如果某个轴不需要变化，使用 0。\n\
-             考虑：语气、内容、收到的反应、矛盾、支持、参与程度。\n\n\
+             本轮事件（已经生效——仅供参考）：\n{}\n\n\
+             为每位参与者提供有符号增量（正数或负数整数），仅反映其所说和所听内容的语气与内容——不要重复计算点赞、点踩或禁言。\n\
+             增量范围为 [-{cap}, +{cap}]。如果某个轴不需要变化，使用 0；平常的一轮大多数轴应保持为 0。\n\
+             另外，仅当交流只是重复先前的观点而没有任何新想法、事实或角度时，将 \"{key}\" 设为 true；否则为 false。\n\n\
              仅用 JSON 对象回复：\n\
-             {{\"参与者名称\": {{\"engagement\": 0, \"accord\": 0, \"confiance\": 0, \"frustration\": 0, \"curiosite\": 0, \"enthousiasme\": 0}}, ...}}",
+             {{\"参与者名称\": {{\"engagement\": 0, \"accord\": 0, \"confiance\": 0, \"frustration\": 0, \"curiosite\": 0, \"enthousiasme\": 0}}, ..., \"{key}\": false}}",
             participants_json, recent_context, events_summary
         ),
         _ => format!(
             "Analyse l'évolution émotionnelle de chaque participant en fonction des échanges récents.\n\n\
-             Participants et leurs émotions actuelles :\n{}\n\n\
+             Participants et leurs émotions actuelles (les réactions et sanctions de ce tour sont DÉJÀ intégrées dans ces valeurs) :\n{}\n\n\
              Échanges récents :\n{}\n\n\
-             Événements de ce tour :\n{}\n\n\
-             Pour CHAQUE participant, fournis des deltas signés (entiers positifs ou négatifs) pour chaque axe émotionnel.\n\
-             Garde les deltas dans la plage [-15, +15]. Utilise 0 pour les axes qui ne changent pas.\n\
-             Prends en compte : le ton, le contenu, les réactions reçues, les contradictions, le soutien, le niveau d'engagement.\n\n\
+             Événements de ce tour (déjà appliqués — pour contexte uniquement) :\n{}\n\n\
+             Pour CHAQUE participant, fournis des deltas signés (entiers positifs ou négatifs) reflétant UNIQUEMENT le ton et le contenu de ce qu'il a dit et entendu — \
+             ne recompte PAS les likes, dislikes ou bannissements.\n\
+             Garde les deltas dans la plage [-{cap}, +{cap}]. Utilise 0 pour les axes qui ne changent pas ; sur un tour ordinaire, la plupart des axes restent à 0.\n\
+             Renseigne aussi \"{key}\" à true UNIQUEMENT si les échanges répètent des points déjà faits sans idée, fait ou angle nouveau ; sinon false.\n\n\
              Réponds UNIQUEMENT avec un objet JSON :\n\
-             {{\"Nom du Participant\": {{\"engagement\": 0, \"accord\": 0, \"confiance\": 0, \"frustration\": 0, \"curiosite\": 0, \"enthousiasme\": 0}}, ...}}",
+             {{\"Nom du Participant\": {{\"engagement\": 0, \"accord\": 0, \"confiance\": 0, \"frustration\": 0, \"curiosite\": 0, \"enthousiasme\": 0}}, ..., \"{key}\": false}}",
             participants_json, recent_context, events_summary
         ),
     }
@@ -2276,8 +2312,18 @@ fn build_mode_aware_instruction(
     current_turn: u32,
     user_has_spoken: bool,
     is_first_of_turn: bool,
+    story_started: bool,
+    focus: Option<&Focus>,
 ) -> String {
-    let context = if is_opening {
+    let context = if *mode == DiscussionMode::CollaborativeFiction {
+        // Relay writing: either write the opening or continue from the anchor —
+        // the debate templates ("present YOUR OWN position") do not apply.
+        if story_started {
+            mode_prompts::InterventionContext::FictionContinue
+        } else {
+            mode_prompts::InterventionContext::FictionOpening
+        }
+    } else if is_opening {
         mode_prompts::InterventionContext::Opening
     } else if current_turn == 1 {
         mode_prompts::InterventionContext::Turn1
@@ -2288,7 +2334,9 @@ fn build_mode_aware_instruction(
     } else {
         mode_prompts::InterventionContext::General
     };
-    mode_prompts::mode_context_instruction(mode, lang, context, user_name, end_awareness)
+    // Focus only makes sense once there is something to respond to
+    let focus = if current_turn >= 2 { focus } else { None };
+    mode_prompts::mode_context_instruction(mode, lang, context, user_name, end_awareness, focus)
 }
 
 /// Build a prompt for extracting arguments and theses from recent exchanges.
@@ -2413,6 +2461,49 @@ pub fn build_argument_extraction_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn msg(name: &str, role: SpeakerRole, content: &str) -> Message {
+        Message {
+            id: name.to_string(),
+            discussion_id: "d".to_string(),
+            turn_number: 2,
+            speaker_id: name.to_lowercase(),
+            speaker_name: name.to_string(),
+            role,
+            content: content.to_string(),
+            inner_thought: None,
+            thought_kind: Default::default(),
+            reactions: vec![],
+            is_ban_notification: false,
+            timestamp: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_current_turn_block_puts_focus_last_and_shrinks_others() {
+        let a = msg("Alpha", SpeakerRole::Gladiateur, "a");
+        let u = msg("Léo", SpeakerRole::User, "u");
+        let b = msg("Beta", SpeakerRole::Gladiateur, "b");
+        let c = msg("Gamma", SpeakerRole::Gladiateur, "c");
+        let refs = vec![&a, &u, &b, &c];
+
+        let focus = Focus::Speaker("Beta".to_string());
+        let ordered = order_current_turn_messages(&refs, Some(&focus), 1000);
+        let names: Vec<&str> = ordered.iter().map(|(m, _)| m.speaker_name.as_str()).collect();
+        assert_eq!(names, vec!["Alpha", "Léo", "Gamma", "Beta"]);
+        let budget = |n: &str| ordered.iter().find(|(m, _)| m.speaker_name == n).unwrap().1;
+        assert_eq!(budget("Beta"), 1000);
+        assert_eq!(budget("Léo"), 1000, "the user keeps the full budget");
+        assert_eq!(budget("Alpha"), 1000 / constants::FOCUS_OTHER_MESSAGE_DIVISOR);
+
+        // Topic focus, no focus, or a focus who did not speak this turn: untouched
+        for f in [None, Some(&Focus::Topic), Some(&Focus::Speaker("Delta".to_string()))] {
+            let same = order_current_turn_messages(&refs, f, 1000);
+            let names: Vec<&str> = same.iter().map(|(m, _)| m.speaker_name.as_str()).collect();
+            assert_eq!(names, vec!["Alpha", "Léo", "Beta", "Gamma"]);
+            assert!(same.iter().all(|(_, n)| *n == 1000));
+        }
+    }
 
     #[test]
     fn test_summarize_emotional_state_neutral() {

@@ -4,7 +4,7 @@ import { Loader2 } from "lucide-react";
 import { ThemeProvider } from "@/providers/ThemeProvider";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { AppShell } from "@/components/layout/AppShell";
-import { useSettingsStore } from "@/stores/useSettingsStore";
+import { needsOllama, useSettingsStore } from "@/stores/useSettingsStore";
 
 const HomePage = lazy(() => import("@/pages/HomePage"));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
@@ -26,6 +26,7 @@ function AppInit({ children }: { children: React.ReactNode }) {
   const hydrate = useSettingsStore((s) => s.hydrate);
   const loading = useSettingsStore((s) => s.loading);
   const ollamaModel = useSettingsStore((s) => s.settings.ollamaModel);
+  const ollamaRequired = useSettingsStore((s) => needsOllama(s.settings));
   const ollamaInitialized = useSettingsStore((s) => s.ollamaInitialized);
   const initializeOllama = useSettingsStore((s) => s.initializeOllama);
 
@@ -34,11 +35,13 @@ function AppInit({ children }: { children: React.ReactNode }) {
   }, [hydrate]);
 
   // After hydration, initialize Ollama (unload VRAM → detect → recommend → preload)
+  // — only when Ollama serves the discussion or its embeddings (a cloud provider
+  // must not wait on a local server that may not even be installed).
   useEffect(() => {
-    if (!loading && ollamaModel && !ollamaInitialized) {
+    if (!loading && ollamaRequired && ollamaModel && !ollamaInitialized) {
       initializeOllama();
     }
-  }, [loading, ollamaModel, ollamaInitialized, initializeOllama]);
+  }, [loading, ollamaRequired, ollamaModel, ollamaInitialized, initializeOllama]);
 
   return <>{children}</>;
 }

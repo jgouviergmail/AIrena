@@ -1,7 +1,7 @@
 # AIrena — Documentation Fonctionnelle
 
-> **Version** : 1.13
-> **Dernière mise à jour** : 2026-02-27
+> **Version** : 1.16
+> **Dernière mise à jour** : 2026-09-16
 > **Auteur** : jgouv
 
 ---
@@ -43,8 +43,9 @@
 22. [RAG — Enrichissement par documents](#22-rag--enrichissement-par-documents)
 23. [Surlignage des modifications (document collaboratif)](#23-surlignage-des-modifications-document-collaboratif)
 24. [Carte des arguments (Mindmap)](#24-carte-des-arguments-mindmap)
-25. [Glossaire](#25-glossaire)
-26. [Changelog](#26-changelog)
+25. [Fournisseur DeepSeek, réflexion et coûts](#25-fournisseur-deepseek-réflexion-et-coûts)
+26. [Glossaire](#26-glossaire)
+27. [Changelog](#27-changelog)
 
 ---
 
@@ -289,46 +290,37 @@ Lorsque l'utilisateur demande à intervenir :
 3. Le message de l'utilisateur est traité comme celui d'un GladIAteur
 4. Les autres participants réagissent à l'intervention
 
-### 6.4 Sidebar émotionnelle
+### 6.4 Panneau latéral à onglets
 
-La sidebar droite affiche le profil émotionnel de chaque participant :
+Depuis la v1.16, les anciennes sidebars sont regroupées dans **un seul panneau à onglets** à droite du fil : **Émotions**, **Document** (co-construction), **Carte** (si activée) et **Relations**. L'onglet actif et la largeur du panneau sont mémorisés ; le panneau se replie en rail vertical. Sur un écran étroit (< 1024 px), un bouton flottant ouvre le même panneau en tiroir par-dessus le fil.
 
-- **6 sliders colorés** (un par axe émotionnel, 0-100)
-- **Emoji d'humeur** : visage correspondant à l'état dominant
-- **Sparklines** : mini-graphiques montrant l'évolution au fil des tours
-- **Résumé d'humeur** : texte décrivant l'état émotionnel (généré par LLM)
-- **Directive cognitive** : acte de parole sélectionné et influence émotionnelle
-- **Statut de ban** : si un participant est banni, durée restante affichée
+La barre d'état de l'arène affiche en plus :
+- la **file de parole** du tour (pastilles par participant : a parlé ✓ / parle / en attente / banni / a passé son tour) ;
+- la **consommation** (tokens, et coût estimé avec DeepSeek — éclair ⚡ en heures pleines) ;
+- des **séparateurs de tour** dans le fil et un bouton **« Dernier message »** qui apparaît quand du contenu arrive sous la zone visible (le fil ne défile jamais tout seul).
 
-L'utilisateur peut **ajuster manuellement** les émotions via les sliders (drag).
+#### Onglet Émotions
 
-**Animation flash** : quand un axe franchit un seuil critique (≥85 ou ≤15), la carte du participant flashe brièvement.
+Une carte par participant (la carte de l'orateur actif est surlignée) :
 
-### 6.5 Sidebar document
+- **Vue barres** (6 axes, 0-100, sparklines d'évolution) ou **vue radar** (hexagone animé, silhouette du tour précédent en pointillé) — choix mémorisé
+- **Emoji d'humeur** et **résumé d'humeur** (généré par LLM)
+- **Directive cognitive** (« coulisses ») : acte de parole, **cible** (participant adressé en priorité ou « le sujet »), niveau de réflexion, comportement émotionnel, relations
+- **Statut de ban** avec durée restante
 
-Visible uniquement en mode **Co-Construction** avec un format de document sélectionné :
+L'utilisateur peut **ajuster manuellement** les émotions via les barres (drag). Quand un axe franchit un seuil critique (≥ 85 ou ≤ 15), il clignote brièvement.
 
-- Affiche le document collaboratif en cours d'élaboration
-- **Rendu markdown** pour les formats `.md` et `.txt`
-- **Tableau** pour le format `.csv`
-- Badge du format (`.md`, `.txt`, `.csv`)
-- Badge « Dernière modification par : [nom] »
-- Repliable/dépliable
+#### Onglet Document
 
-Le document est mis à jour par chaque GladIAteur à son tour, qui contribue au livrable commun.
+Visible en mode **Co-Construction** avec un format sélectionné : rendu markdown (`.md`, `.txt`) ou tableau (`.csv`), badge du format, dernier contributeur, surlignage des modifications. Par défaut le document est régénéré **une fois par tour** en intégrant toutes les contributions (option « par intervention » dans le setup).
 
-### 6.6 Sidebar carte des arguments
+#### Onglet Carte
 
-Visible uniquement si la **carte des arguments** est activée dans le setup :
+Visible si la **carte des arguments** est activée : mindmap interactive (vue par thèse / par GladIAteur), compteurs en toutes lettres, nombre de nœuds ✨ **nouveaux ce tour**, avertissement si des arguments ont été écartés (capacité maximale), état « analyse en cours… », **pastilles par orateur**, bouton **Recentrer**. Le zoom et le déplacement de l'utilisateur sont conservés lors des mises à jour. Voir la [section 24](#24-carte-des-arguments-mindmap).
 
-- Affiche une **mindmap interactive** (arbre de thèses et d'arguments) générée automatiquement à partir des interventions
-- **Toggle de vue** : bascule entre vue par thèse (thesis-centric) et vue par GladIAteur (speaker-centric)
-- **Badge de compteurs** : nombre de thèses (T) et d'arguments (A) extraits
-- **Légende** : ✅ Pour (soutien), ❌ Contre (opposition), 📊 Preuves
-- Repliable/dépliable (texte vertical quand replié)
-- Redimensionnable via séparateur draggable
+#### Onglet Relations
 
-La carte est mise à jour après chaque tour. Voir la [section 24](#24-carte-des-arguments-mindmap) pour les détails fonctionnels.
+Graphe des participants : chaque lien résume les réactions échangées (👍/👎 dans les deux sens, infobulle détaillée) ; couleur verte = **alliés**, rouge = **rivaux**, ambre = **tendus**, pointillé = neutre. Mis à jour après chaque salve de réactions.
 
 ### 6.7 Indicateur d'activité
 
@@ -414,9 +406,12 @@ Les émotions évoluent automatiquement selon les événements :
 | Dislikes reçus | Frustration ↑, Confiance ↓ |
 | Contradiction (2+ dislikes) | Frustration ↑, Engagement ↑ |
 | Soutien (2+ likes) | Enthousiasme ↑, Confiance ↑ |
-| Ban reçu | Frustration ↑↑, Engagement ↓ |
-| Stagnation | Engagement ↓, Curiosité ↓ |
-| Décroissance naturelle | Tous les axes tendent vers 50 |
+| Réactions **données** (likes − dislikes) | Accord ↑ ou ↓ (borné) |
+| Ban reçu | Frustration ↑↑, Engagement ↓ — appliqué immédiatement |
+| Stagnation **réelle** | Engagement ↓, Curiosité ↓ |
+| Décroissance naturelle | Frustration et enthousiasme reviennent vers le **profil initial du persona** (pas vers 50) |
+
+La stagnation n'est plus présumée après le 3ᵉ tour : elle est détectée quand le résumé de la discussion ne change presque plus d'un tour à l'autre, quand aucune réaction n'est échangée pendant deux tours, ou quand l'analyste émotionnel (LLM) le signale. Cet analyste ne recompte pas les réactions ni les bans (déjà appliqués) : il n'ajuste que pour le ton et le contenu, avec des deltas bornés à ±10. La contagion émotionnelle rapproche chacun de la moyenne du groupe, calculée sans l'IArbitre.
 
 ### Seuils d'alerte
 
@@ -429,6 +424,7 @@ Si l'option **« Émotions influencent le comportement »** est activée dans le
 - Un participant frustré sera plus agressif ou défensif
 - Un participant enthousiaste sera plus volubile et engagé
 - Un participant désengagé sera plus laconique
+- Les **deux** émotions dominantes se combinent ; si elles se contredisent (frustré mais enthousiaste), la directive demande de laisser cette tension transparaître
 
 Si désactivée, les émotions sont toujours tracées et affichées mais n'influencent pas le contenu généré.
 
@@ -669,9 +665,17 @@ Chaque discussion terminée est automatiquement sauvegardée dans la base de don
 | **Nom d'utilisateur** | Texte | Nom affiché lors des interventions |
 | **Langue** | Sélecteur | Langue de l'interface (FR/EN/ZH) |
 | **Thème** | Toggle | Sombre ou clair |
+| **Fournisseur de modèles** | Sélecteur | **Ollama (local)** ou **DeepSeek (cloud)** |
+| **Niveau de réflexion par défaut** | Sélecteur | Auto / désactivée / légère / poussée / maximale (DeepSeek) |
+| **Afficher le raisonnement du modèle** | Toggle | Diffuse le raisonnement brut dans le panneau « pensée » (DeepSeek) |
+| **Clé API DeepSeek** | Texte | Validée auprès de DeepSeek **avant** d'être enregistrée ; solde affiché |
+| **Modèle DeepSeek** | Sélecteur | Liste lue depuis le compte (`deepseek-flash` par défaut, `deepseek-v4-pro`) |
+| **Budget de contexte** | Nombre | Tokens de contexte par appel (DeepSeek, 4 K–256 K, défaut 32 K) |
+| **Plafond mensuel** | Nombre | Dépense estimée maximale par période glissante (0 = illimité) ; jauge, historique, réinitialisation |
 | **URL Ollama** | URL | Adresse du serveur Ollama (défaut : `http://localhost:11434`) |
 | **Modèle Ollama** | Sélecteur | Modèle LLM à utiliser (parmi ceux installés) |
-| **Modèle d'embeddings** | Sélecteur | Modèle Ollama pour les embeddings RAG (optionnel, défaut : modèle LLM principal) |
+| **Modèle d'embeddings** | Sélecteur | Modèle Ollama pour les embeddings RAG (optionnel ; avec DeepSeek, sans ce modèle la recherche documentaire est lexicale) |
+| **Priorités du budget de tokens** | Liste ordonnée | Ordre des sections du prompt quand le contexte est limité |
 | **Émotions influencent le comportement** | Toggle | Les émotions modifient-elles les directives ? |
 | **Clé API Tavily** | Texte | Clé pour la recherche web (optionnel) |
 
@@ -1010,7 +1014,31 @@ Le système vérifie la qualité des labels extraits par le LLM :
 
 ---
 
-## 25. Glossaire
+## 25. Fournisseur DeepSeek, réflexion et coûts
+
+AIrena peut confier les discussions à **DeepSeek** (modèles V4 : `deepseek-flash` rapide et économique, `deepseek-v4-pro` plus capable, environ quatre fois plus cher) au lieu d'Ollama. Tout le reste — personnalités, émotions, modes, carte des arguments, recherche — fonctionne à l'identique.
+
+### Réflexion native
+
+DeepSeek raisonne avant de répondre. Le niveau se règle globalement (Paramètres) et par GladIAteur (assistant, paramètres LLM) : **Auto** laisse le moteur décider (réflexion poussée quand l'orateur est frustré, contredit ou en fin de discussion, légère sinon, jamais au premier tour). Le raisonnement remplace la « pensée » séparée du personnage : pendant l'intervention, une bulle « réfléchit… » en montre la fin en direct (option « Afficher le raisonnement du modèle »), puis il est conservé avec le message (« Voir le raisonnement ») — même si la diffusion en direct est désactivée. Les appels utilitaires (réactions, modération, mémoire, émotions, votes) ne raisonnent jamais.
+
+Contraintes de l'API reflétées dans l'interface : la température est ignorée pendant la réflexion, `top_p` a un plancher de 0,95, `top_k` et `repeat_penalty` n'existent pas.
+
+### Comptage et coûts
+
+- Chaque appel est compté (tokens d'entrée, dont ceux servis par le **cache de préfixe**, tokens de sortie, dont ceux de raisonnement). La pastille de l'arène affiche le total et le **coût estimé** ; un éclair signale les **heures pleines** (les heures creuses UTC sont à moitié prix).
+- L'assistant de configuration donne, à l'étape Connaissances, un **ordre de grandeur du coût par tour**.
+- Le **plafond mensuel** déclenche un avertissement à 80 % puis, à 100 %, un **arrêt en douceur** (la synthèse est tentée). Une discussion ne démarre pas si le plafond est déjà atteint.
+- Le résumé et l'historique conservent tokens, coût, fournisseur et modèle. Les tarifs sont ceux de la date indiquée dans les Paramètres : ce sont des **estimations**, la facture DeepSeek fait foi.
+- Sans clé valide, le bouton « Démarrer » est désactivé avec l'explication ; une clé refusée en cours de route arrête proprement la discussion.
+
+### Ollama reste utile avec DeepSeek
+
+Un modèle d'embedding Ollama permet la recherche **sémantique** dans les documents importés ; sans lui, la recherche est **lexicale** (BM25) et l'application ne démarre pas Ollama au lancement.
+
+---
+
+## 26. Glossaire
 
 | Terme | Définition |
 |---|---|
@@ -1046,7 +1074,23 @@ Le système vérifie la qualité des labels extraits par le LLM :
 
 ---
 
-## 26. Changelog
+## 27. Changelog
+
+### v1.16 (2026-09-16) — DeepSeek, coûts, moteur consolidé, arène à onglets
+
+**Nouvelles fonctionnalités** :
+- **Fournisseur DeepSeek** (cloud) avec réflexion native par niveau, clé validée avant enregistrement, solde, choix du modèle, budget de contexte, **plafond mensuel** et jauge de période
+- **Comptage des tokens et coût estimé** en direct (pastille), dans le résumé et l'historique ; alertes de budget ; ordre de grandeur du coût par tour dans l'assistant
+- **Panneau latéral à onglets** (Émotions / Document / Carte / Relations), file de parole, séparateurs de tour, bouton « Dernier message », vue **radar** des émotions, **graphe de relations**
+- **Cible tournante** : chaque GladIAteur adresse en priorité un participant différent (ou le sujet) — fin de l'effet « tous contre le premier »
+- **Émotions plus justes** : retour vers le profil initial du persona, stagnation détectée réellement, sanction de ban immédiate, axe accord vivant, deux émotions dominantes
+- **Modes** : document co-construit régénéré par tour, ouverture de fiction garantie, questions socratiques sans répétition, participants qui « passent » affichés
+- **Carte des arguments** : thèses reformulées fusionnées, contre-arguments jamais perdus, marqueurs ✨ nouveaux, compteurs par orateur, zoom conservé
+
+**Améliorations** :
+- Recherche documentaire lexicale (BM25) sans modèle d'embedding
+- Réglages et assistant réorganisés par sections ; interface responsive (tiroir sur écran étroit)
+- Vérification de la parité des traductions FR/EN/ZH à chaque build
 
 ### v1.14 (2026-02-27) — Arguments récursifs & Double vue carte
 

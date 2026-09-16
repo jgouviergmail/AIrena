@@ -5,9 +5,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::constants;
 use crate::engine::truncate_str;
+use crate::llm::{LlmError, LlmProvider, LlmRequest};
+use crate::models::llm::CallKind;
 use crate::models::settings::LlmParams;
-use crate::ollama::client::OllamaClient;
-use crate::ollama::error::OllamaError;
 
 use super::bm25::{self, Bm25Index};
 use super::chunker::TextChunk;
@@ -217,7 +217,7 @@ impl RagStore {
 
     /// Compute embeddings for all chunks if not already done. No-op if ready.
     /// Called lazily before the first RAG query when documents were imported text-only.
-    pub async fn ensure_embeddings(&mut self) -> Result<(), OllamaError> {
+    pub async fn ensure_embeddings(&mut self) -> Result<(), LlmError> {
         if self.embeddings_ready {
             return Ok(());
         }
@@ -252,17 +252,29 @@ impl RagStore {
         &self,
         context: &str,
         language: &str,
-        ollama_client: &OllamaClient,
+        llm: &dyn LlmProvider,
         llm_params: &LlmParams,
         cancel: CancellationToken,
-    ) -> Result<(String, Vec<RagChunkInfo>), OllamaError> {
+    ) -> Result<(String, Vec<RagChunkInfo>), LlmError> {
         if self.is_empty() {
             return Ok((String::new(), Vec::new()));
         }
 
-        // 1a. Vector search: embed context → cosine similarity vs all chunks
-        let query_embedding = self.embedding_client.embed_one(context).await?;
-        let vector_results = self.vector_search(&query_embedding, constants::RAG_RETRIEVAL_TOP_K);
+        // 1a. Vector search: embed context → cosine similarity vs all chunks.
+        // Lexical-only fallback when the store holds no embeddings (documents
+        // imported without an embedding model — e.g. cloud provider without
+        // Ollama) or when the embedding service is unreachable right now.
+        let vector_results = if self.embedding_dim().is_none() {
+            Vec::new()
+        } else {
+            match self.embedding_client.embed_one(context).await {
+                Ok(query_embedding) => self.vector_search(&query_embedding, constants::RAG_RETRIEVAL_TOP_K),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Query embedding failed — BM25-only retrieval for this call");
+                    Vec::new()
+                }
+            }
+        };
 
         // 1b. BM25 keyword search
         let query_tokens = bm25::tokenize(context);
@@ -277,7 +289,7 @@ impl RagStore {
 
         // 2. LLM selection (3-5 chunks) — with fallback to top-3 RRF on failure
         let selected_indices = self
-            .llm_select(&fused, context, language, ollama_client, llm_params, &cancel)
+            .llm_select(&fused, context, language, llm, llm_params, &cancel)
             .await
             .unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "LLM chunk selection failed, using top-{} RRF", constants::RAG_FALLBACK_TOP_K);
@@ -337,10 +349,10 @@ impl RagStore {
         candidates: &[(usize, f32)],
         context: &str,
         language: &str,
-        ollama_client: &OllamaClient,
+        llm: &dyn LlmProvider,
         llm_params: &LlmParams,
         cancel: &CancellationToken,
-    ) -> Result<Vec<usize>, OllamaError> {
+    ) -> Result<Vec<usize>, LlmError> {
         // Build numbered previews for the LLM
         let mut previews = String::new();
         for (rank, &(idx, _score)) in candidates.iter().enumerate() {
@@ -363,18 +375,14 @@ impl RagStore {
             previews
         );
 
-        let mut selection_params = llm_params.clone();
-        selection_params.temperature = constants::TEMP_VOTING;
+        let request = LlmRequest::new(&system_prompt, &user_prompt, llm_params, CallKind::RagSelect).json();
 
-        let request =
-            ollama_client.build_request(&system_prompt, &user_prompt, &selection_params, true);
-
-        let response = ollama_client.chat(&request, cancel.clone()).await?;
+        let response = llm.chat(&request, cancel.clone()).await?.content;
 
         // Parse JSON response: {"selected": [1, 3, 5]}
         let parsed: serde_json::Value =
             serde_json::from_str(&response).map_err(|_| {
-                OllamaError::ConnectionFailed("Invalid JSON from LLM selection".to_string())
+                LlmError::Json("Invalid JSON from LLM selection".to_string())
             })?;
 
         let selected_numbers: Vec<usize> = parsed["selected"]
@@ -389,9 +397,7 @@ impl RagStore {
             .unwrap_or_default();
 
         if selected_numbers.is_empty() {
-            return Err(OllamaError::ConnectionFailed(
-                "LLM selected no chunks".to_string(),
-            ));
+            return Err(LlmError::Json("LLM selected no chunks".to_string()));
         }
 
         // Convert rank indices back to chunk indices, limited by RAG_LLM_SELECT_MAX
@@ -859,5 +865,47 @@ mod tests {
         let second_pos = text.find("[second.txt]").unwrap();
         assert!(first_pos < second_pos, "Documents should be sorted by doc_id");
         assert!(text.contains("---"), "Multiple docs should have separator");
+    }
+}
+
+#[cfg(test)]
+mod bm25_only_tests {
+    use super::*;
+    use crate::llm::mock::MockLlmProvider;
+    use crate::llm::LlmResponse;
+    use crate::rag::chunker::chunk_text;
+    use crate::rag::parser::{ParsedDocument, RagFileFormat};
+
+    /// A store filled without embeddings (cloud provider, no Ollama) must still
+    /// answer queries through BM25 alone instead of failing on the embedding call.
+    #[tokio::test]
+    async fn query_falls_back_to_bm25_when_store_has_no_embeddings() {
+        // Unreachable embedding endpoint: any embed call would fail
+        let mut store = RagStore::new(EmbeddingClient::new("http://127.0.0.1:9", "none"));
+        let doc = ParsedDocument {
+            file_name: "notes.txt".to_string(),
+            format: RagFileFormat::Txt,
+            text: "La photosynthèse transforme la lumière en énergie chimique. \
+                   Les mitochondries produisent l'ATP des cellules. \
+                   Le réchauffement climatique accélère la fonte des glaciers."
+                .to_string(),
+            page_count: 1,
+        };
+        let chunks = chunk_text(&doc.text, 0, 60, 10);
+        store.add_document_text_only(&doc, "doc-1", chunks);
+        assert!(store.embedding_dim().is_none());
+
+        let llm = MockLlmProvider::scripted(|_| Ok(LlmResponse {
+            content: r#"{"selected": [1]}"#.to_string(),
+            reasoning: None,
+            usage: None,
+            truncated: false,
+        }));
+        let (context, infos) = store
+            .query("fonte des glaciers", "fr", &llm, &LlmParams::default(), CancellationToken::new())
+            .await
+            .expect("BM25-only query must succeed");
+        assert!(!infos.is_empty(), "lexical hits expected");
+        assert!(context.contains("réchauffement climatique"), "{context}");
     }
 }

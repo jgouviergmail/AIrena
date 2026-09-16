@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import { ParticipantEmotionCard } from "./ParticipantEmotionCard";
+import { BarChart3, Hexagon } from "lucide-react";
+import { ParticipantEmotionCard, type EmotionView } from "./ParticipantEmotionCard";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { useSetupStore } from "@/stores/useSetupStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { adjustEmotion } from "@/lib/tauri-api";
 import { getProfileEmoji, ROLE_EMOJIS } from "@/lib/profile-emoji";
+import { cn } from "@/lib/utils";
 import type { EmotionalProfile, EmotionSnapshot } from "@/lib/types";
 
 const EMPTY_HISTORY: EmotionSnapshot[] = [];
@@ -18,16 +19,24 @@ const DEFAULT_EMOTIONS: EmotionalProfile = {
   curiosite: 50,
   enthousiasme: 50,
 };
+/** How long a crossed threshold keeps its axis pulsing (ms). */
+const THRESHOLD_FLASH_MS = 3000;
+const VIEW_STORAGE_KEY = "airena.emotions.view";
 
-export function EmotionSidebar({ width = 280 }: { width?: number }) {
+function readView(): EmotionView {
+  try {
+    return localStorage.getItem(VIEW_STORAGE_KEY) === "radar" ? "radar" : "bars";
+  } catch {
+    return "bars";
+  }
+}
+
+/** Emotion panel content (one card per participant, bars or radar view). */
+export function EmotionPanel() {
   const { t } = useTranslation();
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  const [thresholdFlash, setThresholdFlash] = useState<Map<string, string>>(
-    new Map(),
-  );
-  const thresholdTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map(),
-  );
+  const [view, setView] = useState<EmotionView>(readView);
+  const [thresholdFlash, setThresholdFlash] = useState<Map<string, string>>(new Map());
+  const thresholdTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const emotions = useArenaStore((s) => s.emotions);
   const emotionHistory = useArenaStore((s) => s.emotionHistory);
@@ -35,95 +44,68 @@ export function EmotionSidebar({ width = 280 }: { width?: number }) {
   const directives = useArenaStore((s) => s.directives);
   const bans = useArenaStore((s) => s.bans);
   const currentTurn = useArenaStore((s) => s.currentTurn);
+  const activeSpeakerId = useArenaStore((s) => s.activeSpeakerId);
+  const lastThresholdCrossed = useArenaStore((s) => s.lastThresholdCrossed);
   const arbitre = useSetupStore((s) => s.arbitre);
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
   const emotionDriven = useSettingsStore((s) => s.settings.emotionDriven);
 
   // Clean up all threshold timers on unmount
   useEffect(() => {
+    const timers = thresholdTimers.current;
     return () => {
-      thresholdTimers.current.forEach((t) => clearTimeout(t));
-      thresholdTimers.current.clear();
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
     };
   }, []);
 
   // Handle threshold flash with tracked timers
-  const handleThreshold = useCallback(
-    (speakerId: string, axis: string) => {
-      // Clear previous timer for this speaker
-      const prev = thresholdTimers.current.get(speakerId);
-      if (prev) clearTimeout(prev);
+  const handleThreshold = useCallback((speakerId: string, axis: string) => {
+    const prev = thresholdTimers.current.get(speakerId);
+    if (prev) clearTimeout(prev);
 
+    setThresholdFlash((map) => new Map(map).set(speakerId, axis));
+
+    const timer = setTimeout(() => {
       setThresholdFlash((map) => {
         const next = new Map(map);
-        next.set(speakerId, axis);
+        if (next.get(speakerId) === axis) next.delete(speakerId);
         return next;
       });
+      thresholdTimers.current.delete(speakerId);
+    }, THRESHOLD_FLASH_MS);
+    thresholdTimers.current.set(speakerId, timer);
+  }, []);
 
-      // Auto-clear after 3s
-      const timer = setTimeout(() => {
-        setThresholdFlash((map) => {
-          const next = new Map(map);
-          if (next.get(speakerId) === axis) {
-            next.delete(speakerId);
-          }
-          return next;
-        });
-        thresholdTimers.current.delete(speakerId);
-      }, 3000);
-      thresholdTimers.current.set(speakerId, timer);
-    },
-    [],
-  );
-
-  // Monkey-patch threshold handling into the existing event handler
+  // Flash the axis whenever the store records a new threshold crossing
   useEffect(() => {
-    const originalHandler = useArenaStore.getState().handleEvent;
-    const wrappedHandler = (event: Parameters<typeof originalHandler>[0]) => {
-      if (
-        event.type === "emotionalThresholdCrossed" &&
-        "data" in event &&
-        event.data
-      ) {
-        const data = event.data as {
-          speakerId: string;
-          axis: string;
-        };
-        handleThreshold(data.speakerId, data.axis);
-      }
-      originalHandler(event);
-    };
-    useArenaStore.setState({ handleEvent: wrappedHandler });
-    return () => {
-      useArenaStore.setState({ handleEvent: originalHandler });
-    };
-  }, [handleThreshold]);
+    if (lastThresholdCrossed) {
+      handleThreshold(lastThresholdCrossed.speakerId, lastThresholdCrossed.axis);
+    }
+  }, [lastThresholdCrossed, handleThreshold]);
 
-  const handleAdjust = useCallback(
-    (speakerId: string, axis: string, value: number) => {
-      // Optimistic update
-      useArenaStore.setState((s) => {
-        const em = new Map(s.emotions);
-        const current = em.get(speakerId);
-        if (current) {
-          em.set(speakerId, { ...current, [axis]: value });
-        }
-        return { emotions: em };
-      });
-      // Fire-and-forget backend call
-      adjustEmotion(speakerId, axis, value).catch(() => {});
-    },
-    [],
-  );
+  const handleAdjust = useCallback((speakerId: string, axis: string, value: number) => {
+    // Optimistic update
+    useArenaStore.setState((s) => {
+      const em = new Map(s.emotions);
+      const current = em.get(speakerId);
+      if (current) em.set(speakerId, { ...current, [axis]: value });
+      return { emotions: em };
+    });
+    // Fire-and-forget backend call
+    adjustEmotion(speakerId, axis, value).catch(() => {});
+  }, []);
+
+  const switchView = (next: EmotionView) => {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch { /* ignore */ }
+  };
 
   // Build participants list: arbitre first, then gladiateurs
   const participants = [
-    {
-      id: arbitre.id,
-      name: arbitre.name,
-      emoji: ROLE_EMOJIS.IArbitre,
-      role: "IArbitre",
-    },
+    { id: arbitre.id, name: arbitre.name, emoji: ROLE_EMOJIS.IArbitre, role: "IArbitre" },
     ...gladiateurs.map((g) => ({
       id: g.id,
       name: g.name,
@@ -132,43 +114,29 @@ export function EmotionSidebar({ width = 280 }: { width?: number }) {
     })),
   ];
 
-  if (isCollapsed) {
-    return (
-      <div className="flex w-8 shrink-0 flex-col items-center border-l border-border bg-card/50 pt-2">
-        <button
-          onClick={() => setIsCollapsed(false)}
-          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          title={t("emotions.sidebar.expand")}
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </button>
-        <span className="mt-2 text-xs [writing-mode:vertical-lr] text-muted-foreground">
-          {t("emotions.sidebar.title")}
-        </span>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex shrink-0 flex-col border-l border-border bg-card/50" style={{ width: `${width}px` }}>
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <span className="text-xs font-medium text-foreground">
-          {t("emotions.sidebar.title")}
+    <>
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1.5">
+        <span className="text-[10px] text-muted-foreground">
+          {emotionDriven ? t("emotions.sidebar.drivenNote") : t("emotions.sidebar.disabledNote")}
         </span>
-        <button
-          onClick={() => setIsCollapsed(true)}
-          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          title={t("emotions.sidebar.collapse")}
-        >
-          <ChevronRight className="h-4 w-4" />
-        </button>
-      </div>
-
-      {!emotionDriven && (
-        <div className="border-b border-border px-3 py-1.5 text-[10px] text-muted-foreground">
-          {t("emotions.sidebar.disabledNote")}
+        <div className="flex shrink-0 gap-0.5 rounded-md border border-border p-0.5">
+          {(["bars", "radar"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => switchView(v)}
+              title={t(`emotions.view.${v}`)}
+              aria-pressed={view === v}
+              className={cn(
+                "rounded p-1 transition-colors",
+                view === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {v === "bars" ? <BarChart3 className="h-3 w-3" /> : <Hexagon className="h-3 w-3" />}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
 
       <div className="flex-1 space-y-2 overflow-y-auto p-2">
         {participants.map((p) => (
@@ -183,9 +151,11 @@ export function EmotionSidebar({ width = 280 }: { width?: number }) {
             currentTurn={currentTurn}
             directive={directives.get(p.id)}
             banInfo={bans.get(p.id)}
+            view={view}
+            isActive={p.id === activeSpeakerId}
           />
         ))}
       </div>
-    </div>
+    </>
   );
 }

@@ -9,6 +9,7 @@ import {
   deleteAllDiscussionHistory,
 } from "@/lib/tauri-api";
 import type { DiscussionSummary } from "@/lib/types";
+import { formatTokens, formatUsd } from "@/lib/cost-estimate";
 
 export default function HistoryPage() {
   const { t } = useTranslation();
@@ -94,9 +95,15 @@ export default function HistoryPage() {
                   <p className="truncate text-sm font-medium text-foreground">
                     {formatDate(d.createdAt)} — {t(`setup.mode_${d.discussionMode}`)} — {d.topic}
                   </p>
-                  <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                     <span>{t("history.turns", { count: d.totalTurns })}</span>
                     <span className="truncate text-[10px]">{d.modelName}</span>
+                    {d.totalTokens > 0 && (
+                      <span className="font-mono text-[10px]">{formatTokens(d.totalTokens)} tok</span>
+                    )}
+                    {d.llmProvider !== "ollama" && d.estimatedCostUsd > 0 && (
+                      <span className="font-mono text-[10px] text-amber-600 dark:text-amber-400">{formatUsd(d.estimatedCostUsd)}</span>
+                    )}
                     {!d.hasSynthesis && (
                       <span className="text-destructive/70">{t("history.noSynthesis")}</span>
                     )}

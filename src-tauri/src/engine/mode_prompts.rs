@@ -1,3 +1,5 @@
+use super::focus::Focus;
+use crate::constants;
 use crate::models::discussion::DiscussionMode;
 
 /// Returns the human-readable name for the discussion mode in the given language.
@@ -76,9 +78,9 @@ pub fn mode_introduction_instructions(mode: &DiscussionMode, lang: &str) -> &'st
         (DiscussionMode::CritiqueReview, _) => "Présente le sujet à examiner et invite les participants à partager leur évaluation initiale. Encourage une critique équilibrée : forces et axes d'amélioration.",
 
         // CollaborativeFiction
-        (DiscussionMode::CollaborativeFiction, "en") => "Explain briefly that this is a relay-written story: the user writes the opening, then each co-author continues in sequence. Encourage seamless transitions and narrative coherence.",
-        (DiscussionMode::CollaborativeFiction, "zh") => "简要解释这是接力写作故事：用户写开头，然后每位共同作者按顺序继续。鼓励无缝过渡和叙事连贯。",
-        (DiscussionMode::CollaborativeFiction, _) => "Explique brièvement que c'est une histoire écrite en relais : l'utilisateur écrit l'ouverture, puis chaque co-auteur continue à la suite. Encourage les transitions fluides et la cohérence narrative.",
+        (DiscussionMode::CollaborativeFiction, "en") => "Explain briefly that this is a relay-written story: the user is invited to write the opening (a co-author does it otherwise), then each co-author continues in sequence. Encourage seamless transitions and narrative coherence.",
+        (DiscussionMode::CollaborativeFiction, "zh") => "简要解释这是接力写作故事：邀请用户写开头（否则由一位共同作者来写），然后每位共同作者按顺序继续。鼓励无缝过渡和叙事连贯。",
+        (DiscussionMode::CollaborativeFiction, _) => "Explique brièvement que c'est une histoire écrite en relais : l'utilisateur est invité à écrire l'ouverture (sinon un co-auteur s'en charge), puis chaque co-auteur continue à la suite. Encourage les transitions fluides et la cohérence narrative.",
     }
 }
 
@@ -306,11 +308,29 @@ pub fn build_socratic_question_prompt(
     topic: &str,
     recent_exchanges: &str,
     lang: &str,
+    previous_questions: &[String],
 ) -> String {
+    let previous = previous_questions
+        .iter()
+        .rev()
+        .take(constants::SOCRATIC_PREVIOUS_QUESTIONS)
+        .map(|q| format!("- {q}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let previous_block = if previous.is_empty() {
+        String::new()
+    } else {
+        match lang {
+            "en" => format!("Questions you ALREADY asked (do not repeat or rephrase them — explore a different angle):\n{previous}\n\n"),
+            "zh" => format!("你已经提过的问题（不要重复或改述——探索不同的角度）：\n{previous}\n\n"),
+            _ => format!("Questions que tu as DÉJÀ posées (ne les répète pas et ne les reformule pas — explore un autre angle) :\n{previous}\n\n"),
+        }
+    };
     match lang {
         "en" => format!(
             "Topic: {topic}\n\
             Recent exchanges:\n{recent_exchanges}\n\n\
+            {previous_block}\
             As the Socratic facilitator, pose ONE thought-provoking question that deepens the inquiry.\n\
             The question should:\n\
             - Challenge assumptions made in previous exchanges\n\
@@ -323,6 +343,7 @@ pub fn build_socratic_question_prompt(
         "zh" => format!(
             "主题：{topic}\n\
             最近交流：\n{recent_exchanges}\n\n\
+            {previous_block}\
             作为苏格拉底式引导者，提出一个引人深思的问题来深化探究。\n\
             这个问题应该：\n\
             - 挑战之前交流中的假设\n\
@@ -335,6 +356,7 @@ pub fn build_socratic_question_prompt(
         _ => format!(
             "Sujet : {topic}\n\
             Échanges récents :\n{recent_exchanges}\n\n\
+            {previous_block}\
             En tant que facilitateur socratique, pose UNE question stimulante qui approfondit l'enquête.\n\
             La question doit :\n\
             - Remettre en question les hypothèses des échanges précédents\n\
@@ -344,6 +366,24 @@ pub fn build_socratic_question_prompt(
             IMPÉRATIF : Tu DOIS poser la question intégralement en français.\n\
             Réponds UNIQUEMENT avec la question, rien d'autre."
         ),
+    }
+}
+
+/// Who the speaker should address this time (turns ≥ 2, debate-like modes).
+/// Shared by the cognitive directive (layer 5) and the mode templates so that
+/// both prompt paths rotate attention the same way.
+pub fn focus_instruction(focus: Option<&Focus>, lang: &str) -> Option<String> {
+    match focus? {
+        Focus::Speaker(name) => Some(match lang {
+            "en" => format!("Address {name} in priority — pick up one of their points and respond to it directly (agree, challenge or build on it). You may mention others briefly, but {name} is your main interlocutor this time."),
+            "zh" => format!("优先回应{name}——抓住其一个观点直接回应（赞同、质疑或延伸）。可以简短提及他人，但这次{name}是你的主要对话者。"),
+            _ => format!("Adresse-toi en priorité à {name} — reprends un de ses points et réponds-y directement (accord, contestation ou prolongement). Tu peux évoquer les autres brièvement, mais {name} est ton interlocuteur principal cette fois-ci."),
+        }),
+        Focus::Topic => Some(match lang {
+            "en" => "This time, do not answer anyone in particular: push the topic forward with a fresh angle, a fact or a question nobody has raised yet.".to_string(),
+            "zh" => "这次不要回应任何特定的人：用一个新角度、一个事实或一个还没人提出的问题来推进话题。".to_string(),
+            _ => "Cette fois, ne réponds à personne en particulier : fais avancer le sujet avec un angle neuf, un fait ou une question que personne n'a encore soulevés.".to_string(),
+        }),
     }
 }
 
@@ -375,6 +415,10 @@ pub enum InterventionContext {
     FirstOfTurn,
     /// General case: subsequent speakers on turns > 1
     General,
+    /// CollaborativeFiction: nothing has been written yet — write the opening
+    FictionOpening,
+    /// CollaborativeFiction: a segment exists — continue from the anchor
+    FictionContinue,
 }
 
 /// Returns the opening-round action instruction specific to the mode.
@@ -409,9 +453,9 @@ pub fn mode_opening_action(mode: &DiscussionMode, lang: &str) -> &'static str {
         (DiscussionMode::CritiqueReview, "zh") => "分享你对主题的初步评估。要具体——平衡优点和缺点。",
         (DiscussionMode::CritiqueReview, _) => "Partage ton évaluation initiale du sujet. Sois spécifique — équilibre forces et faiblesses.",
 
-        (DiscussionMode::CollaborativeFiction, "en") => "Continue the story started by the user. Pick up exactly where they left off with a seamless transition that advances the narrative.",
-        (DiscussionMode::CollaborativeFiction, "zh") => "继续用户开始的故事。从他们停笔处无缝衔接，推进叙事。",
-        (DiscussionMode::CollaborativeFiction, _) => "Continue l'histoire commencée par l'utilisateur. Reprends exactement là où il s'est arrêté avec une transition fluide qui fait avancer le récit.",
+        (DiscussionMode::CollaborativeFiction, "en") => "Continue the story from its opening. Pick up exactly where the previous writer left off with a seamless transition that advances the narrative.",
+        (DiscussionMode::CollaborativeFiction, "zh") => "从故事的开头继续。从上一位作者停笔处无缝衔接，推进叙事。",
+        (DiscussionMode::CollaborativeFiction, _) => "Continue l'histoire à partir de son ouverture. Reprends exactement là où l'auteur précédent s'est arrêté avec une transition fluide qui fait avancer le récit.",
     }
 }
 
@@ -501,6 +545,7 @@ pub fn mode_context_instruction(
     context: InterventionContext,
     user_name: &str,
     end_awareness: &str,
+    focus: Option<&Focus>,
 ) -> String {
     let opening = mode_opening_action(mode, lang);
     let engage = mode_engage_action(mode, lang);
@@ -516,7 +561,63 @@ pub fn mode_context_instruction(
         format!("{}\n", user_observer_clause(lang, user_name))
     };
 
+    // Rotating focus (turns ≥ 2): a line, or nothing when no focus was drawn
+    let focus_line = focus_instruction(focus, lang).map(|f| format!("{f}\n")).unwrap_or_default();
+
     match (context, lang) {
+        // ── Fiction ──────────────────────────────────────────────────────
+        (InterventionContext::FictionOpening, "en") => format!(
+            "=== YOUR TASK ===\n\
+             Nobody has written yet: write the OPENING of the story.\n\
+             Set the scene, introduce a protagonist and plant an inciting event that the next co-authors can build on.\n\
+             {constraint}\n\
+             Keep it to one or two paragraphs.\n\
+             {end_awareness}\n\
+             REMEMBER: {constraint}"
+        ),
+        (InterventionContext::FictionOpening, "zh") => format!(
+            "=== 你的任务 ===\n\
+             还没有人动笔：写下故事的开头。\n\
+             设定场景，引入一位主角，埋下一个引发事件，让接下来的共同作者可以延续。\n\
+             {constraint}\n\
+             保持一到两段。\n\
+             {end_awareness}\n\
+             记住：{constraint}"
+        ),
+        (InterventionContext::FictionOpening, _) => format!(
+            "=== VOTRE TÂCHE ===\n\
+             Personne n'a encore écrit : écris l'OUVERTURE de l'histoire.\n\
+             Pose le décor, introduis un protagoniste et plante un événement déclencheur sur lequel les co-auteurs suivants pourront construire.\n\
+             {constraint}\n\
+             Tiens-toi à un ou deux paragraphes.\n\
+             {end_awareness}\n\
+             RAPPEL : {constraint}"
+        ),
+        (InterventionContext::FictionContinue, "en") => format!(
+            "=== YOUR TASK ===\n\
+             {engage}\n\
+             {constraint}\n\
+             Keep it to one or two paragraphs.\n\
+             {end_awareness}\n\
+             REMEMBER: {constraint}"
+        ),
+        (InterventionContext::FictionContinue, "zh") => format!(
+            "=== 你的任务 ===\n\
+             {engage}\n\
+             {constraint}\n\
+             保持一到两段。\n\
+             {end_awareness}\n\
+             记住：{constraint}"
+        ),
+        (InterventionContext::FictionContinue, _) => format!(
+            "=== VOTRE TÂCHE ===\n\
+             {engage}\n\
+             {constraint}\n\
+             Tiens-toi à un ou deux paragraphes.\n\
+             {end_awareness}\n\
+             RAPPEL : {constraint}"
+        ),
+
         // ── Opening ──────────────────────────────────────────────────────
         (InterventionContext::Opening, "en") => format!(
             "=== YOUR TASK ===\n\
@@ -606,6 +707,7 @@ pub fn mode_context_instruction(
             format!(
                 "=== YOUR TASK ===\n\
                  {user_line}\n\
+                 {focus_line}\
                  {engage}\n\
                  {constraint}\n\
                  Keep it to one or two focused paragraphs — do not pad or repeat yourself.\n\
@@ -624,6 +726,7 @@ pub fn mode_context_instruction(
             format!(
                 "=== 你的任务 ===\n\
                  {user_line}\n\
+                 {focus_line}\
                  {engage}\n\
                  {constraint}\n\
                  保持一到两段集中的论述——不要填充或重复。\n\
@@ -642,6 +745,7 @@ pub fn mode_context_instruction(
             format!(
                 "=== VOTRE TÂCHE ===\n\
                  {user_line}\n\
+                 {focus_line}\
                  {engage}\n\
                  {constraint}\n\
                  Tiens-toi à un ou deux paragraphes — ne meuble pas et ne te répète pas.\n\
@@ -654,6 +758,7 @@ pub fn mode_context_instruction(
         (InterventionContext::FirstOfTurn, "en") => format!(
             "=== YOUR TASK ===\n\
              You open this turn. React to the previous round — pick what struck you most and engage with it.\n\
+             {focus_line}\
              {engage}\n\
              {constraint}\n\
              Keep it to one or two paragraphs.\n\
@@ -664,6 +769,7 @@ pub fn mode_context_instruction(
         (InterventionContext::FirstOfTurn, "zh") => format!(
             "=== 你的任务 ===\n\
              你是本轮第一个发言。回应上一轮——选择最让你印象深刻的内容并回应。\n\
+             {focus_line}\
              {engage}\n\
              {constraint}\n\
              保持一到两段。\n\
@@ -674,6 +780,7 @@ pub fn mode_context_instruction(
         (InterventionContext::FirstOfTurn, _) => format!(
             "=== VOTRE TÂCHE ===\n\
              Tu ouvres ce tour. Réagis au tour précédent — choisis ce qui t'a le plus frappé et confronte-le.\n\
+             {focus_line}\
              {engage}\n\
              {constraint}\n\
              Tiens-toi à un ou deux paragraphes.\n\
@@ -685,6 +792,7 @@ pub fn mode_context_instruction(
         // ── General ──────────────────────────────────────────────────────
         (InterventionContext::General, "en") => format!(
             "=== YOUR TASK ===\n\
+             {focus_line}\
              {engage}\n\
              Move forward with a new angle — do not just restate your previous contributions.\n\
              {constraint}\n\
@@ -695,6 +803,7 @@ pub fn mode_context_instruction(
         ),
         (InterventionContext::General, "zh") => format!(
             "=== 你的任务 ===\n\
+             {focus_line}\
              {engage}\n\
              以新角度前进——不要只是重复你之前的贡献。\n\
              {constraint}\n\
@@ -705,6 +814,7 @@ pub fn mode_context_instruction(
         ),
         (InterventionContext::General, _) => format!(
             "=== VOTRE TÂCHE ===\n\
+             {focus_line}\
              {engage}\n\
              Avance avec un nouvel angle — ne te contente pas de répéter tes contributions précédentes.\n\
              {constraint}\n\
@@ -848,12 +958,14 @@ mod tests {
             InterventionContext::UserSpoke,
             InterventionContext::FirstOfTurn,
             InterventionContext::General,
+            InterventionContext::FictionOpening,
+            InterventionContext::FictionContinue,
         ];
         for mode in all_modes() {
             for lang in all_langs() {
                 for context in &contexts {
                     let result = mode_context_instruction(
-                        &mode, lang, *context, "TestUser", "",
+                        &mode, lang, *context, "TestUser", "", None,
                     );
                     assert!(!result.is_empty(), "Empty context instruction for {mode:?}/{lang}");
                     // Check PE delimiter is present
@@ -871,20 +983,49 @@ mod tests {
         // Verify REMEMBER/RAPPEL/记住 prompt repetition is present
         for mode in all_modes() {
             let result = mode_context_instruction(
-                &mode, "en", InterventionContext::General, "TestUser", "",
+                &mode, "en", InterventionContext::General, "TestUser", "", None,
             );
             assert!(result.contains("REMEMBER:"), "Missing REMEMBER for {mode:?}/en: {result}");
 
             let result_fr = mode_context_instruction(
-                &mode, "fr", InterventionContext::General, "TestUser", "",
+                &mode, "fr", InterventionContext::General, "TestUser", "", None,
             );
             assert!(result_fr.contains("RAPPEL"), "Missing RAPPEL for {mode:?}/fr");
 
             let result_zh = mode_context_instruction(
-                &mode, "zh", InterventionContext::General, "TestUser", "",
+                &mode, "zh", InterventionContext::General, "TestUser", "", None,
             );
             assert!(result_zh.contains("记住"), "Missing 记住 for {mode:?}/zh");
         }
+    }
+
+    #[test]
+    fn test_focus_line_in_engagement_contexts_only() {
+        let focus = Focus::Speaker("Le Sceptique".to_string());
+        for ctx in [InterventionContext::UserSpoke, InterventionContext::FirstOfTurn, InterventionContext::General] {
+            let text = mode_context_instruction(&DiscussionMode::Debate, "fr", ctx, "Léo", "", Some(&focus));
+            assert!(text.contains("Adresse-toi en priorité à Le Sceptique"), "{text}");
+        }
+        for ctx in [InterventionContext::Opening, InterventionContext::Turn1, InterventionContext::FictionContinue] {
+            let text = mode_context_instruction(&DiscussionMode::Debate, "fr", ctx, "Léo", "", Some(&focus));
+            assert!(!text.contains("Le Sceptique"), "{text}");
+        }
+        let topic = mode_context_instruction(&DiscussionMode::Debate, "en", InterventionContext::General, "Léo", "", Some(&Focus::Topic));
+        assert!(topic.contains("do not answer anyone in particular"));
+        let none = mode_context_instruction(&DiscussionMode::Debate, "en", InterventionContext::General, "Léo", "", None);
+        assert!(!none.contains("in priority"));
+    }
+
+    #[test]
+    fn test_socratic_prompt_lists_previous_questions() {
+        let prev: Vec<String> = (1..=5).map(|i| format!("Question {i} ?")).collect();
+        let p = build_socratic_question_prompt("Sujet", "A: bla", "fr", &prev);
+        assert!(p.contains("DÉJÀ posées"));
+        // Only the most recent N are injected
+        assert!(p.contains("Question 5 ?") && p.contains("Question 3 ?"));
+        assert!(!p.contains("Question 2 ?"));
+        let p0 = build_socratic_question_prompt("Sujet", "A: bla", "fr", &[]);
+        assert!(!p0.contains("DÉJÀ posées"));
     }
 
     #[test]

@@ -121,6 +121,31 @@ pub async fn initialize(db: &Connection) -> Result<(), tokio_rusqlite::Error> {
                 "ALTER TABLE discussions ADD COLUMN argument_map_md TEXT NOT NULL DEFAULT '';"
             )?;
         }
+        // Migration: add LLM provider + usage columns to discussions (idempotent)
+        for (column, ddl) in [
+            ("llm_provider", "ALTER TABLE discussions ADD COLUMN llm_provider TEXT NOT NULL DEFAULT 'ollama';"),
+            ("usage_json", "ALTER TABLE discussions ADD COLUMN usage_json TEXT NOT NULL DEFAULT '{}';"),
+            ("estimated_cost_usd", "ALTER TABLE discussions ADD COLUMN estimated_cost_usd REAL NOT NULL DEFAULT 0;"),
+            ("argument_map_json", "ALTER TABLE discussions ADD COLUMN argument_map_json TEXT NOT NULL DEFAULT '';"),
+        ] {
+            let exists: bool = conn
+                .prepare("PRAGMA table_info(discussions)")?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .any(|col| col.as_deref() == Ok(column));
+            if !exists {
+                conn.execute_batch(ddl)?;
+            }
+        }
+        // Migration: add thought_kind column to discussion_messages (idempotent)
+        let has_thought_kind: bool = conn
+            .prepare("PRAGMA table_info(discussion_messages)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .any(|col| col.as_deref() == Ok("thought_kind"));
+        if !has_thought_kind {
+            conn.execute_batch(
+                "ALTER TABLE discussion_messages ADD COLUMN thought_kind TEXT NOT NULL DEFAULT 'persona';"
+            )?;
+        }
         // Migration: add argument_map_md_by_speaker column to discussions (idempotent)
         let has_argument_map_md_by_speaker: bool = conn
             .prepare("PRAGMA table_info(discussions)")?

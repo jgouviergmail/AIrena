@@ -24,7 +24,7 @@ pub async fn save_settings(
         return Err(CommandError::Settings("Username must not be empty".to_string()));
     }
     let db = state.db.clone();
-    repository::save_settings(&db, &settings)
+    repository::save_user_settings(&db, &settings)
         .await
         .map_err(|e| CommandError::Settings(e.to_string()))
 }

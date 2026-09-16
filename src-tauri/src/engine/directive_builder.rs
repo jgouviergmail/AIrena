@@ -14,9 +14,13 @@ use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 use serde::Serialize;
 
+use std::collections::{HashMap, HashSet};
+
 use super::dynamics_parser::ParsedDynamics;
+use super::focus::Focus;
 use super::mode_prompts;
 use super::truncate_str;
+use crate::models::relationship::RelationshipEdge;
 use crate::constants;
 use crate::models::discussion::DiscussionMode;
 use crate::models::emotion::EmotionalProfile;
@@ -39,6 +43,12 @@ pub struct SpeakerTurnContext {
     pub discussion_language: String,
     pub user_name: String,
     pub discussion_mode: DiscussionMode,
+    /// Who to address in priority (turns ≥ 2); None when not applicable.
+    pub focus: Option<Focus>,
+    /// The speaker's most recent speech acts (newest last), penalised for variety.
+    pub recent_speech_acts: Vec<SpeechAct>,
+    /// CollaborativeFiction: who wrote the opening this turn (None on turn 1 = write it).
+    pub opening_author: Option<String>,
 }
 
 pub struct RelationshipHint {
@@ -51,6 +61,16 @@ pub enum RelationshipKind {
     Ally,
     Rival,
     Tense,
+}
+
+impl RelationshipKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ally => "ally",
+            Self::Rival => "rival",
+            Self::Tense => "tense",
+        }
+    }
 }
 
 /// Output of the directive builder — injected into the prompt + sent to frontend.
@@ -216,10 +236,7 @@ impl SpeechAct {
 /// Build a dynamic behavioral directive for the given speaker context.
 /// For turn 1, returns a basic directive with no emotion/relationship context.
 /// For turns 2+, applies all 5 layers (emotion, relationships, speech acts, memory, situation).
-pub fn build_dynamic_directive(
-    ctx: &SpeakerTurnContext,
-    last_speech_act: Option<&SpeechAct>,
-) -> DirectiveOutput {
+pub fn build_dynamic_directive(ctx: &SpeakerTurnContext) -> DirectiveOutput {
     let lang = ctx.discussion_language.as_str();
     let mut parts: Vec<String> = Vec::new();
 
@@ -242,7 +259,7 @@ pub fn build_dynamic_directive(
         }
 
         // Layer 3: Speech act selection
-        let (selected_act, act_text) = build_layer3_speech_act(ctx, last_speech_act);
+        let (selected_act, act_text) = build_layer3_speech_act(ctx, &ctx.recent_speech_acts);
 
         parts.push(act_text);
 
@@ -304,6 +321,10 @@ fn build_user_reminder(lang: &str, user_name: &str, mode: &DiscussionMode) -> St
 
 // ── Layer 1: Emotion → Behavior Bridge ──────────────────────────────
 
+/// Up to two emotional states shape the behaviour (priority: frustration,
+/// disagreement, disengagement, confidence, curiosity, enthusiasm). When the
+/// two are in tension (e.g. frustrated yet enthusiastic) a nuance line asks the
+/// persona to let both show.
 fn build_layer1_emotion_behavior(ctx: &SpeakerTurnContext) -> Option<String> {
     let emo = &ctx.emotions;
     let lang = ctx.discussion_language.as_str();
@@ -313,39 +334,64 @@ fn build_layer1_emotion_behavior(ctx: &SpeakerTurnContext) -> Option<String> {
         return build_fiction_emotion_behavior(emo, lang);
     }
 
-    // Priority: frustration > engagement > confiance > curiosité > enthousiasme > accord
-    let behavior = if emo.frustration > constants::PERSONALITY_HIGH {
-        match &ctx.dynamics {
-            Some(d) if !d.under_pressure.is_empty() => format_behavior(lang, "under_pressure", &d.under_pressure),
-            _ => generic_behavior(lang, "frustrated"),
-        }
-    } else if emo.engagement < constants::PERSONALITY_LOW {
-        match &ctx.dynamics {
-            Some(d) if !d.disengaged.is_empty() => format_behavior(lang, "disengaged", &d.disengaged),
-            _ => generic_behavior(lang, "disengaged"),
-        }
-    } else if emo.confiance > constants::PERSONALITY_HIGH {
-        match &ctx.dynamics {
-            Some(d) if !d.confident.is_empty() => format_behavior(lang, "confident", &d.confident),
-            _ => generic_behavior(lang, "confident"),
-        }
-    } else if emo.curiosite > constants::PERSONALITY_HIGH {
-        match &ctx.dynamics {
-            Some(d) if !d.triggers.is_empty() => format_behavior(lang, "curious", &d.triggers),
-            _ => generic_behavior(lang, "curious"),
-        }
-    } else if emo.enthousiasme > constants::PERSONALITY_HIGH {
-        match ctx.dynamics.as_ref().and_then(|d| d.enthusiastic.as_deref()).filter(|e| !e.is_empty()) {
-            Some(enh) => format_behavior(lang, "enthusiastic", enh),
-            None => generic_behavior(lang, "enthusiastic"),
-        }
-    } else if emo.accord < constants::PERSONALITY_LOW {
-        generic_behavior(lang, "disagreeing")
-    } else {
-        return None;
+    let dyn_field = |pick: fn(&ParsedDynamics) -> &str| -> Option<String> {
+        ctx.dynamics.as_ref().map(pick).filter(|s| !s.is_empty()).map(str::to_string)
     };
 
-    Some(behavior)
+    let mut triggered: Vec<(&'static str, String)> = Vec::new();
+    if emo.frustration > constants::PERSONALITY_HIGH {
+        triggered.push(("frustrated", match dyn_field(|d| &d.under_pressure) {
+            Some(t) => format_behavior(lang, "under_pressure", &t),
+            None => generic_behavior(lang, "frustrated"),
+        }));
+    }
+    if emo.accord < constants::PERSONALITY_LOW {
+        triggered.push(("disagreeing", generic_behavior(lang, "disagreeing")));
+    }
+    if emo.engagement < constants::PERSONALITY_LOW {
+        triggered.push(("disengaged", match dyn_field(|d| &d.disengaged) {
+            Some(t) => format_behavior(lang, "disengaged", &t),
+            None => generic_behavior(lang, "disengaged"),
+        }));
+    }
+    if emo.confiance > constants::PERSONALITY_HIGH {
+        triggered.push(("confident", match dyn_field(|d| &d.confident) {
+            Some(t) => format_behavior(lang, "confident", &t),
+            None => generic_behavior(lang, "confident"),
+        }));
+    }
+    if emo.curiosite > constants::PERSONALITY_HIGH {
+        triggered.push(("curious", match dyn_field(|d| &d.triggers) {
+            Some(t) => format_behavior(lang, "curious", &t),
+            None => generic_behavior(lang, "curious"),
+        }));
+    }
+    if emo.enthousiasme > constants::PERSONALITY_HIGH {
+        triggered.push(("enthusiastic", match ctx.dynamics.as_ref().and_then(|d| d.enthusiastic.clone()).filter(|e| !e.is_empty()) {
+            Some(t) => format_behavior(lang, "enthusiastic", &t),
+            None => generic_behavior(lang, "enthusiastic"),
+        }));
+    }
+
+    if triggered.is_empty() {
+        return None;
+    }
+    let dominant: Vec<(&str, String)> = triggered.into_iter().take(2).collect();
+    let mut text = dominant.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(" ");
+    let keys: Vec<&str> = dominant.iter().map(|(k, _)| *k).collect();
+    let contradictory = matches!(
+        (keys.first().copied(), keys.get(1).copied()),
+        (Some("frustrated"), Some("enthusiastic")) | (Some("disengaged"), Some("curious")) | (Some("disengaged"), Some("enthusiastic"))
+    );
+    if contradictory {
+        text.push(' ');
+        text.push_str(match lang {
+            "en" => "These two feelings pull in different directions — let the tension show instead of smoothing it over.",
+            "zh" => "这两种情绪相互拉扯——让这种张力自然流露，而不是刻意掩盖。",
+            _ => "Ces deux états tirent dans des directions opposées — laisse cette tension transparaître au lieu de la lisser.",
+        });
+    }
+    Some(text)
 }
 
 /// Fiction-specific emotion → narrative behavior bridge.
@@ -544,7 +590,7 @@ fn build_relationship_summary_for_ui(ctx: &SpeakerTurnContext) -> String {
 
 fn build_layer3_speech_act(
     ctx: &SpeakerTurnContext,
-    last_act: Option<&SpeechAct>,
+    recent_acts: &[SpeechAct],
 ) -> (SpeechAct, String) {
     let mut weights = [10u32; 10]; // Base weight: 10 each
 
@@ -635,16 +681,16 @@ fn build_layer3_speech_act(
         weights[SpeechAct::Provocation.idx()] += 5;
     }
 
+    // Anti-repetition: acts used in the recent window are strongly penalised
+    // (never zeroed — a mode may leave only a few acts available).
+    for act in recent_acts.iter().rev().take(constants::SPEECH_ACT_RECENT_WINDOW) {
+        let w = &mut weights[act.idx()];
+        *w = (*w * constants::SPEECH_ACT_RECENT_WEIGHT_PERCENT / 100).max(1);
+    }
+
     // Select with weighted random
     let mut rng = rand::thread_rng();
-    let mut selected = weighted_select(&weights, &mut rng);
-
-    // Anti-repetition: if same as last act, re-roll once
-    if let Some(last) = last_act {
-        if selected == *last {
-            selected = weighted_select(&weights, &mut rng);
-        }
-    }
+    let selected = weighted_select(&weights, &mut rng);
 
     let lang = ctx.discussion_language.as_str();
     let is_fiction = ctx.discussion_mode == DiscussionMode::CollaborativeFiction;
@@ -734,26 +780,41 @@ fn build_layer5_situation(ctx: &SpeakerTurnContext) -> String {
     // Turn 1 — opening instructions
     if ctx.turn_number <= 1 {
         let opening = if is_fiction {
-            // Fiction: all speakers on turn 1 continue the user's opening
-            match lang {
-                "en" => "The user has written the story opening. Continue the story from exactly where they left off. Write the next segment of the narrative.",
-                "zh" => "用户已经写了故事开头。从他们停笔的地方准确地继续故事。写下叙事的下一个片段。",
-                _ => "L'utilisateur a écrit l'ouverture de l'histoire. Continue le récit exactement là où il s'est arrêté. Écris le prochain segment du récit.",
+            // Fiction: continue the opening if someone wrote one, otherwise write it
+            match (&ctx.opening_author, ctx.is_first_speaker_this_turn) {
+                (Some(author), _) => match lang {
+                    "en" => format!("{author} has written the story opening. Continue the story from exactly where it left off. Write the next segment of the narrative."),
+                    "zh" => format!("{author}已经写了故事开头。从停笔的地方准确地继续故事。写下叙事的下一个片段。"),
+                    _ => format!("{author} a écrit l'ouverture de l'histoire. Continue le récit exactement là où il s'est arrêté. Écris le prochain segment du récit."),
+                },
+                (None, true) => match lang {
+                    "en" => "Nobody has written yet: write the OPENING of the story — set the scene, a protagonist and an inciting event.".to_string(),
+                    "zh" => "还没有人动笔：写下故事的开头——设定场景、一位主角和一个引发事件。".to_string(),
+                    _ => "Personne n'a encore écrit : écris l'OUVERTURE de l'histoire — pose le décor, un protagoniste et un événement déclencheur.".to_string(),
+                },
+                (None, false) => {
+                    let last = ctx.speakers_this_turn.last().map(String::as_str).unwrap_or_default();
+                    match lang {
+                        "en" => format!("Continue the story from where {last} left off. Ensure a seamless transition."),
+                        "zh" => format!("从{last}停笔的地方继续故事。确保无缝过渡。"),
+                        _ => format!("Continue l'histoire là où {last} s'est arrêté. Assure une transition fluide."),
+                    }
+                }
             }
         } else if ctx.is_first_speaker_this_turn {
             match lang {
                 "en" => "This is the OPENING ROUND — present your initial contribution ONLY. Jump straight into your position with a strong, memorable statement. Do NOT respond to others yet. Keep it to one paragraph.",
                 "zh" => "这是开场轮——仅表达你的初始贡献。以一个有力、令人难忘的声明直接切入你的立场。不要回应他人。保持一段论述。",
                 _ => "C'est le TOUR D'OUVERTURE — présente uniquement ta contribution initiale. Entre directement dans le vif avec une affirmation forte et marquante. Ne réponds PAS aux autres. Reste sur un paragraphe.",
-            }
+            }.to_string()
         } else {
             match lang {
                 "en" => "This is the OPENING ROUND — present YOUR OWN initial position with a strong, distinctive angle. Do NOT respond to what previous speakers said — the exchanges deepen next round. Keep it to one paragraph.",
                 "zh" => "这是开场轮——以独特的角度分享你的初始立场。不要回应之前发言者的内容——交流将在下一轮深入。保持一段论述。",
                 _ => "C'est le TOUR D'OUVERTURE — présente TA PROPRE position avec un angle fort et distinctif. Ne réponds PAS à ce que les précédents ont dit — les échanges s'approfondissent au tour suivant. Reste sur un paragraphe.",
-            }
+            }.to_string()
         };
-        parts.push(opening.to_string());
+        parts.push(opening);
         return parts.join("\n");
     }
 
@@ -793,8 +854,17 @@ fn build_layer5_situation(ctx: &SpeakerTurnContext) -> String {
         parts.push(mood);
     }
 
+    // Conversational focus (debate-like modes): who to address, or the topic itself.
+    // Replaces the generic "react to whoever just spoke" which made every speaker
+    // pile onto the first one.
+    if !is_fiction {
+        if let Some(focus_text) = mode_prompts::focus_instruction(ctx.focus.as_ref(), lang) {
+            parts.push(focus_text);
+        }
+    }
+
     // Turn position — expressed differently for fiction vs debate
-    if ctx.is_first_speaker_this_turn {
+    if is_fiction && ctx.is_first_speaker_this_turn {
         let pos = if is_fiction {
             match lang {
                 "en" => "You write FIRST this round — continue the story where the previous round ended. Maintain narrative momentum.",
@@ -809,7 +879,7 @@ fn build_layer5_situation(ctx: &SpeakerTurnContext) -> String {
             }
         };
         parts.push(pos.to_string());
-    } else if !ctx.speakers_this_turn.is_empty() {
+    } else if is_fiction && !ctx.speakers_this_turn.is_empty() {
         let names = ctx.speakers_this_turn.join(", ");
         let pos = if is_fiction {
             match lang {
@@ -895,6 +965,26 @@ pub fn build_relationships(
     hints
 }
 
+/// Directed reaction counts folded into an undirected edge list for the UI graph.
+/// `cumulative` maps `(from_id, to_id)` to `(likes, dislikes)`.
+pub fn relationship_edges(cumulative: &HashMap<(String, String), (u32, u32)>) -> Vec<RelationshipEdge> {
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut edges = Vec::new();
+    for (from, to) in cumulative.keys() {
+        let key = if from <= to { (from.clone(), to.clone()) } else { (to.clone(), from.clone()) };
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let (a, b) = key;
+        let (ab_likes, ab_dislikes) = cumulative.get(&(a.clone(), b.clone())).copied().unwrap_or((0, 0));
+        let (ba_likes, ba_dislikes) = cumulative.get(&(b.clone(), a.clone())).copied().unwrap_or((0, 0));
+        let kind = classify_relationship(ab_likes, ab_dislikes, ba_likes, ba_dislikes).map(|k| k.as_str().to_string());
+        edges.push(RelationshipEdge { a, b, ab_likes, ab_dislikes, ba_likes, ba_dislikes, kind });
+    }
+    edges.sort_by(|x, y| (&x.a, &x.b).cmp(&(&y.a, &y.b)));
+    edges
+}
+
 fn classify_relationship(
     my_likes: u32,
     my_dislikes: u32,
@@ -918,6 +1008,22 @@ fn classify_relationship(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_relationship_edges_fold_directions_and_classify() {
+        let mut cumulative: HashMap<(String, String), (u32, u32)> = HashMap::new();
+        cumulative.insert(("g1".into(), "g2".into()), (3, 0));
+        cumulative.insert(("g2".into(), "g1".into()), (2, 1));
+        cumulative.insert(("g3".into(), "g1".into()), (0, 2));
+        let edges = relationship_edges(&cumulative);
+        assert_eq!(edges.len(), 2);
+        let e12 = edges.iter().find(|e| e.a == "g1" && e.b == "g2").unwrap();
+        assert_eq!((e12.ab_likes, e12.ab_dislikes, e12.ba_likes, e12.ba_dislikes), (3, 0, 2, 1));
+        assert_eq!(e12.kind.as_deref(), Some("ally"));
+        let e13 = edges.iter().find(|e| e.a == "g1" && e.b == "g3").unwrap();
+        assert_eq!((e13.ab_likes, e13.ba_dislikes), (0, 2));
+        assert_eq!(e13.kind, None, "one-sided dislikes are not yet a rivalry");
+    }
 
     #[test]
     fn test_classify_ally() {
@@ -965,19 +1071,19 @@ mod tests {
     }
 
     #[test]
-    fn test_speech_act_anti_repetition() {
-        // With fixed seed, verify that re-roll produces at least sometimes a different act
+    fn test_speech_act_recent_window_penalises_repeats() {
+        // Recently used acts must be drawn far less often than fresh ones.
         let ctx = make_test_ctx();
-        let last = SpeechAct::Challenge;
-        let mut different_count = 0;
-        for _ in 0..20 {
-            let (act, _) = build_layer3_speech_act(&ctx, Some(&last));
-            if act != last {
-                different_count += 1;
+        let recent = vec![SpeechAct::Challenge, SpeechAct::Question, SpeechAct::Anecdote];
+        let mut repeats = 0;
+        for _ in 0..300 {
+            let (act, _) = build_layer3_speech_act(&ctx, &recent);
+            if recent.contains(&act) {
+                repeats += 1;
             }
         }
-        // At least some should be different (statistically near-certain with 20 tries)
-        assert!(different_count > 0);
+        // 3 penalised acts out of 10 with ~30% weight → expected ≈ 11% (< 25% with margin)
+        assert!(repeats < 75, "repeats={repeats}");
     }
 
     #[test]
@@ -985,20 +1091,56 @@ mod tests {
         let mut ctx = make_test_ctx();
         ctx.turn_number = 1;
         ctx.is_first_speaker_this_turn = true;
-        let output = build_dynamic_directive(&ctx, None);
+        let output = build_dynamic_directive(&ctx);
         assert_eq!(output.speech_act, "Opening");
         assert!(output.directive_text.contains("OUVERTURE") || output.directive_text.contains("OPENING"));
     }
 
     #[test]
-    fn test_directive_turn2_has_speech_act() {
-        let ctx = make_test_ctx();
-        let output = build_dynamic_directive(&ctx, None);
+    fn test_directive_turn2_has_speech_act_and_focus() {
+        let mut ctx = make_test_ctx();
+        ctx.focus = Some(Focus::Speaker("Le Philosophe".to_string()));
+        let output = build_dynamic_directive(&ctx);
         assert_ne!(output.speech_act, "Opening");
-        // Should contain approach instruction
-        assert!(
-            output.directive_text.contains("approche") || output.directive_text.contains("approach"),
-        );
+        assert!(output.directive_text.contains("approche") || output.directive_text.contains("approach"));
+        assert!(output.directive_text.contains("Adresse-toi en priorité à Le Philosophe"));
+        // No generic "react to whoever spoke" cue any more in debate modes
+        assert!(!output.directive_text.contains("Tu parles après"));
+
+        ctx.focus = Some(Focus::Topic);
+        let output = build_dynamic_directive(&ctx);
+        assert!(output.directive_text.contains("ne réponds à personne en particulier"));
+    }
+
+    #[test]
+    fn test_two_dominant_emotions_and_tension_nuance() {
+        let mut ctx = make_test_ctx();
+        ctx.emotions = EmotionalProfile { frustration: 90, enthousiasme: 90, ..Default::default() };
+        let text = build_layer1_emotion_behavior(&ctx).unwrap();
+        assert!(text.contains("frustré"), "{text}");
+        assert!(text.contains("enthousiaste"), "{text}");
+        assert!(text.contains("tension"), "{text}");
+
+        // Three triggers → only the two highest-priority ones are kept
+        ctx.emotions = EmotionalProfile { frustration: 90, accord: 10, curiosite: 90, ..Default::default() };
+        let text = build_layer1_emotion_behavior(&ctx).unwrap();
+        assert!(text.contains("frustré") && text.contains("désaccord"), "{text}");
+        assert!(!text.contains("curiosité"), "{text}");
+
+        ctx.emotions = EmotionalProfile::default();
+        assert!(build_layer1_emotion_behavior(&ctx).is_none());
+    }
+
+    #[test]
+    fn test_fiction_opening_author_wording() {
+        let mut ctx = make_test_ctx();
+        ctx.discussion_mode = DiscussionMode::CollaborativeFiction;
+        ctx.turn_number = 1;
+        ctx.is_first_speaker_this_turn = true;
+        ctx.opening_author = None;
+        assert!(build_dynamic_directive(&ctx).directive_text.contains("écris l'OUVERTURE"));
+        ctx.opening_author = Some("Léo".to_string());
+        assert!(build_dynamic_directive(&ctx).directive_text.contains("Léo a écrit l'ouverture"));
     }
 
     fn make_test_ctx() -> SpeakerTurnContext {
@@ -1017,6 +1159,9 @@ mod tests {
             discussion_language: "fr".to_string(),
             user_name: "Léo".to_string(),
             discussion_mode: DiscussionMode::Debate,
+            focus: None,
+            recent_speech_acts: vec![],
+            opening_author: None,
         }
     }
 }

@@ -334,7 +334,7 @@ mod tests {
     fn test_utf8_safety() {
         // French text with accented characters
         let text = "Singularité technologique.\n\nL'intelligence artificielle générale est un concept révolutionnaire. Régénération des données à travers les réseaux neuronaux. Décentralisation de l'information. Épistémologie computationnelle. Éblouissement cognitif.";
-        let chunks = chunk_text(&text, 0, 100, 20);
+        let chunks = chunk_text(text, 0, 100, 20);
         // Should not panic — all boundaries are valid UTF-8
         assert!(!chunks.is_empty());
         for chunk in &chunks {

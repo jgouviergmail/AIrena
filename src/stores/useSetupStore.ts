@@ -5,6 +5,7 @@ import type {
   DiscussionMode,
   DocumentFormat,
   DocumentInjectionMode,
+  DocumentUpdateGranularity,
   GladIAteurConfig,
   IArbitreConfig,
   LlmParams,
@@ -29,9 +30,11 @@ interface SetupState {
   argumentMapEnabled: boolean;
   ragDocuments: RagDocumentInfo[];
   documentInjectionMode: DocumentInjectionMode;
+  documentUpdateGranularity: DocumentUpdateGranularity;
   tokenBudgetPreview: TokenBudgetPreview | null;
 
   setDocumentInjectionMode: (mode: DocumentInjectionMode) => void;
+  setDocumentUpdateGranularity: (g: DocumentUpdateGranularity) => void;
   setTokenBudgetPreview: (preview: TokenBudgetPreview | null) => void;
   setArgumentMapEnabled: (v: boolean) => void;
   setDiscussionMode: (mode: DiscussionMode) => void;
@@ -80,9 +83,11 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   argumentMapEnabled: false,
   ragDocuments: [],
   documentInjectionMode: "rag" as DocumentInjectionMode,
+  documentUpdateGranularity: "turn" as DocumentUpdateGranularity,
   tokenBudgetPreview: null,
 
   setDocumentInjectionMode: (mode) => set({ documentInjectionMode: mode }),
+  setDocumentUpdateGranularity: (g) => set({ documentUpdateGranularity: g }),
   setTokenBudgetPreview: (preview) => set({ tokenBudgetPreview: preview }),
   setArgumentMapEnabled: (v) => set({ argumentMapEnabled: v }),
   setDiscussionMode: (mode) => set({ discussionMode: mode }),
@@ -174,6 +179,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       wikiSearchPool: s.wikiSearchPool,
       argumentMapEnabled: s.argumentMapEnabled,
       documentInjectionMode: s.documentInjectionMode,
+      documentUpdateGranularity: s.documentUpdateGranularity,
     };
   },
 
@@ -195,6 +201,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       argumentMapEnabled: false,
       ragDocuments: [],
       documentInjectionMode: "rag" as DocumentInjectionMode,
+      documentUpdateGranularity: "turn" as DocumentUpdateGranularity,
       tokenBudgetPreview: null,
     });
   },

@@ -18,4 +18,6 @@ pub enum CommandError {
     Rag(String),
     #[error("License error: {0}")]
     License(String),
+    #[error("LLM error: {0}")]
+    Llm(String),
 }

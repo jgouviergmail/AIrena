@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::constants;
+use crate::models::llm::ProviderKind;
 
 // ── Budget sections ────────────────────────────────────────────────────
 
@@ -89,6 +90,9 @@ pub struct BudgetParams {
     /// Active feature flags.
     #[serde(default)]
     pub features: BudgetFeatures,
+    /// Provider whose tokenizer ratio applies.
+    #[serde(default)]
+    pub provider: ProviderKind,
 }
 
 // ── Output: computed budget ────────────────────────────────────────────
@@ -195,6 +199,8 @@ pub struct TokenBudgetPreview {
     pub quality_level: BudgetQualityLevel,
     /// Tokens actually available for document sections (remaining after all non-document allocations).
     pub document_available_tokens: usize,
+    /// `document_available_tokens` expressed as printed pages (APPROX_CHARS_PER_PAGE).
+    pub document_available_pages: usize,
 }
 
 // ── Computation ────────────────────────────────────────────────────────
@@ -217,7 +223,7 @@ impl TokenBudget {
         }
 
         // ── Step 1: Reserve non-negotiable sections (in tokens) ──
-        let chars_per_token = chars_per_token_for_language(&params.language);
+        let chars_per_token = chars_per_token_for_language(&params.language, params.provider);
         let reserved_tokens = compute_reserved_tokens(params, chars_per_token);
 
         let available_tokens = if (params.num_ctx as usize) > reserved_tokens {
@@ -366,7 +372,7 @@ impl TokenBudget {
         params: &BudgetParams,
         priorities: &[SectionPriority],
     ) -> TokenBudgetPreview {
-        let chars_per_token = chars_per_token_for_language(&params.language);
+        let chars_per_token = chars_per_token_for_language(&params.language, params.provider);
         let reserved_tokens = compute_reserved_tokens(params, chars_per_token);
         let available_tokens = (params.num_ctx as usize).saturating_sub(reserved_tokens);
 
@@ -426,6 +432,8 @@ impl TokenBudget {
             .sum();
         let non_doc_tokens = (non_doc_chars as f64 / chars_per_token).ceil() as usize;
         let document_available_tokens = available_tokens.saturating_sub(non_doc_tokens);
+        let document_available_pages =
+            (document_available_tokens as f64 * chars_per_token / constants::APPROX_CHARS_PER_PAGE as f64).floor() as usize;
 
         TokenBudgetPreview {
             total_tokens: params.num_ctx,
@@ -437,6 +445,7 @@ impl TokenBudget {
             chars_per_token,
             quality_level,
             document_available_tokens,
+            document_available_pages,
         }
     }
 }
@@ -613,11 +622,14 @@ fn compute_reserved_tokens(params: &BudgetParams, chars_per_token: f64) -> usize
     system_prompt_tokens + deterministic_tokens + num_predict_tokens
 }
 
-/// Get the chars-per-token ratio for a given language code.
-pub fn chars_per_token_for_language(lang: &str) -> f64 {
-    match lang {
-        "zh" | "ja" | "ko" => constants::CHARS_PER_TOKEN_CJK,
-        _ => constants::CHARS_PER_TOKEN_LATIN,
+/// Chars-per-token ratio for a language code and provider tokenizer.
+pub fn chars_per_token_for_language(lang: &str, provider: ProviderKind) -> f64 {
+    let cjk = matches!(lang, "zh" | "ja" | "ko");
+    match (provider, cjk) {
+        (ProviderKind::DeepSeek, true) => constants::DEEPSEEK_CHARS_PER_TOKEN_CJK,
+        (ProviderKind::DeepSeek, false) => constants::DEEPSEEK_CHARS_PER_TOKEN_LATIN,
+        (ProviderKind::Ollama, true) => constants::CHARS_PER_TOKEN_CJK,
+        (ProviderKind::Ollama, false) => constants::CHARS_PER_TOKEN_LATIN,
     }
 }
 
@@ -705,7 +717,24 @@ mod tests {
             n_gladiateurs: n_glad,
             language: lang.to_string(),
             features: BudgetFeatures::default(),
+            provider: ProviderKind::Ollama,
         }
+    }
+
+    #[test]
+    fn chars_per_token_depends_on_provider_and_script() {
+        assert_eq!(chars_per_token_for_language("fr", ProviderKind::Ollama), constants::CHARS_PER_TOKEN_LATIN);
+        assert_eq!(chars_per_token_for_language("zh", ProviderKind::Ollama), constants::CHARS_PER_TOKEN_CJK);
+        assert_eq!(chars_per_token_for_language("en", ProviderKind::DeepSeek), constants::DEEPSEEK_CHARS_PER_TOKEN_LATIN);
+        assert_eq!(chars_per_token_for_language("ja", ProviderKind::DeepSeek), constants::DEEPSEEK_CHARS_PER_TOKEN_CJK);
+        // Same num_ctx → DeepSeek (fewer chars/token) has a slightly smaller char budget
+        let mut ds = make_params(16_384, 2, "fr");
+        ds.provider = ProviderKind::DeepSeek;
+        let ol = make_params(16_384, 2, "fr");
+        let pv_ds = TokenBudget::to_preview(&ds, &default_priorities());
+        let pv_ol = TokenBudget::to_preview(&ol, &default_priorities());
+        assert!(pv_ds.chars_per_token < pv_ol.chars_per_token);
+        assert!(pv_ds.document_available_pages <= pv_ol.document_available_pages);
     }
 
     #[test]

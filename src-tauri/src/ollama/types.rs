@@ -43,6 +43,12 @@ pub struct ChatResponse {
     /// or "stop" for normal EOS completion.
     #[serde(default)]
     pub done_reason: Option<String>,
+    /// Prompt tokens evaluated (final chunk only).
+    #[serde(default)]
+    pub prompt_eval_count: Option<u32>,
+    /// Generated tokens, thinking included (final chunk only).
+    #[serde(default)]
+    pub eval_count: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,7 +89,9 @@ pub struct ShowResponse {
 }
 
 /// Model details from the `details` field of `/api/show`.
+/// Deserialized in full for logging/diagnostics; only some fields are read.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[allow(dead_code)]
 pub struct ShowDetails {
     #[serde(default)]
     pub parent_model: String,
@@ -108,7 +116,9 @@ pub struct PsResponse {
 }
 
 /// A single running model from `/api/ps`.
+/// Deserialized in full for logging/diagnostics; only some fields are read.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct PsModel {
     /// Full model name (e.g. "llama3.1:8b-instruct-q4_K_M").
     #[serde(default)]

@@ -8,10 +8,11 @@ use crate::db::repository;
 use crate::engine::orchestrator::DiscussionEngine;
 use crate::engine::token_budget;
 use crate::error::CommandError;
+use crate::llm::factory;
 use crate::models::discussion::DiscussionConfig;
+use crate::models::llm::ProviderKind;
 use crate::models::engine_command::EngineCommand;
 use crate::models::events::ArenaEvent;
-use crate::ollama::client::OllamaClient;
 use crate::state::AppState;
 
 #[tauri::command]
@@ -86,12 +87,34 @@ pub async fn start_discussion(
         }
     }
 
-    // Validate that the Ollama model exists
-    let client = OllamaClient::new(&settings.ollama_url, &settings.ollama_model);
-    if let Err(e) = client.validate_model().await {
-        AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
-        return Err(CommandError::Ollama(e.to_string()));
+    // ── Monthly cloud budget pre-flight (DeepSeek) ─────────────────
+    let mut period_spent_usd = 0.0;
+    if settings.llm_provider == ProviderKind::DeepSeek {
+        if let Err(e) = repository::check_and_reset_deepseek_period(&state.db).await {
+            tracing::warn!(error = %e, "Failed to check/reset DeepSeek period — continuing");
+        }
+        period_spent_usd = repository::get_deepseek_period_usage(&state.db)
+            .await
+            .map(|p| p.cost_usd)
+            .unwrap_or(0.0);
+        if settings.deepseek_monthly_budget_usd > 0.0 && period_spent_usd >= settings.deepseek_monthly_budget_usd {
+            AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
+            return Err(CommandError::Llm(format!(
+                "Monthly budget exhausted ({period_spent_usd:.2} / {:.2} USD)",
+                settings.deepseek_monthly_budget_usd
+            )));
+        }
     }
+    let monthly_budget_usd = settings.deepseek_monthly_budget_usd;
+
+    // Build and validate the configured LLM provider (model exists / key accepted)
+    let provider = match factory::build_provider(&settings).await {
+        Ok(p) => p,
+        Err(e) => {
+            AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
+            return Err(CommandError::Llm(e.to_string()));
+        }
+    };
 
     // ── Increment license counter (after all pre-flight checks passed) ──
     {
@@ -112,9 +135,9 @@ pub async fn start_discussion(
     // Spawn the engine on the Tauri async runtime (non-blocking)
     let discussion_id = uuid::Uuid::new_v4().to_string();
     let id_clone = discussion_id.clone();
-    let ollama_url = settings.ollama_url.clone();
-    let ollama_model = settings.ollama_model.clone();
     let emotion_driven = settings.emotion_driven;
+    let reasoning_level = settings.reasoning_level;
+    let show_model_reasoning = settings.show_model_reasoning;
     let tavily_key = if settings.tavily_api_key.is_empty() {
         None
     } else {
@@ -131,11 +154,13 @@ pub async fn start_discussion(
 
     tauri::async_runtime::spawn(async move {
         let mut engine = DiscussionEngine::new(
-            config, id_clone, &ollama_url, &ollama_model,
+            config, id_clone, provider,
             tavily_key.as_deref(), db_clone, rag_store, priorities,
         );
         engine.set_cancel_token(engine_cancel);
         engine.set_emotion_driven(emotion_driven);
+        engine.set_reasoning_options(reasoning_level, show_model_reasoning);
+        engine.set_budget_guard(period_spent_usd, monthly_budget_usd);
         engine.set_argument_map_enabled(argument_map_enabled);
         engine.run(cmd_rx, on_event).await;
 

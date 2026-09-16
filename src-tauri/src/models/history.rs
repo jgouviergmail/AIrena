@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+use super::llm::UsageLedger;
 use super::message::Message;
+
+fn default_provider() -> String {
+    "ollama".to_string()
+}
 
 /// Participant metadata stored as JSON in the discussions table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +40,15 @@ pub struct SaveDiscussionRequest {
     pub argument_map_md: String,
     #[serde(default)]
     pub argument_map_md_by_speaker: String,
+    /// Serialised `ArgumentMap` (empty when the map was disabled)
+    #[serde(default)]
+    pub argument_map_json: String,
+    #[serde(default = "default_provider")]
+    pub llm_provider: String,
+    #[serde(default)]
+    pub usage: UsageLedger,
+    #[serde(default)]
+    pub estimated_cost_usd: f64,
 }
 
 /// Lightweight summary for listing discussions (no messages).
@@ -52,6 +66,9 @@ pub struct DiscussionSummary {
     pub discussion_mode: String,
     pub document_format: String,
     pub has_argument_map: bool,
+    pub llm_provider: String,
+    pub total_tokens: u32,
+    pub estimated_cost_usd: f64,
 }
 
 /// Full discussion detail with all messages.
@@ -72,4 +89,9 @@ pub struct DiscussionDetail {
     pub document_format: String,
     pub argument_map_md: String,
     pub argument_map_md_by_speaker: String,
+    /// Serialised `ArgumentMap` — empty for discussions saved before v1.16
+    pub argument_map_json: String,
+    pub llm_provider: String,
+    pub usage: UsageLedger,
+    pub estimated_cost_usd: f64,
 }

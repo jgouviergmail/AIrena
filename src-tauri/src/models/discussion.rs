@@ -85,6 +85,20 @@ pub struct DiscussionConfig {
     /// Whether to inject the full document or use RAG chunk search.
     #[serde(default)]
     pub document_injection_mode: DocumentInjectionMode,
+    /// Co-construction: regenerate the document once per turn or after every intervention.
+    #[serde(default)]
+    pub document_update_granularity: DocumentUpdateGranularity,
+}
+
+/// When the co-construction document is regenerated.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DocumentUpdateGranularity {
+    /// One LLM call at the end of the turn integrating every contribution (default).
+    #[default]
+    Turn,
+    /// One LLM call after each intervention (legacy behaviour, N× more calls).
+    Intervention,
 }
 
 /// Controls how imported documents are provided to the AI during discussions.

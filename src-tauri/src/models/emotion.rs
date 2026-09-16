@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Emotional profile with 6 axes (0-100 each)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmotionalProfile {
     pub engagement: u8,

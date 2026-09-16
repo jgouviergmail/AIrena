@@ -2,8 +2,19 @@ import { create } from "zustand";
 import { logger } from "@/lib/logger";
 import { extractErrorMessage } from "@/lib/error-utils";
 import { toast } from "@/stores/useToastStore";
-import type { AppSettings, ModelBudgetInfo, ModelInfo, PredefinedProfile } from "@/lib/types";
+import type { AppSettings, LlmConstants, ModelBudgetInfo, ModelInfo, PredefinedProfile, ProviderKind } from "@/lib/types";
 import * as api from "@/lib/tauri-api";
+
+/** Model label shown in summaries/history: "provider · model". */
+export function describeActiveModel(settings: AppSettings): string {
+  const model = settings.llmProvider === "deepseek" ? settings.deepseekModel : settings.ollamaModel;
+  return model ? `${settings.llmProvider} · ${model}` : settings.llmProvider;
+}
+
+/** Whether Ollama must be reachable for the current configuration (chat or embeddings). */
+export function needsOllama(settings: AppSettings): boolean {
+  return settings.llmProvider === "ollama" || settings.embeddingModel.trim().length > 0;
+}
 
 interface SettingsState {
   settings: AppSettings;
@@ -19,8 +30,12 @@ interface SettingsState {
   modelBudgetLoading: boolean;
   initializingOllama: boolean;
   ollamaInitialized: boolean;
+  /** Backend-owned provider limits (loaded once). */
+  llmConstants: LlmConstants | null;
 
   hydrate: () => Promise<void>;
+  setProvider: (provider: ProviderKind) => void;
+  loadLlmConstants: () => Promise<LlmConstants | null>;
   updateSettings: (patch: Partial<AppSettings>) => void;
   saveSettings: () => Promise<void>;
   checkOllama: () => Promise<boolean>;
@@ -55,6 +70,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     licenseKey: "",
     tokenBudgetPriorities: "",
     numCtx: 8192,
+    llmProvider: "ollama",
+    reasoningLevel: "auto",
+    showModelReasoning: true,
+    deepseekApiKey: "",
+    deepseekModel: "",
+    deepseekMonthlyBudgetUsd: 0,
+    deepseekPeriodStart: "",
+    deepseekPeriodUsageJson: "{}",
+    deepseekUsageHistory: "[]",
   },
   profiles: [],
   arbitreProfiles: [],
@@ -68,6 +92,35 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   modelBudgetLoading: false,
   initializingOllama: false,
   ollamaInitialized: false,
+  llmConstants: null,
+
+  setProvider: (provider) => {
+    // numCtx changes meaning with the provider: Ollama's KV-cache window
+    // (bounded by VRAM) vs DeepSeek's context budget (bounded by the API).
+    // Re-anchor it so a value tuned for one backend never leaks into the other.
+    set((s) => {
+      let numCtx = s.settings.numCtx;
+      if (provider === "ollama" && s.modelBudgetInfo?.recommendedNumCtx) {
+        numCtx = s.modelBudgetInfo.recommendedNumCtx;
+      } else if (provider === "deepseek" && s.llmConstants) {
+        numCtx = Math.max(s.llmConstants.deepseekMinContextBudget, Math.min(s.llmConstants.deepseekMaxContextBudget, numCtx));
+      }
+      return { settings: { ...s.settings, llmProvider: provider, numCtx } };
+    });
+  },
+
+  loadLlmConstants: async () => {
+    const cached = get().llmConstants;
+    if (cached) return cached;
+    try {
+      const llmConstants = await api.getLlmConstants();
+      set({ llmConstants });
+      return llmConstants;
+    } catch (e) {
+      logger.error("settings", "Failed to load LLM constants", e);
+      return null;
+    }
+  },
 
   hydrate: async () => {
     try {

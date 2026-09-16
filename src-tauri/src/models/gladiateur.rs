@@ -28,6 +28,8 @@ pub struct GladIAteurState {
     pub ban_issued_this_turn: bool,
     pub memory: ParticipantMemory,
     pub emotions: EmotionalProfile,
+    /// Starting profile — the rule-based decay pulls emotions back toward it.
+    pub initial_emotions: EmotionalProfile,
     /// Emotion history per turn (capped at 30)
     pub emotion_history: Vec<EmotionSnapshot>,
     /// History of past search queries (for deduplication in prompts)
@@ -42,6 +44,7 @@ impl GladIAteurState {
             ban_remaining_turns: 0,
             ban_issued_this_turn: false,
             memory: ParticipantMemory::default(),
+            initial_emotions: emotions.clone(),
             emotions,
             emotion_history: Vec::new(),
             search_queries_history: Vec::new(),

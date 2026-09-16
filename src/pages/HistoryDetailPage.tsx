@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Bot, Calendar, Download, Network, Repeat, Trash2, Users } from "lucide-react";
@@ -6,6 +6,8 @@ import { TopBar } from "@/components/layout/TopBar";
 import { ReadOnlyFeed } from "@/components/discussion/ReadOnlyFeed";
 import { SimpleMd } from "@/components/shared/SimpleMd";
 import { StatCard } from "@/components/shared/StatCard";
+import { UsageSummaryCard } from "@/components/shared/UsageSummaryCard";
+import { ArgumentMapStats, parseArgumentMapJson } from "@/components/mindmap/ArgumentMapStats";
 import { MarkmapViewer } from "@/components/mindmap/MarkmapViewer";
 import type { MarkmapViewerHandle } from "@/components/mindmap/MarkmapViewer";
 import { getDiscussionHistory, deleteDiscussionHistory, downloadTextFile, downloadMultipleTextFiles } from "@/lib/tauri-api";
@@ -21,6 +23,8 @@ export default function HistoryDetailPage() {
   const [tab, setTab] = useState<"synthesis" | "discussion" | "argumentMap" | "argumentMapBySpeaker">("synthesis");
   const markmapRef = useRef<MarkmapViewerHandle>(null);
   const markmapBySpeakerRef = useRef<MarkmapViewerHandle>(null);
+  // Structured map (v1.16+); older discussions only carry the markdown views
+  const argumentMap = useMemo(() => parseArgumentMapJson(detail?.argumentMapJson), [detail?.argumentMapJson]);
 
   useEffect(() => {
     if (!id) return;
@@ -69,7 +73,7 @@ export default function HistoryDetailPage() {
   return (
     <>
       <TopBar title={detail.topic} />
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="mx-auto max-w-5xl space-y-6">
           {/* Stats — narrow */}
           <div className="mx-auto max-w-2xl space-y-3">
@@ -85,7 +89,7 @@ export default function HistoryDetailPage() {
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <StatCard
                 label={t("summary.turns")}
                 value={String(detail.totalTurns)}
@@ -109,6 +113,13 @@ export default function HistoryDetailPage() {
                 truncate
               />
             </div>
+
+            <UsageSummaryCard
+              provider={detail.llmProvider}
+              total={detail.usage.total}
+              calls={detail.usage.calls}
+              estimatedCostUsd={detail.llmProvider === "ollama" ? null : detail.estimatedCostUsd}
+            />
 
             {/* Participants with emojis */}
             <div className="rounded-xl border border-border bg-card p-4">
@@ -202,13 +213,19 @@ export default function HistoryDetailPage() {
             <ReadOnlyFeed messages={detail.messages} participants={detail.participants} />
           )}
           {tab === "argumentMap" && (
-            <div className="rounded-xl border border-border bg-card p-2" style={{ height: 400 }}>
-              <MarkmapViewer ref={markmapRef} markdown={detail.argumentMapMd} />
+            <div className="rounded-xl border border-border bg-card p-2">
+              <ArgumentMapStats map={argumentMap} />
+              <div style={{ height: 400 }}>
+                <MarkmapViewer ref={markmapRef} markdown={detail.argumentMapMd} />
+              </div>
             </div>
           )}
           {tab === "argumentMapBySpeaker" && (
-            <div className="rounded-xl border border-border bg-card p-2" style={{ height: 400 }}>
-              <MarkmapViewer ref={markmapBySpeakerRef} markdown={detail.argumentMapMdBySpeaker} />
+            <div className="rounded-xl border border-border bg-card p-2">
+              <ArgumentMapStats map={argumentMap} />
+              <div style={{ height: 400 }}>
+                <MarkmapViewer ref={markmapBySpeakerRef} markdown={detail.argumentMapMdBySpeaker} />
+              </div>
             </div>
           )}
           {/* Off-screen MarkmapViewers — keep refs alive for SVG export from any tab */}

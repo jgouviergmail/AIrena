@@ -1,12 +1,18 @@
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, CheckCircle, Database, FileText, Info, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, Coins, Database, FileText, Info, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { estimateTurnCost, formatUsd } from "@/lib/cost-estimate";
+import { useSettingsStore } from "@/stores/useSettingsStore";
 import type { TokenBudgetPreview as TokenBudgetPreviewType } from "@/lib/types";
 
 interface Props {
   preview: TokenBudgetPreviewType | null;
   documentInjectionMode: "rag" | "fullInjection";
   hasDocuments: boolean;
+  /** Cost preview inputs (cloud providers only) */
+  nGladiateurs: number;
+  numPredict: number;
 }
 
 const SECTION_COLORS: Record<string, string> = {
@@ -21,21 +27,37 @@ const SECTION_COLORS: Record<string, string> = {
   positionalMap: "bg-amber-500",
 };
 
-const APPROX_CHARS_PER_PAGE = 2_000;
-
-export function TokenBudgetPreviewPanel({ preview, documentInjectionMode, hasDocuments }: Props) {
+export function TokenBudgetPreviewPanel({ preview, documentInjectionMode, hasDocuments, nGladiateurs, numPredict }: Props) {
   const { t } = useTranslation();
+  const provider = useSettingsStore((s) => s.settings.llmProvider);
+  const deepseekModel = useSettingsStore((s) => s.settings.deepseekModel);
+  const llmConstants = useSettingsStore((s) => s.llmConstants);
+  const loadLlmConstants = useSettingsStore((s) => s.loadLlmConstants);
+  const isCloud = provider === "deepseek";
+
+  useEffect(() => {
+    if (isCloud && !llmConstants) loadLlmConstants();
+  }, [isCloud, llmConstants, loadLlmConstants]);
 
   if (!preview) return null;
 
-  const { totalTokens, reservedTokens, availableTokens, sections, warnings, fullDocumentMode, charsPerToken, qualityLevel, documentAvailableTokens } = preview;
+  const { totalTokens, reservedTokens, availableTokens, sections, warnings, fullDocumentMode, charsPerToken, qualityLevel, documentAvailableTokens, documentAvailablePages } = preview;
   const usedTokens = reservedTokens + Math.round(
     sections.reduce((sum, s) => sum + s.allocatedChars, 0) / charsPerToken,
   );
   const usedPct = totalTokens > 0 ? Math.min(100, (usedTokens / totalTokens) * 100) : 0;
 
-  // Document capacity: actual remaining tokens after all non-document allocations
-  const maxDocPages = Math.floor(documentAvailableTokens * charsPerToken / APPROX_CHARS_PER_PAGE);
+  // Order-of-magnitude cost per turn (cloud provider with a known price list)
+  const price = isCloud ? llmConstants?.deepseekPricing.find((p) => p.model === deepseekModel) : undefined;
+  const turnCost = price && llmConstants
+    ? estimateTurnCost({
+        price,
+        promptTokens: usedTokens,
+        outputTokens: Math.round(numPredict / 2),
+        nGladiateurs,
+        offpeakFactor: llmConstants.deepseekOffpeakFactor,
+      })
+    : null;
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card p-4">
@@ -89,11 +111,28 @@ export function TokenBudgetPreviewPanel({ preview, documentInjectionMode, hasDoc
         </div>
       </div>
 
-      {/* Document capacity indicator */}
+      {/* Document capacity indicator (pages computed by the backend) */}
       <div className="flex items-start gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground">
         <Info className="mt-0.5 h-3 w-3 shrink-0 text-primary" />
-        <span>{t("setup.budgetDocCapacity", { tokens: documentAvailableTokens.toLocaleString(), pages: maxDocPages })}</span>
+        <span>{t("setup.budgetDocCapacity", { tokens: documentAvailableTokens.toLocaleString(), pages: documentAvailablePages })}</span>
       </div>
+
+      {/* Cost preview (cloud provider) */}
+      {isCloud && (
+        <div className="flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-400">
+          <Coins className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            {turnCost
+              ? t("setup.budgetCostPerTurn", {
+                  peak: formatUsd(turnCost.peakUsd),
+                  offpeak: formatUsd(turnCost.offpeakUsd),
+                  calls: turnCost.callsPerTurn,
+                  model: deepseekModel,
+                })
+              : t("setup.budgetCostUnknown", { model: deepseekModel })}
+          </span>
+        </div>
+      )}
 
       {/* Full doc / RAG badge */}
       {hasDocuments && (

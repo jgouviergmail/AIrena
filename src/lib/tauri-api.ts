@@ -3,10 +3,14 @@ import type {
   AppSettings,
   ArenaEvent,
   BudgetParams,
+  DeepSeekBalance,
+  DeepSeekModels,
   DiscussionConfig,
   DiscussionDetail,
   DiscussionSummary,
   LicenseStatus,
+  LlmConstants,
+  LlmUsagePeriod,
   ModelBudgetInfo,
   ModelInfo,
   PredefinedProfile,
@@ -98,6 +102,29 @@ export async function computeTokenBudget(
     params,
     priorities,
   });
+}
+
+// -- LLM provider commands (DeepSeek) --
+
+export async function getLlmConstants(): Promise<LlmConstants> {
+  return await invoke<LlmConstants>("get_llm_constants");
+}
+
+/** Models available on the account; `apiKey` lets Settings test an unsaved key. */
+export async function listDeepSeekModels(apiKey?: string): Promise<DeepSeekModels> {
+  return await invoke<DeepSeekModels>("list_deepseek_models", { apiKey: apiKey ?? null });
+}
+
+export async function validateDeepSeekKey(apiKey: string): Promise<DeepSeekBalance> {
+  return await invoke<DeepSeekBalance>("validate_deepseek_key", { apiKey });
+}
+
+export async function getLlmUsagePeriod(): Promise<LlmUsagePeriod> {
+  return await invoke<LlmUsagePeriod>("get_llm_usage_period");
+}
+
+export async function resetLlmUsagePeriod(): Promise<LlmUsagePeriod> {
+  return await invoke<LlmUsagePeriod>("reset_llm_usage_period");
 }
 
 // -- Settings commands --

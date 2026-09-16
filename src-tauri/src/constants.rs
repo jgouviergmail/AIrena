@@ -188,19 +188,38 @@ pub const EMOTION_SUPPORT_CONF: u8 = 5;
 pub const EMOTION_BAN_FRUST: u8 = 15;
 pub const EMOTION_BAN_ENG: u8 = 10;
 
-// Stagnation penalty deltas
+// Stagnation penalty deltas (applied only when stagnation is actually detected)
 pub const EMOTION_STAGNATION_ENG: u8 = 5;
 pub const EMOTION_STAGNATION_CURIOSITE: u8 = 5;
 
-// Natural decay — extremes return toward target at the given rate
-pub const EMOTION_DECAY_FRUSTRATION_TARGET: u8 = 50;
+/// Jaccard similarity between two consecutive contextual summaries at or above
+/// which the discussion is considered to be going in circles.
+pub const EMOTION_STAGNATION_SIMILARITY: f32 = 0.8;
+
+/// Consecutive turns without any like/dislike after which the discussion is
+/// considered stagnating.
+pub const EMOTION_STAGNATION_REACTION_DROUGHT_TURNS: u32 = 2;
+
+// Accord follows the reactions a speaker GIVES: per net reaction, and cap
+pub const EMOTION_ACCORD_GIVEN_FACTOR: u8 = 4;
+pub const EMOTION_ACCORD_GIVEN_CAP: u8 = 12;
+
+/// Bound (±) on each axis of an LLM-provided emotion delta. Reactions and bans
+/// are already applied by rules; the model only adds tone/content nuance.
+pub const EMOTION_LLM_DELTA_CAP: i8 = 10;
+
+// Natural decay — extremes return toward the persona's INITIAL profile at the given rate
 pub const EMOTION_DECAY_FRUSTRATION_RATE: u8 = 2;
-pub const EMOTION_DECAY_ENTHUSIASM_TARGET: u8 = 50;
 pub const EMOTION_DECAY_ENTHUSIASM_RATE: u8 = 1;
 
 // Emotional contagion — weak pull toward group average
 pub const EMOTION_CONTAGION_RATE: f32 = 0.05;
 pub const EMOTION_CONTAGION_MAX_DELTA: f32 = 3.0;
+
+/// Whether the IArbitre's profile is part of the contagion average.
+/// The moderator observes more than it participates: it feels the room but
+/// does not set its mood.
+pub const EMOTION_CONTAGION_INCLUDE_ARBITRE: bool = false;
 
 // ── Personality description thresholds ───────────────────────────────────
 
@@ -214,6 +233,59 @@ pub const PERSONALITY_LOW: u8 = 30;
 /// Low threshold specifically for frustration (20 vs 30 for other axes).
 /// Frustration defaults at 10 — a low bar avoids triggering on near-default values.
 pub const PERSONALITY_LOW_FRUSTRATION: u8 = 20;
+
+// ── Conversational focus (anti "everyone against X") ───────────────────
+
+/// Base weight of any recent speaker as a focus candidate.
+pub const FOCUS_WEIGHT_BASE: u32 = 1;
+/// Extra weight when nobody has addressed that participant yet this turn.
+pub const FOCUS_WEIGHT_UNTARGETED: u32 = 3;
+/// Extra weight when an ally/rival/tense relationship exists with that participant.
+pub const FOCUS_WEIGHT_RELATIONSHIP: u32 = 2;
+/// Weight of "advance the topic without addressing anyone".
+pub const FOCUS_WEIGHT_TOPIC: u32 = 2;
+/// Divisor applied to the truncation budget of non-focus messages in the
+/// current-turn block (the focus message keeps the full per-message budget).
+pub const FOCUS_OTHER_MESSAGE_DIVISOR: usize = 2;
+
+// ── Speech acts ─────────────────────────────────────────────────────────
+
+/// How many of a speaker's most recent speech acts are penalised for variety.
+pub const SPEECH_ACT_RECENT_WINDOW: usize = 3;
+/// Weight multiplier (percent) applied to recently used speech acts.
+pub const SPEECH_ACT_RECENT_WEIGHT_PERCENT: u32 = 30;
+
+// ── Socratic mode ───────────────────────────────────────────────────────
+
+/// Previously asked questions injected into the next question prompt (anti-repetition).
+pub const SOCRATIC_PREVIOUS_QUESTIONS: usize = 3;
+
+// ── Emotion analysis JSON ───────────────────────────────────────────────
+
+/// Top-level key the emotion analyst uses to flag a stalling discussion.
+pub const EMOTION_STAGNATION_JSON_KEY: &str = "stagnating";
+
+// ── IArbitre rule-based emotions ────────────────────────────────────────
+
+/// Frustration and confidence gained by IArbitre when it issues a ban.
+pub const EMOTION_ARBITRE_BAN_DELTA: u8 = 5;
+/// Engagement lost by IArbitre per intervention while the discussion stagnates.
+pub const EMOTION_ARBITRE_STAGNATION_ENG: u8 = 3;
+
+// ── Model refusal detection (trilingual) ────────────────────────────────
+
+/// A short answer starting with one of these is a safety refusal, not content.
+pub const REFUSAL_PREFIXES: &[&str] = &[
+    "i'm sorry", "i cannot", "i can't", "i apologize", "sorry, but", "as an ai",
+    "je suis désolé", "je suis désolée", "je ne peux pas", "je ne suis pas en mesure", "en tant qu'ia", "désolé, mais", "désolée, mais",
+    "抱歉", "对不起", "我不能", "我无法", "作为一个人工智能", "作为ai",
+];
+/// A short answer containing one of these is a safety refusal.
+pub const REFUSAL_SUBSTRINGS: &[&str] = &[
+    "i can't help with that", "i cannot assist", "i'm not able to", "i can't assist",
+    "je ne peux pas vous aider", "je ne peux pas t'aider", "je ne suis pas en mesure de",
+    "我无法帮助", "我不能协助",
+];
 
 // ── Moderation ──────────────────────────────────────────────────────────
 
@@ -278,8 +350,9 @@ pub const TEMP_REFUSAL_BOOST: f32 = 0.2;
 /// Maximum temperature after boosts.
 pub const TEMP_MAX: f32 = 2.0;
 
-/// Low temperature used for voting, ordering, and other structured JSON responses.
-pub const TEMP_VOTING: f32 = 0.3;
+/// Low temperature used for every structured JSON call (reactions, moderation,
+/// memory, emotions, votes, search decisions, RAG selection, respond/pass).
+pub const TEMP_JSON_OUTPUT: f32 = 0.3;
 
 // ── LLM default parameters ──────────────────────────────────────────
 
@@ -466,10 +539,42 @@ pub const ARGMAP_PROMPT_LABEL_CHARS: usize = 100;
 pub const ARGMAP_NUM_PREDICT: i32 = 4096;
 
 /// Minimum num_ctx for argument map extraction (prompt + response must both fit).
+/// Only the Ollama adapter consumes `num_ctx`; cloud providers ignore it.
 pub const ARGMAP_NUM_CTX: u32 = 16384;
 
-/// Temperature for argument map extraction (low for structured JSON output).
-pub const ARGMAP_TEMPERATURE: f32 = 0.3;
+/// Minimum non-moderator messages in a turn before extraction is worth a call.
+pub const ARGMAP_MIN_TURN_MESSAGES: usize = 2;
+
+/// Jaccard similarity (normalised tokens) at or above which two thesis labels
+/// are the same thesis (reformulation by the model).
+pub const ARGMAP_THESIS_SIMILARITY_THRESHOLD: f32 = 0.7;
+/// Looser Jaccard threshold used to resolve a *reference* to an existing thesis
+/// (`for_thesis` / `against_thesis`): the model quotes from the list it was
+/// shown, so the best candidate above this score is the intended one.
+pub const ARGMAP_REFERENCE_SIMILARITY_THRESHOLD: f32 = 0.5;
+/// Share of the shorter label's tokens found in the longer one for a
+/// containment match (a reformulation with extra words).
+pub const ARGMAP_CONTAINMENT_THRESHOLD: f32 = 0.85;
+/// Containment only applies to labels with at least this many tokens —
+/// a short label contained in a longer one may state the opposite.
+pub const ARGMAP_CONTAINMENT_MIN_TOKENS: usize = 4;
+
+/// Marker prefixed to nodes added by the latest extraction (with its trailing space).
+pub const ARGMAP_NEW_MARKER_PREFIX: &str = "✨ ";
+
+/// Function words ignored when comparing labels (FR + EN; CJK is per character).
+pub const ARGMAP_STOP_WORDS: &[&str] = &[
+    // FR
+    "le", "la", "les", "de", "des", "du", "un", "une", "et", "ou", "au", "aux", "en", "est", "sont",
+    "que", "qui", "ne", "pas", "plus", "pour", "par", "sur", "dans", "ce", "cette", "ces", "son", "sa",
+    "ses", "il", "elle", "ils", "elles", "on", "nous", "vous", "leur", "leurs", "qu", "se", "sa", "mais",
+    "donc", "car", "avec", "sans", "tout", "tous", "toute", "toutes", "peut", "doit", "etre", "avoir",
+    // EN
+    "the", "an", "of", "to", "in", "on", "and", "or", "is", "are", "be", "that", "this", "these",
+    "those", "it", "its", "for", "with", "as", "by", "not", "than", "but", "at", "from", "can", "will",
+    "should", "must", "have", "has", "do", "does",
+];
+
 
 // ── License ──────────────────────────────────────────────────────────
 
@@ -487,3 +592,87 @@ pub const LICENSE_ED25519_PUBLIC_KEY_HEX: &str = "758f08355ba45e51fc77559c3a16a4
 
 /// AES-256-GCM shared key for license encryption (hex, 32 bytes).
 pub const LICENSE_AES_KEY_HEX: &str = "ab0bede65de2e957c25846a21420657eae852cd88288c4fbfa87077909cb1bbe";
+
+// ── LLM providers (generic) ──────────────────────────────────────────
+
+/// Consecutive reasoning-mode failures (empty content / refusal) before the
+/// engine disables reasoning for the rest of the discussion.
+pub const REASONING_MAX_FAILURES: u32 = 2;
+
+/// Share of the monthly cloud budget at which a warning is emitted (0.8 = 80%).
+pub const LLM_BUDGET_WARN_RATIO: f64 = 0.8;
+
+// ── DeepSeek — API ───────────────────────────────────────────────────
+
+/// OpenAI-compatible base URL.
+pub const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
+pub const DEEPSEEK_CHAT_PATH: &str = "/chat/completions";
+pub const DEEPSEEK_MODELS_PATH: &str = "/models";
+pub const DEEPSEEK_BALANCE_PATH: &str = "/user/balance";
+
+/// Model used when none is configured.
+pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-flash";
+
+/// Fallback model list when `GET /models` is unreachable (doc 2026-09-10).
+pub const DEEPSEEK_KNOWN_MODELS: &[&str] = &["deepseek-flash", "deepseek-v4-pro"];
+
+/// TCP/TLS connection timeout (seconds).
+pub const DEEPSEEK_CONNECT_TIMEOUT_SECS: u64 = 15;
+
+/// Maximum silence between two SSE chunks (seconds). Keep-alive comments reset it.
+/// Reasoning at `max` effort can legitimately take minutes before the first token.
+pub const DEEPSEEK_IDLE_TIMEOUT_SECS: u64 = 180;
+
+/// Retry attempts on transient errors (429/5xx/network) when no token was emitted yet.
+pub const DEEPSEEK_MAX_RETRIES: u32 = 3;
+
+/// Exponential backoff base (ms): sleep = base × 2^attempt + jitter.
+pub const DEEPSEEK_RETRY_BASE_MS: u64 = 1_000;
+
+/// Random jitter added to each backoff (ms).
+pub const DEEPSEEK_RETRY_JITTER_MS: u64 = 250;
+
+/// Hard cap on `max_tokens` accepted by the API.
+pub const DEEPSEEK_MAX_OUTPUT_TOKENS: i32 = 393_216;
+
+/// Extra output tokens granted on top of `num_predict` when reasoning is active.
+/// Assumption (H-DS-1): `max_tokens` bounds reasoning + content together — the API
+/// defaults (8K without thinking vs 64K with) strongly suggest it.
+pub const DEEPSEEK_REASONING_ALLOWANCE_LOW: i32 = 4_096;
+pub const DEEPSEEK_REASONING_ALLOWANCE_HIGH: i32 = 12_288;
+pub const DEEPSEEK_REASONING_ALLOWANCE_MAX: i32 = 32_768;
+
+/// `top_p` lower bound enforced by the API while thinking is enabled.
+pub const DEEPSEEK_TOP_P_MIN_THINKING: f32 = 0.95;
+
+/// Chars-per-token ratios from DeepSeek's tokenizer guide (≈0.3 token/char EN, ≈0.6 ZH).
+pub const DEEPSEEK_CHARS_PER_TOKEN_LATIN: f64 = 3.3;
+pub const DEEPSEEK_CHARS_PER_TOKEN_CJK: f64 = 1.7;
+
+/// Context budget (tokens) fed to the waterfall allocator in DeepSeek mode.
+/// The model accepts 1M, but prompt size is a direct cost driver.
+pub const DEEPSEEK_DEFAULT_CONTEXT_BUDGET: u32 = 32_768;
+pub const DEEPSEEK_MIN_CONTEXT_BUDGET: u32 = 4_096;
+pub const DEEPSEEK_MAX_CONTEXT_BUDGET: u32 = 262_144;
+
+/// Default UI bound for `num_predict` in DeepSeek mode (Ollama keeps 4096).
+pub const DEEPSEEK_MAX_NUM_PREDICT_UI: i32 = 16_384;
+
+// ── DeepSeek — pricing (USD per 1M tokens, peak hours) ───────────────
+
+/// Date of the official price list these constants were copied from.
+pub const DEEPSEEK_PRICING_DATE: &str = "2026-09-10";
+
+/// Off-peak prices are this fraction of peak prices.
+pub const DEEPSEEK_OFFPEAK_FACTOR: f64 = 0.5;
+
+/// Peak windows in UTC hours, `[start, end)`, Monday to Friday.
+pub const DEEPSEEK_PEAK_WINDOWS_UTC: &[(u32, u32)] = &[(1, 4), (6, 10)];
+
+pub const DEEPSEEK_PRICE_FLASH_INPUT_HIT: f64 = 0.006;
+pub const DEEPSEEK_PRICE_FLASH_INPUT_MISS: f64 = 0.30;
+pub const DEEPSEEK_PRICE_FLASH_OUTPUT: f64 = 1.20;
+
+pub const DEEPSEEK_PRICE_V4PRO_INPUT_HIT: f64 = 0.044;
+pub const DEEPSEEK_PRICE_V4PRO_INPUT_MISS: f64 = 1.32;
+pub const DEEPSEEK_PRICE_V4PRO_OUTPUT: f64 = 3.96;

@@ -4,7 +4,7 @@
 
 **Transformez vos modèles IA locaux en gladiateurs du débat**
 
-[![Version](https://img.shields.io/badge/version-1.10-blue.svg)](https://github.com/jgouv/AIrena/releases)
+[![Version](https://img.shields.io/badge/version-1.16-blue.svg)](https://github.com/jgouv/AIrena/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg)](https://reactjs.org/)
 [![Rust](https://img.shields.io/badge/Rust-1.93+-orange.svg)](https://www.rust-lang.org/)
@@ -23,9 +23,9 @@
 
 **AIrena** est une application desktop qui orchestre des discussions entre plusieurs intelligences artificielles locales. Définissez un sujet, sélectionnez vos personnalités IA (« GladIAteurs ») et un modérateur IA (« IArbitre »), puis observez et participez à un échange structuré en temps réel.
 
-### 🔒 100% Local & Privé
+### 🔒 100% Local & Privé — ou cloud, au choix
 
-L'application fonctionne **entièrement en local** via [Ollama](https://ollama.com), sans aucun envoi de données vers le cloud (sauf la recherche web Tavily, optionnelle).
+Par défaut l'application fonctionne **entièrement en local** via [Ollama](https://ollama.com), sans aucun envoi de données vers le cloud (sauf la recherche web Tavily, optionnelle). Depuis la v1.16, vous pouvez aussi confier les discussions à **DeepSeek** (cloud, facturé au token) avec réflexion native, comptage des tokens, coût estimé en direct et plafond mensuel.
 
 ---
 
@@ -233,6 +233,12 @@ ollama pull qwen2.5
 ollama list
 ```
 
+### DeepSeek (optionnel)
+
+1. Créez une clé sur [platform.deepseek.com](https://platform.deepseek.com) et créditez le compte.
+2. Paramètres → **Fournisseur de modèles** → DeepSeek, collez la clé puis **Valider et enregistrer** (la clé n'est stockée qu'une fois acceptée ; elle n'apparaît jamais dans les journaux).
+3. Choisissez le modèle (`deepseek-flash` par défaut), le budget de contexte et, si vous le souhaitez, un plafond mensuel.
+
 ### Paramètres de l'application
 
 | Paramètre | Description |
@@ -240,9 +246,13 @@ ollama list
 | **Nom d'utilisateur** | Nom affiché lors des interventions |
 | **Langue** | Interface FR/EN/ZH |
 | **Thème** | Sombre / Clair |
+| **Fournisseur de modèles** | Ollama (local) ou DeepSeek (cloud) |
+| **Niveau de réflexion** | Auto / off / légère / poussée / maximale (DeepSeek) |
+| **Clé API DeepSeek, modèle, budget de contexte, plafond mensuel** | Voir ci-dessus |
 | **URL Ollama** | Par défaut : `http://localhost:11434` |
-| **Modèle LLM** | Modèle principal pour les discussions |
-| **Modèle d'embeddings** | Pour le RAG (optionnel, défaut : modèle LLM) |
+| **Modèle LLM** | Modèle principal pour les discussions (Ollama) |
+| **Modèle d'embeddings** | Pour le RAG (optionnel ; sans lui la recherche documentaire est lexicale) |
+| **Priorités du budget de tokens** | Ordre des sections du prompt |
 | **Émotions influencent comportement** | Toggle ON/OFF |
 | **Clé API Tavily** | Pour la recherche web (optionnel) |
 
@@ -373,23 +383,25 @@ npm run tauri dev
 
 ```bash
 # TypeScript
-npx tsc --noEmit
+npm run typecheck    # tsc --noEmit
+npm test             # vitest (stores et helpers)
+npm run i18n:check   # parité des clés FR/EN/ZH
 
 # Rust (tous les tests)
-cd src-tauri && cargo test
+cd src-tauri && cargo test --lib
 
 # Rust (un test spécifique)
 cd src-tauri && cargo test test_name
 
 # Lint Rust
-cd src-tauri && cargo clippy
+cd src-tauri && cargo clippy --all-targets
 ```
 
 ### Frontend seul (sans Tauri)
 
 ```bash
 npm run dev          # Vite dev server
-npm run build        # tsc + vite build
+npm run build        # parité i18n + tsc + vite build
 ```
 
 ---
@@ -410,8 +422,11 @@ npm run tauri build
 
 ## 🗺️ Roadmap
 
-### ✅ Complété (v1.0 - v1.10)
+### ✅ Complété (v1.0 - v1.16)
 
+- [x] Fournisseur DeepSeek (réflexion native, comptage des tokens, coûts, plafond mensuel)
+- [x] Cible tournante des GladIAteurs et émotions consolidées
+- [x] Arène à onglets, file de parole, radar émotionnel, graphe de relations
 - [x] Moteur de discussion multi-participants
 - [x] Streaming temps réel
 - [x] Système émotionnel (6 axes)
@@ -428,9 +443,8 @@ npm run tauri build
 
 ### 🚧 En cours / Prochaines versions
 
-- [ ] **v1.11** : Visualisation graphique des relations entre participants
-- [ ] **v1.12** : Profils avec avatars générés IA
-- [ ] **v2.0** : Support multi-modèles (anthropic, openai, gemini)
+- [ ] Profils avec avatars générés IA
+- [ ] Autres fournisseurs cloud sur le même trait `LlmProvider` (Anthropic, OpenAI, Gemini)
 
 ### 💭 Idées futures
 

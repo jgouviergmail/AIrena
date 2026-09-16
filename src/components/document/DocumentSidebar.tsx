@@ -1,6 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, ChevronRight, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { computeDocumentDiff, type DiffResult } from "@/lib/document-diff";
 import { SimpleMd } from "@/components/shared/SimpleMd";
@@ -83,9 +82,9 @@ function TxtWithDiff({ text, diffResult }: { text: string; diffResult: DiffResul
   );
 }
 
-export function DocumentSidebar({ width = 350 }: { width?: number }) {
+/** Co-construction document panel content (diff-highlighted rendering). */
+export function DocumentPanel() {
   const { t } = useTranslation();
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const documentContent = useArenaStore((s) => s.documentContent);
   const previousDocumentContent = useArenaStore((s) => s.previousDocumentContent);
   const documentFormat = useArenaStore((s) => s.documentFormat);
@@ -96,59 +95,21 @@ export function DocumentSidebar({ width = 350 }: { width?: number }) {
     [previousDocumentContent, documentContent, documentFormat],
   );
 
-  if (isCollapsed) {
-    return (
-      <div className="flex w-8 flex-col items-center border-l border-border bg-card pt-2">
-        <button
-          onClick={() => setIsCollapsed(false)}
-          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          title={t("document.expand")}
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </button>
-        <span className="mt-2 text-xs [writing-mode:vertical-lr] text-muted-foreground">
-          {t("document.title")}
-        </span>
-      </div>
-    );
-  }
-
   const formatBadge = documentFormat !== "none" ? `.${documentFormat}` : "";
 
   return (
-    <div
-      className="flex flex-col border-l border-border bg-card"
-      style={{ width }}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <div className="flex items-center gap-2">
-          <FileText className="h-4 w-4 text-primary" />
-          <span className="text-sm font-medium text-foreground">
-            {t("document.title")}
+    <>
+      {/* Format + last editor */}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1">
+        <span className="truncate text-[10px] text-muted-foreground">
+          {documentLastEditor ? t("document.lastEditedBy", { name: documentLastEditor }) : t("document.awaiting")}
+        </span>
+        {formatBadge && (
+          <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            {formatBadge}
           </span>
-          {formatBadge && (
-            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-              {formatBadge}
-            </span>
-          )}
-        </div>
-        <button
-          onClick={() => setIsCollapsed(true)}
-          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </button>
+        )}
       </div>
-
-      {/* Last editor badge */}
-      {documentLastEditor && (
-        <div className="border-b border-border px-3 py-1">
-          <span className="text-[10px] text-muted-foreground">
-            {t("document.lastEditedBy", { name: documentLastEditor })}
-          </span>
-        </div>
-      )}
 
       {/* Document content */}
       <div className="flex-1 overflow-y-auto px-3 py-3">
@@ -164,6 +125,6 @@ export function DocumentSidebar({ width = 350 }: { width?: number }) {
           <TxtWithDiff text={documentContent} diffResult={diffResult} />
         )}
       </div>
-    </div>
+    </>
   );
 }

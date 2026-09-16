@@ -3,19 +3,64 @@ import { logger } from "@/lib/logger";
 import { saveDiscussionHistory } from "@/lib/tauri-api";
 import { getProfileEmoji, ROLE_EMOJIS } from "@/lib/profile-emoji";
 import { useSetupStore } from "@/stores/useSetupStore";
-import { useSettingsStore } from "@/stores/useSettingsStore";
+import { describeActiveModel, useSettingsStore } from "@/stores/useSettingsStore";
 import type {
   ArenaEvent,
+  ArgumentMap,
   BanInfo,
   DirectiveData,
   DocumentFormat,
   EmotionalProfile,
   EmotionSnapshot,
+  LlmUsage,
   Message,
   ParticipantInfo,
+  ProviderKind,
   RagChunkInfo,
+  RelationshipEdge,
   SpeakerRole,
+  UsageLedger,
 } from "@/lib/types";
+import { EMPTY_LEDGER } from "@/lib/types";
+
+/** Latest usage snapshot from the engine (mirrors the `llmUsageUpdated` event). */
+export interface LlmUsageStatus {
+  provider: ProviderKind;
+  model: string;
+  total: LlmUsage;
+  calls: number;
+  /** null: free provider or unknown price list */
+  estimatedCostUsd: number | null;
+  periodSpentUsd: number;
+  budgetUsd: number;
+  peak: boolean;
+}
+
+export interface BudgetAlertInfo {
+  level: "warning" | "exceeded";
+  spentUsd: number;
+  budgetUsd: number;
+}
+
+/** Last emotional threshold crossed, for UI flashes (no event monkey-patching). */
+export interface ThresholdCrossing {
+  speakerId: string;
+  axis: string;
+  direction: string;
+  value: number;
+  /** Monotonic counter so identical crossings still trigger effects */
+  seq: number;
+}
+
+/** Buffer key of a speaker's live reasoning stream (separate from their content stream). */
+const REASONING_STREAM_SUFFIX = "::reasoning";
+export const reasoningStreamKey = (speakerId: string) => `${speakerId}${REASONING_STREAM_SUFFIX}`;
+/** Split a buffer key back into speaker id + stream kind. */
+export function parseStreamKey(key: string): { speakerId: string; kind: "content" | "reasoning" } {
+  return key.endsWith(REASONING_STREAM_SUFFIX)
+    ? { speakerId: key.slice(0, -REASONING_STREAM_SUFFIX.length), kind: "reasoning" }
+    : { speakerId: key, kind: "content" };
+}
 
 /** Callbacks from the token buffer in DiscussionFeed */
 interface StreamBufferCallbacks {
@@ -67,8 +112,20 @@ interface ArenaState {
   argumentMapMarkdownBySpeaker: string;
   argumentMapThesesCount: number;
   argumentMapArgumentsCount: number;
+  /** Structured map (persisted with the discussion) */
+  argumentMap: ArgumentMap | null;
+  /** Node ids added by the latest extraction */
+  argumentMapNewNodeIds: string[];
+  argumentMapDroppedCount: number;
   directives: Map<string, DirectiveData>;
   bans: Map<string, BanInfo>;
+  /** UserDriven: participants who passed this turn (in order) */
+  passedSpeakerIds: string[];
+  /** Cumulative reaction graph (relations tab) */
+  relationships: RelationshipEdge[];
+  llmUsage: LlmUsageStatus | null;
+  budgetAlert: BudgetAlertInfo | null;
+  lastThresholdCrossed: ThresholdCrossing | null;
   error: string | null;
 
   handleEvent: (event: ArenaEvent) => void;
@@ -114,10 +171,20 @@ const initialState = {
   argumentMapMarkdownBySpeaker: "",
   argumentMapThesesCount: 0,
   argumentMapArgumentsCount: 0,
+  argumentMap: null as ArgumentMap | null,
+  argumentMapNewNodeIds: [] as string[],
+  argumentMapDroppedCount: 0,
   directives: new Map<string, DirectiveData>(),
   bans: new Map<string, BanInfo>(),
+  passedSpeakerIds: [] as string[],
+  relationships: [] as RelationshipEdge[],
+  llmUsage: null as LlmUsageStatus | null,
+  budgetAlert: null as BudgetAlertInfo | null,
+  lastThresholdCrossed: null as ThresholdCrossing | null,
   error: null as string | null,
 };
+
+let _thresholdSeq = 0;
 
 // Stream buffer ref — lives outside store to avoid triggering re-renders
 let streamBuffer: StreamBufferCallbacks | null = null;
@@ -198,8 +265,9 @@ export const useArenaStore = create<ArenaState>((set) => ({
           console.error("Received messageComplete with invalid message", event.data);
           break;
         }
-        // Clear the buffer for this speaker
+        // Clear the buffers (content + live reasoning) for this speaker
         streamBuffer?.clearSpeaker(event.data.message.speakerId);
+        streamBuffer?.clearSpeaker(reasoningStreamKey(event.data.message.speakerId));
         set((s) => {
           const msg = {
             ...event.data.message,
@@ -256,12 +324,13 @@ export const useArenaStore = create<ArenaState>((set) => ({
       }
 
       case "thoughtChunk":
-        // Thoughts also go through the buffer (reuse same mechanism)
-        // Not rendered separately for now — just ignore to avoid perf cost
+        // Live reasoning (DeepSeek / Ollama think) — same 60 ms buffer, separate key
+        streamBuffer?.pushToken(reasoningStreamKey(event.data.speakerId), event.data.chunk);
         break;
 
       case "thoughtComplete":
-        // The thought is attached to the Message by the backend when MessageComplete arrives
+        // The thought is attached to the Message by the backend when MessageComplete arrives;
+        // the live bubble stays visible until then.
         break;
 
       case "turnStarted":
@@ -289,6 +358,14 @@ export const useArenaStore = create<ArenaState>((set) => ({
 
       case "turnSkipped":
         set({ determiningOrder: false });
+        break;
+
+      case "speakerPassed":
+        set((s) => ({ passedSpeakerIds: [...s.passedSpeakerIds, event.data.speakerId] }));
+        break;
+
+      case "relationshipsUpdated":
+        set({ relationships: event.data.edges });
         break;
 
       case "determiningOrder":
@@ -352,8 +429,19 @@ export const useArenaStore = create<ArenaState>((set) => ({
           argumentMapMarkdownBySpeaker: event.data.markdownBySpeaker,
           argumentMapThesesCount: event.data.thesesCount,
           argumentMapArgumentsCount: event.data.argumentsCount,
+          argumentMap: event.data.map,
+          argumentMapNewNodeIds: event.data.newNodeIds,
+          argumentMapDroppedCount: event.data.droppedCount,
           activityStatus: { type: "argumentMap" },
         });
+        break;
+
+      case "llmUsageUpdated":
+        set({ llmUsage: event.data });
+        break;
+
+      case "budgetAlert":
+        set({ budgetAlert: event.data });
         break;
 
       case "emotionUpdated":
@@ -382,7 +470,7 @@ export const useArenaStore = create<ArenaState>((set) => ({
         break;
 
       case "emotionalThresholdCrossed":
-        // No state update — handled by EmotionSidebar via CSS animations
+        set({ lastThresholdCrossed: { ...event.data, seq: ++_thresholdSeq } });
         break;
 
       case "documentUpdated":
@@ -401,6 +489,8 @@ export const useArenaStore = create<ArenaState>((set) => ({
             speechAct: event.data.speechAct,
             emotionBehavior: event.data.emotionBehavior ?? null,
             relationshipSummary: event.data.relationshipSummary,
+            focusSpeaker: event.data.focusSpeaker ?? null,
+            reasoningLevel: event.data.reasoningLevel ?? "off",
           });
           return { directives: d };
         });
@@ -433,7 +523,8 @@ export const useArenaStore = create<ArenaState>((set) => ({
       }
 
       case "userTurnReady":
-        set({ userTurnActive: true, interventionRequested: false });
+        // A new user turn starts a new round of respond/pass decisions
+        set({ userTurnActive: true, interventionRequested: false, passedSpeakerIds: [] });
         break;
 
       case "userTurnTimeout":
@@ -492,11 +583,19 @@ export const useArenaStore = create<ArenaState>((set) => ({
             },
           ];
 
+          const usage: UsageLedger = arenaState.llmUsage
+            ? {
+                ...EMPTY_LEDGER,
+                total: arenaState.llmUsage.total,
+                calls: arenaState.llmUsage.calls,
+                estimatedCostUsd: arenaState.llmUsage.estimatedCostUsd,
+              }
+            : EMPTY_LEDGER;
           saveDiscussionHistory({
             id: arenaState.discussionId,
             topic: setupState.topic,
             discussionLanguage: setupState.discussionLanguage,
-            modelName: settingsState.settings.ollamaModel,
+            modelName: describeActiveModel(settingsState.settings),
             participants,
             totalTurns: arenaState.currentTurn,
             synthesis: arenaState.synthesis,
@@ -507,10 +606,19 @@ export const useArenaStore = create<ArenaState>((set) => ({
             documentFormat: arenaState.documentFormat,
             argumentMapMd: arenaState.argumentMapMarkdown,
             argumentMapMdBySpeaker: arenaState.argumentMapMarkdownBySpeaker,
+            argumentMapJson: arenaState.argumentMap ? JSON.stringify(arenaState.argumentMap) : "",
+            llmProvider: settingsState.settings.llmProvider,
+            usage,
+            estimatedCostUsd: arenaState.llmUsage?.estimatedCostUsd ?? 0,
           }).catch((err) =>
             console.error("Failed to save discussion history:", err),
           );
         }
+
+        // The engine updated server-owned counters (cloud spend period, Tavily
+        // credits): refresh the settings store so a later save never writes
+        // back the values hydrated before the discussion.
+        useSettingsStore.getState().hydrate().catch(() => {});
 
         set({ status: "ended", determiningOrder: false, activityStatus: null });
         break;
@@ -545,8 +653,16 @@ export const useArenaStore = create<ArenaState>((set) => ({
       argumentMapMarkdownBySpeaker: "",
       argumentMapThesesCount: 0,
       argumentMapArgumentsCount: 0,
+      argumentMap: null,
+      argumentMapNewNodeIds: [],
+      argumentMapDroppedCount: 0,
       directives: new Map<string, DirectiveData>(),
       bans: new Map<string, BanInfo>(),
+      passedSpeakerIds: [],
+      relationships: [],
+      llmUsage: null,
+      budgetAlert: null,
+      lastThresholdCrossed: null,
     });
   },
 }));

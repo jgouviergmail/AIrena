@@ -1,6 +1,9 @@
 use serde::Serialize;
 
+use super::argument_map::ArgumentMap;
+use super::relationship::RelationshipEdge;
 use super::emotion::{EmotionSnapshot, EmotionalProfile};
+use super::llm::{LlmUsage, ProviderKind};
 use super::message::{Message, Reaction};
 
 /// Events sent from the backend to the frontend via Channel<ArenaEvent>
@@ -120,7 +123,17 @@ pub enum ArenaEvent {
         speech_act: String,
         emotion_behavior: Option<String>,
         relationship_summary: String,
+        /// Participant the speaker was asked to address in priority (None = the topic)
+        focus_speaker: Option<String>,
+        /// Reasoning level resolved for this intervention ("off" | "low" | "high" | …)
+        reasoning_level: String,
     },
+    /// UserDriven: a participant chose not to respond this turn
+    #[serde(rename_all = "camelCase")]
+    SpeakerPassed { speaker_id: String, speaker_name: String },
+    /// Cumulative reaction graph between participants (after each reaction round)
+    #[serde(rename_all = "camelCase")]
+    RelationshipsUpdated { edges: Vec<RelationshipEdge> },
     /// Document updated by a speaker (co-construction)
     #[serde(rename_all = "camelCase")]
     DocumentUpdated {
@@ -146,6 +159,35 @@ pub enum ArenaEvent {
         markdown_by_speaker: String,
         theses_count: u32,
         arguments_count: u32,
+        /// Structured map (persisted by the frontend as `argument_map_json`)
+        map: ArgumentMap,
+        /// Ids of the nodes added by this extraction
+        new_node_ids: Vec<String>,
+        /// Arguments/theses discarded because a cap was reached
+        dropped_count: u32,
+    },
+    /// Token usage snapshot (after each speaker, end of turn, synthesis)
+    #[serde(rename_all = "camelCase")]
+    LlmUsageUpdated {
+        provider: ProviderKind,
+        model: String,
+        total: LlmUsage,
+        calls: u32,
+        /// Estimated spend for this discussion (None: free provider / unknown price list)
+        estimated_cost_usd: Option<f64>,
+        /// Spend accumulated over the current monthly period before this discussion
+        period_spent_usd: f64,
+        /// Monthly cap (0 = unlimited)
+        budget_usd: f64,
+        /// Peak tariff currently in force
+        peak: bool,
+    },
+    /// Monthly budget threshold reached ("warning" at 80%, "exceeded" at 100%)
+    #[serde(rename_all = "camelCase")]
+    BudgetAlert {
+        level: String,
+        spent_usd: f64,
+        budget_usd: f64,
     },
     /// Discussion ended
     DiscussionEnded,

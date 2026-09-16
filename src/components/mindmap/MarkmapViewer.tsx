@@ -6,6 +6,8 @@ const transformer = new Transformer();
 
 export interface MarkmapViewerHandle {
   getSvgHtml: () => string | null;
+  /** Re-centre the whole map in the viewport (also re-enables auto-fit). */
+  fit: () => void;
 }
 
 /** Padding (px) added around the full content bounding box in exported SVGs. */
@@ -86,16 +88,26 @@ export const MarkmapViewer = forwardRef<
   const mmRef = useRef<Markmap | null>(null);
   const markdownRef = useRef(markdown);
   markdownRef.current = markdown;
+  // Once the user zoomed or panned, data updates must not reset the viewport
+  const userInteractedRef = useRef(false);
+
+  const fit = () => {
+    userInteractedRef.current = false;
+    void mmRef.current?.fit();
+  };
 
   useImperativeHandle(ref, () => ({
     getSvgHtml: () => svgRef.current ? buildStandaloneSvg(svgRef.current) : null,
+    fit,
   }), []);
 
   // Mount markmap instance
   useEffect(() => {
-    if (!svgRef.current) return;
-    const mm = Markmap.create(svgRef.current, {
-      autoFit: true,
+    const svg = svgRef.current;
+    if (!svg) return;
+    const mm = Markmap.create(svg, {
+      // autoFit would recentre on every setData — we fit explicitly instead
+      autoFit: false,
       duration: 300,
       maxWidth: 250,
       spacingHorizontal: 80,
@@ -103,23 +115,31 @@ export const MarkmapViewer = forwardRef<
     });
     mmRef.current = mm;
 
+    const markInteracted = () => { userInteractedRef.current = true; };
+    svg.addEventListener("wheel", markInteracted, { passive: true });
+    svg.addEventListener("pointerdown", markInteracted);
+
     // Set data if available
     if (markdownRef.current) {
       const { root } = transformer.transform(markdownRef.current);
       void mm.setData(root).then(() => mm.fit());
     }
     return () => {
+      svg.removeEventListener("wheel", markInteracted);
+      svg.removeEventListener("pointerdown", markInteracted);
       mm.destroy();
       mmRef.current = null;
     };
   }, []);
 
-  // Update data on markdown change
+  // Update data on markdown change — keep the user's viewport once they touched it
   useEffect(() => {
     if (!mmRef.current || !markdown) return;
     const { root } = transformer.transform(markdown);
     const mm = mmRef.current;
-    void mm.setData(root).then(() => mm.fit());
+    void mm.setData(root).then(() => {
+      if (!userInteractedRef.current) return mm.fit();
+    });
   }, [markdown]);
 
   return (

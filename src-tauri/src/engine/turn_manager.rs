@@ -1,14 +1,16 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use rand::seq::SliceRandom;
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::json_parser;
 use crate::engine::prompt_builder;
+use crate::llm::{LlmProvider, LlmRequest};
 use crate::models::discussion::TurnDistribution;
 use crate::models::gladiateur::GladIAteurState;
+use crate::models::llm::CallKind;
 use crate::models::settings::LlmParams;
-use crate::ollama::client::OllamaClient;
 
 /// Determine the speaking order for a turn
 pub fn determine_speaker_order(
@@ -71,7 +73,7 @@ pub fn decrement_bans(gladiateurs: &mut [GladIAteurState]) -> Vec<(String, Strin
 /// Context needed for async turn determination (democratic/authoritarian).
 /// All fields are owned to avoid borrow checker issues across .await in the orchestrator.
 pub struct AsyncTurnContext {
-    pub ollama_client: OllamaClient,
+    pub llm: Arc<dyn LlmProvider>,
     pub cancel_token: CancellationToken,
     pub arbitre_system_prompt: String,
     pub arbitre_llm_params: LlmParams,
@@ -125,18 +127,20 @@ pub async fn determine_order_democratic(
                 &ctx.discussion_summary,
                 &ctx.discussion_language,
             );
-            let request = ctx.ollama_client.build_request(
+            let request = LlmRequest::new(
                 &gladiateurs[*idx].config.system_prompt,
                 &prompt,
                 &gladiateurs[*idx].config.llm_params,
-                true, // json_format
-            );
-            let client = ctx.ollama_client.clone();
+                CallKind::Vote,
+            )
+            .json()
+            .speaker(&gladiateurs[*idx].config.id);
+            let client = Arc::clone(&ctx.llm);
             let cancel = ctx.cancel_token.clone();
 
             async move {
                 match client.chat(&request, cancel).await {
-                    Ok(raw) => json_parser::parse_vote(&raw),
+                    Ok(resp) => json_parser::parse_vote(&resp.content),
                     Err(e) => {
                         tracing::warn!("Democratic vote failed: {e}");
                         Vec::new()
@@ -218,18 +222,15 @@ pub async fn determine_order_democratic(
                 ctx.current_turn,
                 &ctx.discussion_language,
             );
-            let request = ctx.ollama_client.build_request(
+            let request = LlmRequest::new(
                 &ctx.arbitre_system_prompt,
                 &prompt,
                 &ctx.arbitre_llm_params,
-                true,
-            );
-            let tiebreak_order = match ctx
-                .ollama_client
-                .chat(&request, ctx.cancel_token.clone())
-                .await
-            {
-                Ok(raw) => json_parser::parse_authoritarian_order(&raw),
+                CallKind::Vote,
+            )
+            .json();
+            let tiebreak_order = match ctx.llm.chat(&request, ctx.cancel_token.clone()).await {
+                Ok(resp) => json_parser::parse_authoritarian_order(&resp.content),
                 Err(e) => {
                     tracing::warn!("Tiebreak failed: {e}");
                     Vec::new()
@@ -296,19 +297,16 @@ pub async fn determine_order_authoritarian(
         ctx.current_turn,
         &ctx.discussion_language,
     );
-    let request = ctx.ollama_client.build_request(
+    let request = LlmRequest::new(
         &ctx.arbitre_system_prompt,
         &prompt,
         &ctx.arbitre_llm_params,
-        true, // json_format
-    );
+        CallKind::Vote,
+    )
+    .json();
 
-    let ordered_names = match ctx
-        .ollama_client
-        .chat(&request, ctx.cancel_token.clone())
-        .await
-    {
-        Ok(raw) => json_parser::parse_authoritarian_order(&raw),
+    let ordered_names = match ctx.llm.chat(&request, ctx.cancel_token.clone()).await {
+        Ok(resp) => json_parser::parse_authoritarian_order(&resp.content),
         Err(e) => {
             tracing::warn!("Authoritarian ordering failed: {e}, falling back to sequential");
             return determine_speaker_order(gladiateurs, &TurnDistribution::Sequential);

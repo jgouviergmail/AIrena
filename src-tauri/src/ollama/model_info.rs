@@ -510,7 +510,7 @@ mod tests {
         // ~5 GB model weight (Q4_K_M 8B)
         let model_weight = 5_000_000_000_u64;
 
-        let (recommended, warnings) = recommend_num_ctx(&arch, &vram, model_weight, 0);
+        let (recommended, _warnings) = recommend_num_ctx(&arch, &vram, model_weight, 0);
 
         // clean_free=22000, model_weight=4768MB, safety=512MB
         // available_kv = 22000 - 512 - 4768 = 16720 MB = 17,532,108,800 bytes

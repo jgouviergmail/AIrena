@@ -1,5 +1,15 @@
 // Mirror of Rust types — keep in sync with src-tauri/src/models/
 
+// ── LLM provider ────────────────────────────────────────────────────────
+
+/** Backend serving the discussion (settings.llmProvider). */
+export type ProviderKind = "ollama" | "deepseek";
+
+/** Reasoning ("thinking") intensity. "auto" is resolved per call by the engine. */
+export type ReasoningLevel = "off" | "low" | "high" | "max" | "auto";
+
+export const REASONING_LEVELS: ReasoningLevel[] = ["auto", "off", "low", "high", "max"];
+
 export interface LlmParams {
   temperature: number;
   topP: number;
@@ -7,6 +17,108 @@ export interface LlmParams {
   numPredict: number;
   numCtx: number;
   repeatPenalty: number;
+  /** Per-speaker override; undefined inherits the global setting. */
+  reasoningLevel?: ReasoningLevel;
+}
+
+export type CallKind =
+  | "introduction"
+  | "thought"
+  | "intervention"
+  | "reaction"
+  | "moderation"
+  | "memory"
+  | "emotion"
+  | "vote"
+  | "searchDecision"
+  | "ragSelect"
+  | "documentUpdate"
+  | "argumentMap"
+  | "synthesis"
+  | "socratic"
+  | "respondOrPass";
+
+/** Token usage reported by a provider (all zero when unknown). */
+export interface LlmUsage {
+  promptTokens: number;
+  cachedTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+}
+
+export const EMPTY_USAGE: LlmUsage = { promptTokens: 0, cachedTokens: 0, completionTokens: 0, reasoningTokens: 0 };
+
+/** Accumulated usage for a discussion. */
+export interface UsageLedger {
+  total: LlmUsage;
+  calls: number;
+  byCallKind: Partial<Record<CallKind, LlmUsage>>;
+  bySpeaker: Record<string, LlmUsage>;
+  /** null: free provider or unknown price list */
+  estimatedCostUsd: number | null;
+}
+
+export const EMPTY_LEDGER: UsageLedger = { total: EMPTY_USAGE, calls: 0, byCallKind: {}, bySpeaker: {}, estimatedCostUsd: null };
+
+export interface PeriodUsage {
+  usage: LlmUsage;
+  costUsd: number;
+  discussions: number;
+}
+
+export interface PeriodHistoryEntry extends PeriodUsage {
+  periodStart: string;
+  periodEnd: string;
+}
+
+/** Current rolling period of cloud spend (Settings gauge + pre-flight). */
+export interface LlmUsagePeriod {
+  provider: ProviderKind;
+  model: string;
+  periodStart: string;
+  periodEnd: string;
+  usage: PeriodUsage;
+  /** Monthly cap in USD (0 = unlimited) */
+  budgetUsd: number;
+  history: PeriodHistoryEntry[];
+  pricingDate: string;
+  peakNow: boolean;
+}
+
+/** Peak-hour price list of one model (USD per million tokens). */
+export interface ModelPriceInfo {
+  model: string;
+  inputCacheHit: number;
+  inputCacheMiss: number;
+  output: number;
+}
+
+/** Provider limits and defaults owned by the backend. */
+export interface LlmConstants {
+  deepseekDefaultModel: string;
+  deepseekKnownModels: string[];
+  deepseekDefaultContextBudget: number;
+  deepseekMinContextBudget: number;
+  deepseekMaxContextBudget: number;
+  deepseekMaxNumPredictUi: number;
+  deepseekPricingDate: string;
+  deepseekPricing: ModelPriceInfo[];
+  deepseekOffpeakFactor: number;
+  /** UTC hour windows [start, end) of peak pricing, Monday–Friday */
+  deepseekPeakWindowsUtc: [number, number][];
+  deepseekTopPMinThinking: number;
+  budgetWarnRatio: number;
+}
+
+export interface DeepSeekModels {
+  models: string[];
+  /** false when the documented fallback list was used (API unreachable) */
+  fromApi: boolean;
+}
+
+export interface DeepSeekBalance {
+  isAvailable: boolean;
+  balances: { currency: string; totalBalance: string }[];
 }
 
 export const DEFAULT_LLM_PARAMS: LlmParams = {
@@ -53,11 +165,16 @@ export interface DiscussionConfig {
   documentFormat: DocumentFormat;
   argumentMapEnabled: boolean;
   documentInjectionMode: DocumentInjectionMode;
+  documentUpdateGranularity: DocumentUpdateGranularity;
 }
 
 export type DiscussionMode = "debate" | "ideation" | "coConstruction" | "userDriven" | "socratic" | "tutorial" | "critiqueReview" | "collaborativeFiction";
 export type DocumentFormat = "none" | "txt" | "md" | "csv";
 export type DocumentInjectionMode = "rag" | "fullInjection";
+/** Co-construction: regenerate the document once per turn (default) or after every intervention. */
+export type DocumentUpdateGranularity = "turn" | "intervention";
+/** Origin of a message's inner thought: in-character reflection or the model's raw reasoning. */
+export type ThoughtKind = "persona" | "reasoning";
 
 export type SpeakerRole = "IArbitre" | "GladIAteur" | "user";
 export type ReactionType = "like" | "dislike";
@@ -79,6 +196,7 @@ export interface Message {
   role: SpeakerRole;
   content: string;
   innerThought: string | null;
+  thoughtKind?: ThoughtKind;
   reactions: Reaction[];
   isBanNotification: boolean;
   timestamp: string;
@@ -112,7 +230,18 @@ export interface AppSettings {
   embeddingModel: string;
   licenseKey: string;
   tokenBudgetPriorities: string;
+  /** Context window (Ollama) or context budget (DeepSeek), in tokens */
   numCtx: number;
+  llmProvider: ProviderKind;
+  reasoningLevel: ReasoningLevel;
+  showModelReasoning: boolean;
+  deepseekApiKey: string;
+  deepseekModel: string;
+  /** Monthly spending cap in USD (0 = unlimited) */
+  deepseekMonthlyBudgetUsd: number;
+  deepseekPeriodStart: string;
+  deepseekPeriodUsageJson: string;
+  deepseekUsageHistory: string;
 }
 
 export interface LicenseStatus {
@@ -171,6 +300,11 @@ export interface SaveDiscussionRequest {
   documentFormat: string;
   argumentMapMd: string;
   argumentMapMdBySpeaker: string;
+  /** Serialised ArgumentMap (empty when disabled) */
+  argumentMapJson: string;
+  llmProvider: ProviderKind;
+  usage: UsageLedger;
+  estimatedCostUsd: number;
 }
 
 export interface DiscussionSummary {
@@ -185,6 +319,9 @@ export interface DiscussionSummary {
   discussionMode: string;
   documentFormat: string;
   hasArgumentMap: boolean;
+  llmProvider: string;
+  totalTokens: number;
+  estimatedCostUsd: number;
 }
 
 export interface DiscussionDetail {
@@ -202,6 +339,49 @@ export interface DiscussionDetail {
   documentFormat: string;
   argumentMapMd: string;
   argumentMapMdBySpeaker: string;
+  /** Empty for discussions saved before v1.16 */
+  argumentMapJson: string;
+  llmProvider: string;
+  usage: UsageLedger;
+  estimatedCostUsd: number;
+}
+
+// ── Argument map (structured) ──────────────────────────────────────────
+
+export type ArgumentType = "support" | "counter" | "evidence";
+
+export interface ArgumentNode {
+  id: string;
+  label: string;
+  argType: ArgumentType;
+  speakerId: string;
+  speakerName: string;
+  targetsThesisId: string | null;
+  children: ArgumentNode[];
+}
+
+export interface ThesisNode {
+  id: string;
+  label: string;
+  speakerId: string;
+  speakerName: string;
+  arguments: ArgumentNode[];
+}
+
+export interface ArgumentMap {
+  theses: ThesisNode[];
+}
+
+/** One undirected edge of the reaction graph (counts in both directions). */
+export interface RelationshipEdge {
+  a: string;
+  b: string;
+  abLikes: number;
+  abDislikes: number;
+  baLikes: number;
+  baDislikes: number;
+  /** "ally" | "rival" | "tense" when strong enough, else null */
+  kind: string | null;
 }
 
 // ArenaEvent — tagged union (discriminated via "type" field)
@@ -225,6 +405,8 @@ export type ArenaEvent =
     }
   | { type: "determiningOrder"; data: { turnNumber: number } }
   | { type: "speakerActive"; data: { speakerId: string } }
+  | { type: "speakerPassed"; data: { speakerId: string; speakerName: string } }
+  | { type: "relationshipsUpdated"; data: { edges: RelationshipEdge[] } }
   | {
       type: "emotionUpdated";
       data: { speakerId: string; emotions: EmotionalProfile; moodSummary?: string };
@@ -294,6 +476,9 @@ export type ArenaEvent =
         speechAct: string;
         emotionBehavior: string | null;
         relationshipSummary: string;
+        /** Participant addressed in priority (null = the topic) */
+        focusSpeaker: string | null;
+        reasoningLevel: ReasoningLevel;
       };
     }
   | {
@@ -312,7 +497,27 @@ export type ArenaEvent =
         markdownBySpeaker: string;
         thesesCount: number;
         argumentsCount: number;
+        map: ArgumentMap;
+        newNodeIds: string[];
+        droppedCount: number;
       };
+    }
+  | {
+      type: "llmUsageUpdated";
+      data: {
+        provider: ProviderKind;
+        model: string;
+        total: LlmUsage;
+        calls: number;
+        estimatedCostUsd: number | null;
+        periodSpentUsd: number;
+        budgetUsd: number;
+        peak: boolean;
+      };
+    }
+  | {
+      type: "budgetAlert";
+      data: { level: "warning" | "exceeded"; spentUsd: number; budgetUsd: number };
     }
   | { type: "discussionEnded"; data: null }
   | { type: "error"; data: { message: string } };
@@ -338,6 +543,8 @@ export interface DirectiveData {
   speechAct: string;
   emotionBehavior: string | null;
   relationshipSummary: string;
+  focusSpeaker: string | null;
+  reasoningLevel: ReasoningLevel;
 }
 
 // Ban tracking for emotion sidebar
@@ -421,6 +628,8 @@ export interface BudgetParams {
   nGladiateurs: number;
   language: string;
   features: BudgetFeatures;
+  /** Provider whose tokenizer ratio applies */
+  provider: ProviderKind;
 }
 
 export interface SectionAllocation {
@@ -442,4 +651,6 @@ export interface TokenBudgetPreview {
   charsPerToken: number;
   qualityLevel: BudgetQualityLevel;
   documentAvailableTokens: number;
+  /** documentAvailableTokens expressed as printed pages */
+  documentAvailablePages: number;
 }

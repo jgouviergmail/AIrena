@@ -1,7 +1,7 @@
 # AIrena — Documentation Technique
 
-> **Version** : 1.13
-> **Dernière mise à jour** : 2026-02-27
+> **Version** : 1.16
+> **Dernière mise à jour** : 2026-09-16
 > **Auteur** : jgouv
 > **Identifiant** : `com.jgouv.airena`
 
@@ -28,6 +28,8 @@
    - 6.11 [Client Tavily (recherche web)](#611-client-tavily-recherche-web)
    - 6.12 [Carte des arguments](#612-carte-des-arguments)
    - 6.13 [Gestion des erreurs](#613-gestion-des-erreurs)
+   - 6.14 [Fournisseurs LLM, comptage et coûts](#614-fournisseurs-llm-comptage-et-coûts)
+   - 6.15 [Consolidation du moteur v1.16](#615-consolidation-du-moteur-v116)
 7. [Frontend React (src/)](#7-frontend-react-src)
    - 7.1 [Routage & Layout](#71-routage--layout)
    - 7.2 [Pages](#72-pages)
@@ -59,7 +61,7 @@
 | Plateforme cible | Windows (MSI/NSIS) |
 | Fenêtre par défaut | 1280×800 px (min. 900×600) |
 | Base de données | SQLite (WAL mode) |
-| API LLM | Ollama REST (local) |
+| API LLM | Ollama REST (local) ou DeepSeek (cloud, OpenAI-compatible) |
 | Recherche web | Tavily API (optionnel) |
 | Recherche encyclopédique | Wikipedia API (gratuit) |
 | Langues UI | Français (défaut), Anglais, Chinois |
@@ -884,6 +886,7 @@ pub enum CommandError {
     NoActiveDiscussion,
     History(String),
     Rag(String),
+    Llm(String),
 }
 ```
 
@@ -892,6 +895,44 @@ pub enum CommandError {
 - `expect()` uniquement au démarrage
 - Tous les chemins de sortie du moteur émettent `DiscussionEnded`
 - Les erreurs LLM non-fatales émettent `Error` sans arrêter la discussion
+- Les erreurs LLM **fatales** (`LlmError::Auth`, `InsufficientBalance`, `ModelNotFound`) verrouillent le `MeteredProvider` : le moteur termine le tour en cours, saute la synthèse et émet `Error` + `DiscussionEnded`
+
+---
+
+### 6.14 Fournisseurs LLM, comptage et coûts
+
+Depuis la v1.16 le moteur ne dépend plus d'Ollama : il consomme le trait `LlmProvider` (`src-tauri/src/llm/`).
+
+| Fichier | Rôle |
+|---|---|
+| `llm/mod.rs` | Trait `LlmProvider` (`chat_stream`, `chat`, `validate`, `capabilities`), `LlmRequest` (builder : `.json()`, `.reasoning()`, `.speaker()`), `LlmResponse`, `LlmCapabilities`, `LlmError` |
+| `llm/ollama.rs` | `OllamaProvider` — adaptateur iso-fonctionnel de l'ancien client (`think` jamais envoyé, ×3 `num_predict` sur les appels de contenu pour les modèles pensants) |
+| `llm/deepseek.rs` | `DeepSeekProvider` — SSE OpenAI-compatible, `thinking` + `reasoning_effort`, `max_tokens` explicite, plancher `top_p` 0,95 et température omise en réflexion, retry avec backoff uniquement si rien n'a été émis, timeout d'inactivité, `/models`, `/user/balance` |
+| `llm/pricing.rs` | Grille tarifaire (constantes datées `DEEPSEEK_PRICING_DATE`), fenêtres d'heures pleines UTC, `estimate_cost_usd` |
+| `llm/metered.rs` | `MeteredProvider` — décorateur : `UsageLedger` (par type d'appel et par orateur), coût estimé, verrou d'erreur fatale |
+| `llm/factory.rs` | `build_provider(&AppSettings)` + validation (modèle Ollama présent / clé DeepSeek acceptée) |
+| `llm/mock.rs` | `MockLlmProvider::scripted(...)` pour les tests de bout en bout du moteur (`engine/engine_tests.rs`) |
+
+**Politique de réflexion** (`ReasoningLevel`) : utilitaires (réactions, modération, mémoire, émotions, votes, sélection RAG…) toujours `Off` + JSON mode ; introduction `Low` ; interventions résolues par `Auto` (déclencheurs forts → `High`, sinon `Low`, jamais au tour 1 ; les fournisseurs sans niveaux reçoivent `High`) ; synthèse `High`. Le `reasoning_content` DeepSeek remplace l'appel « pensée » séparé : il est diffusé en `ThoughtChunk` et stocké dans `Message.inner_thought` avec `thought_kind = reasoning`. Après `REASONING_MAX_FAILURES` échecs consécutifs, le moteur retombe sur le chemin classique.
+
+**`LlmRequest::json()`** active le mode JSON **et** fixe la température à `TEMP_JSON_OUTPUT` (0,3) : aucune température de persona ne fuit vers un parseur.
+
+**Comptage et budget** : chaque appel alimente le ledger ; `LlmUsageUpdated` est émis après chaque orateur, en fin de tour et après la synthèse ; `BudgetAlert` (warning à 80 %, exceeded à 100 %) déclenche un arrêt en douceur (synthèse tentée). La période mensuelle glissante (`db/rolling_period.rs`, partagée avec Tavily) est persistée en fin de discussion (`record_deepseek_usage`) ; `commands/llm.rs` expose `get_llm_constants`, `list_deepseek_models`, `validate_deepseek_key`, `get_llm_usage_period`, `reset_llm_usage_period`. Les discussions stockent `llm_provider`, `usage_json`, `estimated_cost_usd`.
+
+**Budget de contexte** : `AppSettings.num_ctx` est la fenêtre KV d'Ollama ou le budget de contexte DeepSeek (`DEEPSEEK_DEFAULT_CONTEXT_BUDGET` 32 K, bornes 4 K–256 K) ; `BudgetParams.provider` sélectionne le ratio caractères/token (`DEEPSEEK_CHARS_PER_TOKEN_*`).
+
+**RAG sans Ollama** : sans modèle d'embedding, les documents sont importés en texte seul et `RagStore::query` retombe sur BM25 (également si le service d'embedding est injoignable).
+
+---
+
+### 6.15 Consolidation du moteur v1.16
+
+- **Focus tournant** (`engine/focus.rs`) : à chaque intervention (tour ≥ 2, hors fiction et UserDriven) un *focus* est tiré parmi les orateurs récents non encore ciblés ce tour (poids `FOCUS_WEIGHT_*`), les relations et le sujet lui-même. Il alimente la couche 5 de la directive, les gabarits de `mode_prompts` (`focus_instruction`) et l'ordre du bloc `[Tour en cours]` (message du focus en dernier, autres tronqués par `FOCUS_OTHER_MESSAGE_DIVISOR`). `DirectiveGenerated` porte `focus_speaker` et `reasoning_level`.
+- **Émotions** (`engine/emotion_engine.rs`) : décroissance vers le **profil initial** du persona (plus vers 50), pénalité de ban appliquée au moment du ban, axe `accord` piloté par les réactions **données**, stagnation réelle (`is_stagnating()` : similarité Jaccard des résumés ≥ `EMOTION_STAGNATION_SIMILARITY`, sécheresse de réactions ≥ `EMOTION_STAGNATION_REACTION_DROUGHT_TURNS` tours, ou drapeau `"stagnating"` de l'analyste LLM), deltas LLM bornés à ±`EMOTION_LLM_DELTA_CAP`, contagion sans l'IArbitre dans la moyenne. La directive combine **deux** émotions dominantes avec une phrase de nuance quand elles se contredisent ; les actes de parole récents (`SPEECH_ACT_RECENT_WINDOW`) sont pénalisés au lieu d'un simple re-tirage.
+- **Modes** : co-construction régénérée **par tour** (`DocumentUpdateGranularity::Turn`, un appel intégrant toutes les contributions, attribué à l'IArbitre) ou par intervention ; fiction : ouverture écrite par le premier co-auteur si l'utilisateur passe (`InterventionContext::FictionOpening` / `FictionContinue`) ; socratique : les questions déjà posées sont injectées (anti-répétition) ; UserDriven : `SpeakerPassed` par participant qui passe ; refus détectés en FR/EN/ZH (`REFUSAL_PREFIXES`, `REFUSAL_SUBSTRINGS`) ; extraction de la carte seulement si ≥ `ARGMAP_MIN_TURN_MESSAGES`.
+- **Carte des arguments** (`engine/argument_merge.rs`) : dédoublonnage flou des thèses (tokens normalisés, Jaccard ≥ `ARGMAP_THESIS_SIMILARITY_THRESHOLD` ou containment), références résolues avec un seuil plus souple, contre-arguments orphelins rattachés à la thèse la plus proche ou parqués dans « Contre-arguments non rattachés » (jamais perdus), `MergeReport` (nouveaux nœuds ✨, dédoublonnés, non rattachés, écartés), vue par orateur avec branche « Arguments » pour les orateurs sans thèse, `ArgumentMapUpdated` transporte la structure (`map`) persistée en `argument_map_json`.
+- **Graphe de relations** : `RelationshipsUpdated { edges }` après chaque salve de réactions (`directive_builder::relationship_edges`).
+- **Tests de bout en bout** (`engine/engine_tests.rs`) : séquence d'événements, comptage, réflexion, annulation, erreurs fatales, budget, rotation du focus, stagnation, ban, fiction, UserDriven, document par tour, socratique — sur `MockLlmProvider`.
 
 ---
 
@@ -1223,18 +1264,23 @@ Produit dans `src-tauri/target/release/bundle/` :
 
 ```bash
 cd src-tauri
-cargo test            # Tous les tests
-cargo test test_name  # Un test spécifique
-cargo clippy          # Lint
+cargo test --lib              # 376 tests (unitaires + moteur de bout en bout sur MockLlmProvider)
+cargo test test_name          # Un test spécifique
+cargo test -- --ignored deepseek_live_spike   # Spike réel DeepSeek (clé dans DEEPSEEK_API_KEY)
+cargo clippy --all-targets    # Lint (0 avertissement exigé)
 ```
 
-**Couverture** : tests unitaires pour le parseur JSON, le moteur émotionnel, le gestionnaire de mémoire, le matching flou de noms.
+**Couverture** : parseur JSON, moteur émotionnel, gestionnaire de mémoire, matching flou, budget de tokens, fournisseurs (golden tests Ollama, SSE/erreurs/backoff/tarification DeepSeek), période glissante, dépôt SQLite (aller-retour v1.16), fusion de la carte des arguments, focus, moteur complet (`engine/engine_tests.rs`).
 
 ### TypeScript
 
 ```bash
-npx tsc --noEmit      # Vérification des types
+npm run typecheck     # tsc --noEmit
+npm test              # vitest — stores, helpers purs (40 tests)
+npm run i18n:check    # Parité des clés FR/EN/ZH (bloquant dans npm run build)
 ```
+
+**Ratchets qualité** : Rust ≥ 376 tests, front ≥ 40 tests, clippy 0, parité i18n exacte, aucun fichier `pages/*` > 400 lignes (`PersonaEditor.tsx`, 596 lignes, est l'exception préexistante).
 
 ---
 
@@ -1256,18 +1302,20 @@ AIrena/
 │   ├── App.tsx                # Router + providers
 │   ├── main.tsx               # Point d'entrée React
 │   ├── pages/                 # 7 pages (Home, Setup, Arena, Summary, History, HistoryDetail, Settings)
-│   ├── stores/                # 3 stores Zustand (Arena, Setup, Settings)
+│   ├── stores/                # 3 stores Zustand (Arena, Setup, Settings) + tests vitest
 │   ├── components/
-│   │   ├── discussion/        # Feed, MessageBubble, Controls, UserInput
-│   │   ├── emotion/           # Sidebar, Cards, Sliders, Sparklines
-│   │   ├── document/          # DocumentSidebar
-│   │   ├── mindmap/           # MarkmapViewer, MindmapSidebar
-│   │   ├── layout/            # AppShell, Sidebar, TopBar, ResizeDivider
-│   │   ├── setup/             # LlmParamsForm, PersonaEditor, EmojiPicker
-│   │   ├── shared/            # SimpleMd, MathText, StatCard
+│   │   ├── discussion/        # Feed (TurnDivider, JumpToLatest), MessageBubble, Controls, UserInput, SpeakerQueue, UsagePill
+│   │   ├── emotion/           # EmotionPanel, Cards, Sliders, Sparklines, EmotionRadar
+│   │   ├── document/          # DocumentPanel
+│   │   ├── mindmap/           # MarkmapViewer, ArgumentMapPanel
+│   │   ├── relations/         # RelationsGraph
+│   │   ├── layout/            # AppShell, Sidebar, TopBar, ResizeDivider, RightPanel (onglets)
+│   │   ├── settings/          # General, License, Provider, DeepSeek, Ollama, TokenBudgetPriorities, Tavily
+│   │   ├── setup/             # LlmParamsForm, PersonaEditor, EmojiPicker, steps/ (5 étapes de l'assistant)
+│   │   ├── shared/            # SimpleMd, MathText, StatCard, UsageSummaryCard
 │   │   └── common/            # ErrorBoundary
-│   ├── hooks/                 # useTokenBuffer
-│   ├── lib/                   # types, tauri-api, utils, logger, profile-emoji, document-diff
+│   ├── hooks/                 # useTokenBuffer, useMediaQuery
+│   ├── lib/                   # types, tauri-api, utils, logger, profile-emoji, document-diff, cost-estimate, discussion-config
 │   ├── i18n/                  # Locales FR/EN/ZH
 │   ├── providers/             # ThemeProvider
 │   └── styles/                # globals.css (Tailwind v4)
@@ -1283,18 +1331,22 @@ AIrena/
         ├── constants.rs       # Constantes centralisées (limites, seuils, quotas RAG)
         ├── commands/          # Handlers IPC (discussion, ollama, settings, history, rag)
         ├── engine/            # Cœur métier
-        │   ├── orchestrator.rs    # Boucle de discussion (~2800 lignes)
+        │   ├── orchestrator.rs    # Boucle de discussion
         │   ├── turn_manager.rs    # Distribution des tours
         │   ├── prompt_builder.rs  # Construction de prompts
-        │   ├── directive_builder.rs # Personnalités cognitives
+        │   ├── directive_builder.rs # Personnalités cognitives + graphe de relations
         │   ├── emotion_engine.rs  # Moteur émotionnel
+        │   ├── focus.rs           # Focus conversationnel tournant
+        │   ├── argument_merge.rs  # Fusion floue de la carte des arguments
         │   ├── memory_manager.rs  # Gestion mémoire
         │   ├── json_parser.rs     # Parsing robuste + matching flou
         │   ├── dynamics_parser.rs # Extraction XML <dynamics>
-        │   └── mode_prompts.rs    # Instructions par mode
-        ├── models/            # Structures de données (12 fichiers, incluant argument_map)
-        ├── db/                # SQLite (schema, repository, seed)
-        ├── ollama/            # Client HTTP + streaming NDJSON
+        │   ├── mode_prompts.rs    # Instructions par mode
+        │   └── engine_tests.rs    # Tests de bout en bout (MockLlmProvider)
+        ├── llm/               # Fournisseurs : trait, ollama, deepseek, pricing, metered, factory, mock
+        ├── models/            # Structures de données (llm, relationship, argument_map…)
+        ├── db/                # SQLite (schema, repository, seed, rolling_period)
+        ├── ollama/            # Client HTTP + streaming NDJSON (utilisé par llm/ollama.rs)
         ├── rag/               # Système RAG (parser, chunker, embedder, bm25, store)
         ├── wikipedia/         # Client Wikipedia API
         └── tavily/            # Client Tavily API
@@ -1303,6 +1355,32 @@ AIrena/
 ---
 
 ## 15. Changelog
+
+### v1.16 (2026-09-16) — Fournisseur DeepSeek, comptage des coûts, consolidation du moteur, UX
+
+**Nouveaux fichiers** :
+- `src-tauri/src/llm/` (`mod.rs`, `ollama.rs`, `deepseek.rs`, `pricing.rs`, `metered.rs`, `factory.rs`, `mock.rs`), `models/llm.rs`, `models/relationship.rs`, `commands/llm.rs`, `db/rolling_period.rs`, `engine/focus.rs`, `engine/argument_merge.rs`, `engine/engine_tests.rs`
+- `src/components/settings/*`, `src/components/setup/steps/*`, `src/components/layout/RightPanel.tsx`, `src/components/relations/RelationsGraph.tsx`, `src/components/discussion/{SpeakerQueue,UsagePill}.tsx`, `src/components/emotion/EmotionRadar.tsx`, `src/components/shared/UsageSummaryCard.tsx`, `src/lib/{cost-estimate,discussion-config}.ts`, `src/hooks/useMediaQuery.ts`, `tools/i18n-check.mjs`, `tools/i18n-add.mjs`, `vitest.config.ts`
+- `Docs/Technique/AUDIT-2026-09-16-consolidation-deepseek.md` — audit et plan d'exécution (11 lots)
+
+**Backend** :
+- Abstraction `LlmProvider` ; adaptateur Ollama iso-fonctionnel ; client DeepSeek (SSE, réflexion native `low/high/max`, retry/backoff, timeouts, `/models`, `/user/balance`) ; tarification datée avec heures creuses ; `MeteredProvider` (ledger, coût, verrou fatal)
+- Réglages : `llm_provider`, `reasoning_level`, `show_model_reasoning`, `deepseek_*` (clé, modèle, plafond mensuel, période glissante, historique) ; commandes `get_llm_constants`, `list_deepseek_models`, `validate_deepseek_key`, `get_llm_usage_period`, `reset_llm_usage_period`
+- Événements : `LlmUsageUpdated`, `BudgetAlert`, `SpeakerPassed`, `RelationshipsUpdated` ; `DirectiveGenerated.{focus_speaker,reasoning_level}` ; `ArgumentMapUpdated.{map,new_node_ids,dropped_count}`
+- Migrations : `discussions.{llm_provider,usage_json,estimated_cost_usd,argument_map_json}`, `discussion_messages.thought_kind`
+- Moteur : focus tournant, deux émotions dominantes, fenêtre d'actes de parole, stagnation réelle, décroissance vers le profil initial, pénalité de ban, axe `accord`, deltas LLM bornés, contagion sans IArbitre, document par tour, ouverture fiction par le premier co-auteur, questions socratiques mémorisées, refus trilingues, `LlmRequest::json()` fixe `TEMP_JSON_OUTPUT`
+- Carte des arguments : fusion floue, contre-arguments jamais perdus, marqueurs ✨, vue par orateur complète, seuil de messages par tour
+- RAG : repli BM25 sans embeddings ; `TokenBudgetPreview.document_available_pages`
+- Correctif latent : les étapes de fin de tour (mémoire, émotions, carte) s'exécutaient pas au dernier tour (`should_stop()`)
+- Tests : 281 → 376 (`cargo test --lib`), clippy 0 sur `--all-targets`
+
+**Frontend** :
+- Types miroirs (`ProviderKind`, `ReasoningLevel`, `LlmUsage`, `UsageLedger`, `ArgumentMap`, `RelationshipEdge`, nouveaux événements), `Message.thoughtKind`, `DiscussionConfig.documentUpdateGranularity`
+- `SettingsPage` découpée en sections (`ProviderSettings`, `DeepSeekSettings` avec clé validée avant enregistrement, solde, modèles, budget de contexte, plafond mensuel, jauge de période, historique, réinitialisation ; `OllamaSettings` réduit aux embeddings en mode DeepSeek) ; `SetupPage` découpée en `steps/` ; `LlmParamsForm` variante DeepSeek (niveau de réflexion, température désactivée en réflexion, plancher `top_p`, bornes issues du backend) ; `TokenBudgetPreview` : pages calculées par le backend + ordre de grandeur du coût par tour
+- Arène : `RightPanel` à onglets (Émotions / Document / Carte / Relations, onglet et largeur mémorisés, tiroir sur écran étroit), `TurnDivider`, `JumpToLatest`, `SpeakerQueue`, `UsagePill`, alertes de budget, `EmotionRadar`, `RelationsGraph`, seuils émotionnels via `lastThresholdCrossed` (plus de monkey-patch), `MarkmapViewer` conserve le zoom (recentrage explicite), marqueurs ✨ et compteurs par orateur
+- Résumé / historique : `UsageSummaryCard` (tokens, cache, raisonnement, coût), `modelName` = `provider · modèle`, tokens et coût dans la liste, persistance `argumentMapJson`
+- Initialisation Ollama conditionnelle (`needsOllama`) ; `applyGlobalContext` ; `npm run build` = parité i18n + tsc + vite ; vitest (40 tests)
+- Revue à froid : `save_user_settings` (compteurs de période jamais écrasés par le front), ré-hydratation des réglages à la fin de discussion, raisonnement diffusé **en direct** (bulle « réfléchit… ») et conservé même masqué, blocage « plafond atteint » dans l'assistant, `Debug` masqué sur `AppSettings`, `ArgumentMapStats` dans Résumé/Historique, simulations complètes du moteur (toutes fonctionnalités, tous modes)
 
 ### v1.14 (2026-02-27) — Arguments récursifs & Double vue carte
 

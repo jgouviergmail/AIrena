@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { Brain, ChevronDown, ChevronUp, Crosshair } from "lucide-react";
 import { EmotionAxisSlider } from "./EmotionAxisSlider";
+import { EMOTION_AXES, EmotionRadar } from "./EmotionRadar";
 import { cn } from "@/lib/utils";
 import type { BanInfo, DirectiveData, EmotionalProfile, EmotionSnapshot } from "@/lib/types";
+
+export type EmotionView = "bars" | "radar";
 
 /** Map an emotional profile to a face emoji illustrating the dominant state. */
 function getEmotionEmoji(emotions: EmotionalProfile): string {
@@ -22,14 +25,7 @@ function getEmotionEmoji(emotions: EmotionalProfile): string {
   return "🙂";
 }
 
-const AXES: { key: keyof EmotionalProfile; hue: number }[] = [
-  { key: "engagement", hue: 30 },
-  { key: "accord", hue: 220 },
-  { key: "confiance", hue: 140 },
-  { key: "frustration", hue: 0 },
-  { key: "curiosite", hue: 190 },
-  { key: "enthousiasme", hue: 55 },
-];
+const AXES = EMOTION_AXES;
 
 interface ParticipantEmotionCardProps {
   participant: { id: string; name: string; emoji: string; role: string };
@@ -41,6 +37,8 @@ interface ParticipantEmotionCardProps {
   currentTurn: number;
   directive?: DirectiveData;
   banInfo?: BanInfo;
+  view?: EmotionView;
+  isActive?: boolean;
 }
 
 export function ParticipantEmotionCard({
@@ -53,12 +51,20 @@ export function ParticipantEmotionCard({
   currentTurn,
   directive,
   banInfo,
+  view = "bars",
+  isActive = false,
 }: ParticipantEmotionCardProps) {
   const { t } = useTranslation();
   const [showDirective, setShowDirective] = useState(false);
+  const previous = history.length >= 2 ? history[history.length - 2].emotions : undefined;
 
   return (
-    <div className="space-y-1 rounded-md border border-border bg-card p-2">
+    <div
+      className={cn(
+        "space-y-1 rounded-md border bg-card p-2 transition-colors",
+        isActive ? "border-primary/60 shadow-[0_0_0_1px] shadow-primary/20" : "border-border",
+      )}
+    >
       <div className="flex items-center gap-1.5">
         <span className="text-sm">{participant.emoji}</span>
         <span className={cn(
@@ -89,17 +95,21 @@ export function ParticipantEmotionCard({
           {moodSummary}
         </p>
       )}
-      {AXES.map(({ key, hue }) => (
-        <EmotionAxisSlider
-          key={key}
-          axis={key}
-          value={emotions[key]}
-          history={history.map((s) => s.emotions[key])}
-          hue={hue}
-          pulse={thresholdAxis === key}
-          onChange={(v) => onAdjust(key, v)}
-        />
-      ))}
+      {view === "radar" ? (
+        <EmotionRadar emotions={emotions} previous={previous} />
+      ) : (
+        AXES.map(({ key, hue }) => (
+          <EmotionAxisSlider
+            key={key}
+            axis={key}
+            value={emotions[key]}
+            history={history.map((s) => s.emotions[key])}
+            hue={hue}
+            pulse={thresholdAxis === key}
+            onChange={(v) => onAdjust(key, v)}
+          />
+        ))
+      )}
 
       {directive && (
         <div className="border-t border-border pt-1">
@@ -126,6 +136,19 @@ export function ParticipantEmotionCard({
                 <span className="rounded bg-accent px-1 py-0.5">
                   {t(`directive.acts.${directive.speechAct}`, directive.speechAct)}
                 </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="inline-flex items-center gap-0.5">
+                  <Crosshair className="h-3 w-3" />
+                  <span className="font-medium text-foreground">{t("directive.focus")}:</span>{" "}
+                  {directive.focusSpeaker ?? t("directive.focusTopic")}
+                </span>
+                {directive.reasoningLevel !== "off" && (
+                  <span className="inline-flex items-center gap-0.5">
+                    <Brain className="h-3 w-3" />
+                    {t(`settings.reasoning_${directive.reasoningLevel}`)}
+                  </span>
+                )}
               </div>
               {directive.emotionBehavior && (
                 <div>

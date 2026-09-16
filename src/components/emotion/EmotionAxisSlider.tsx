@@ -50,7 +50,7 @@ export function EmotionAxisSlider({
 
   return (
     <div className={`flex items-center gap-1.5 ${pulse ? "animate-pulse" : ""}`}>
-      <span className="w-[80px] truncate text-[10px] text-muted-foreground">
+      <span className="w-[80px] truncate text-[10px] text-muted-foreground" title={t(`emotions.${axis}`)}>
         {t(`emotions.${axis}`)}
       </span>
       <div className="relative flex-1 h-1.5">

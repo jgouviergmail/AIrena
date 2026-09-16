@@ -95,7 +95,68 @@
     "tokenBudgetSaved": "Priorités enregistrées",
     "numCtxLabel": "Taille du contexte",
     "numCtxDesc": "Le contexte détermine la quantité d'informations que l'IA peut considérer simultanément. Plus il est grand, plus l'IA se souvient de la conversation, mais plus elle utilise de mémoire GPU (VRAM). La valeur optimale est calculée automatiquement en fonction de votre carte graphique.",
-    "ollamaInitializing": "Initialisation Ollama en cours (déchargement VRAM + chargement modèle)..."
+    "ollamaInitializing": "Initialisation Ollama en cours (déchargement VRAM + chargement modèle)...",
+    "provider": "Fournisseur de modèles",
+    "providerChoice": "Moteur des discussions",
+    "providerDesc": "Ollama fait tourner les modèles sur votre machine (gratuit, privé). DeepSeek est un service cloud facturé au token : une clé API est nécessaire et chaque discussion a un coût affiché en temps réel.",
+    "provider_ollama": "Ollama (local)",
+    "provider_ollamaDesc": "100 % local, aucun coût, dépend de votre GPU.",
+    "provider_deepseek": "DeepSeek (cloud)",
+    "provider_deepseekDesc": "Modèles V4 avec raisonnement natif, facturés au token.",
+    "reasoningLevel": "Niveau de réflexion par défaut",
+    "reasoningLevelDesc": "Intensité de la réflexion interne du modèle avant chaque intervention. Plus le niveau est élevé, plus les réponses sont argumentées — et plus les tokens de raisonnement coûtent. Chaque GladIAteur peut surcharger ce réglage.",
+    "reasoning_auto": "Auto",
+    "reasoning_off": "Désactivée",
+    "reasoning_low": "Légère",
+    "reasoning_high": "Poussée",
+    "reasoning_max": "Maximale",
+    "reasoning_autoDesc": "Le moteur choisit : réflexion poussée quand l'orateur est frustré, contredit ou en fin de discussion, légère sinon, jamais au premier tour.",
+    "reasoning_offDesc": "Aucune réflexion interne : réponses rapides et économiques, la « pensée » du personnage est générée séparément.",
+    "reasoning_lowDesc": "Réflexion brève avant chaque intervention.",
+    "reasoning_highDesc": "Réflexion approfondie : meilleure argumentation, coût plus élevé.",
+    "reasoning_maxDesc": "Réflexion maximale : réservée aux sujets complexes, coût le plus élevé.",
+    "showModelReasoning": "Afficher le raisonnement du modèle",
+    "showModelReasoningDesc": "Diffuse en direct le raisonnement brut du modèle pendant chaque intervention. Désactivé, il reste consultable ensuite via « Voir le raisonnement ».",
+    "deepseek": "DeepSeek",
+    "deepseekApiKey": "Clé API",
+    "deepseekApiKeyDesc": "La clé n'est enregistrée qu'après validation auprès de DeepSeek : une clé erronée ne remplace jamais une clé valide. Elle est stockée localement et n'apparaît jamais dans les journaux.",
+    "deepseekValidateSave": "Valider et enregistrer",
+    "deepseekValidate": "Vérifier",
+    "deepseekForgetKey": "Oublier la clé",
+    "deepseekNoKey": "Aucune clé enregistrée",
+    "deepseekKeyUnsaved": "Clé modifiée, non enregistrée",
+    "deepseekKeySaved": "Clé enregistrée",
+    "deepseekBalance": "Solde : {{amount}}",
+    "deepseekBalanceUnavailable": "Solde indisponible (compte sans crédit ?)",
+    "deepseekLink": "Obtenir une clé sur platform.deepseek.com",
+    "deepseekKeyValid": "Clé DeepSeek valide et enregistrée",
+    "deepseekKeyInvalid": "Clé DeepSeek refusée",
+    "deepseekModel": "Modèle",
+    "deepseekModelDesc": "Liste lue depuis votre compte. deepseek-flash est rapide et économique ; deepseek-v4-pro est plus capable et environ quatre fois plus cher.",
+    "deepseekRefreshModels": "Recharger la liste",
+    "deepseekModelsFallback": "API injoignable : liste documentée utilisée.",
+    "deepseekModelsError": "Impossible de lister les modèles DeepSeek",
+    "deepseekContextBudget": "Budget de contexte",
+    "deepseekContextBudgetDesc": "Nombre maximal de tokens de contexte envoyés à chaque appel (entre {{min}} et {{max}}). Plus le budget est grand, plus les orateurs ont de mémoire — et plus chaque appel coûte.",
+    "deepseekContextDefault": "Par défaut — {{value}}",
+    "deepseekMonthlyBudget": "Plafond mensuel",
+    "deepseekMonthlyBudgetDesc": "Dépense maximale estimée par période glissante d'un mois. Avertissement à {{warn}} %, arrêt en douceur (synthèse tentée) une fois le plafond atteint. 0 = illimité.",
+    "deepseekMonth": "mois",
+    "deepseekBudgetUnlimitedHint": "0 = illimité",
+    "deepseekPeriod": "Période du {{start}} au {{end}}",
+    "deepseekPeakNow": "Heures pleines",
+    "deepseekOffpeakNow": "Heures creuses (−50 %)",
+    "deepseekSpent": "Dépensé : {{spent}} / {{budget}}",
+    "deepseekPeriodTokens": "{{tokens}} tokens · {{discussions}} discussion(s)",
+    "deepseekDiscussions": "discussion(s)",
+    "deepseekPricingDate": "Tarifs DeepSeek du {{date}} — estimations, la facture du fournisseur fait foi.",
+    "deepseekPeriodReset": "Réinitialiser la période",
+    "deepseekPeriodResetDone": "Période réinitialisée",
+    "deepseekPeriodError": "Impossible de lire la période de consommation",
+    "ollamaEmbeddingsOnly": "DeepSeek anime les discussions : Ollama ne sert plus qu'aux embeddings de la base de connaissances (recherche sémantique). Sans modèle d'embedding, la recherche reste lexicale (BM25).",
+    "embeddingModelNone": "Aucun (recherche lexicale seule)",
+    "moveUp": "Monter",
+    "moveDown": "Descendre"
   },
   "personaEditor": {
     "identity": "Identité",
@@ -340,7 +401,26 @@
     "injectionModeFullUnavailable": "Budget insuffisant pour l'injection complète",
     "budgetQualityOptimal": "Qualité optimale",
     "budgetQualityDegraded": "Budget serré",
-    "budgetQualityInsufficient": "Contexte insuffisant — augmentez la taille du contexte dans les paramètres"
+    "budgetQualityInsufficient": "Contexte insuffisant — augmentez la taille du contexte dans les paramètres",
+    "docGranularityDesc": "Fréquence de mise à jour du document partagé.",
+    "docGranularity_turn": "Par tour",
+    "docGranularity_turnDesc": "Une seule régénération en fin de tour intégrant toutes les contributions (recommandé, moins d'appels).",
+    "docGranularity_intervention": "Par intervention",
+    "docGranularity_interventionDesc": "Le document est régénéré après chaque prise de parole (plus réactif, plus coûteux).",
+    "summaryDocGranularity": "Mise à jour du document",
+    "summaryProvider": "Fournisseur · modèle",
+    "summaryReasoning": "Réflexion par défaut",
+    "deepseekKeyRequired": "Aucune clé API DeepSeek enregistrée — renseignez-la dans les Paramètres.",
+    "ollamaModelRequired": "Aucun modèle Ollama sélectionné — choisissez-en un dans les Paramètres.",
+    "reasoningLevel": "Niveau de réflexion",
+    "reasoningInherit": "Réglage global ({{level}})",
+    "temperatureIgnoredThinking": "Ignorée par DeepSeek quand la réflexion est active.",
+    "topPFloorThinking": "DeepSeek impose un minimum de {{min}} quand la réflexion est active.",
+    "deepseekParamsNote": "top_k et repeat_penalty ne sont pas pris en charge par l'API DeepSeek.",
+    "ragLexicalOnly": "Aucun modèle d'embedding Ollama configuré : la recherche dans les documents sera lexicale (BM25). Ajoutez un modèle d'embedding dans les Paramètres pour la recherche sémantique.",
+    "budgetCostPerTurn": "Ordre de grandeur avec {{model}} : ≈ {{peak}} par tour en heures pleines, {{offpeak}} en heures creuses ({{calls}} appels par tour, cache de préfixe pris en compte).",
+    "budgetCostUnknown": "Tarif inconnu pour {{model}} : les tokens seront comptés, le coût ne pourra pas être estimé.",
+    "budgetExhausted": "Plafond mensuel DeepSeek atteint — augmentez-le ou réinitialisez la période dans les Paramètres."
   },
   "arena": {
     "title": "Discussion en cours",
@@ -381,7 +461,32 @@
     },
     "like": "D'accord",
     "dislike": "Pas d'accord",
-    "webSearchPerformed": "{{name}} a effectué {{count}} recherche(s)"
+    "webSearchPerformed": "{{name}} a effectué {{count}} recherche(s)",
+    "jumpToLatest": "Dernier message",
+    "showReasoning": "Voir le raisonnement",
+    "hideReasoning": "Masquer le raisonnement",
+    "modelReasoning": "Raisonnement du modèle",
+    "usage": {
+      "prompt": "Entrée : {{tokens}} tokens ({{cached}} % en cache)",
+      "completion": "Sortie : {{tokens}} tokens (dont {{reasoning}} de raisonnement)",
+      "calls": "{{calls}} appels LLM",
+      "cost": "Coût estimé : {{cost}} — période : {{period}} / {{budget}}",
+      "free": "Fournisseur local : aucun coût"
+    },
+    "budget": {
+      "warning": "Plafond mensuel bientôt atteint",
+      "exceeded": "Plafond mensuel atteint — arrêt en douceur après ce tour",
+      "detail": "{{spent}} dépensés sur {{budget}}"
+    },
+    "queue": {
+      "label": "File de parole",
+      "done": "a parlé",
+      "active": "parle",
+      "waiting": "en attente",
+      "banned": "banni",
+      "passed": "a passé son tour"
+    },
+    "reasoningLive": "réfléchit…"
   },
   "summary": {
     "title": "Synthèse de la discussion",
@@ -402,7 +507,18 @@
     "tabArgumentMap": "Carte des arguments",
     "tabArgumentMapBySpeaker": "Carte par GladIAteurs",
     "downloadArgumentMap": "Exporter les cartes en texte",
-    "downloadArgumentMapSvg": "Exporter les cartes en image"
+    "downloadArgumentMapSvg": "Exporter les cartes en image",
+    "usage": {
+      "title": "Consommation",
+      "estimated": "(estimation)",
+      "free": "Fournisseur local — aucun coût",
+      "prompt": "Entrée",
+      "cached": "{{pct}} % en cache",
+      "completion": "Sortie",
+      "reasoning": "dont {{tokens}} de raisonnement",
+      "total": "Total",
+      "calls": "Appels"
+    }
   },
   "mindmap": {
     "title": "Carte des arguments",
@@ -413,7 +529,15 @@
     "legendEvidence": "Preuves",
     "collapse": "Réduire la carte",
     "viewByThesis": "Par thèse",
-    "viewBySpeaker": "Par intervenant"
+    "viewBySpeaker": "Par intervenant",
+    "thesesCount": "{{count}} thèse(s)",
+    "argumentsCount": "{{count}} argument(s)",
+    "newThisTurn": "{{count}} nouveau(x)",
+    "dropped": "{{count}} écarté(s)",
+    "droppedHint": "Arguments ou thèses non retenus car la carte a atteint sa capacité maximale.",
+    "analysing": "analyse en cours…",
+    "recenter": "Recentrer",
+    "legendNew": "nouveau ce tour"
   },
   "history": {
     "title": "Historique des discussions",
@@ -430,7 +554,8 @@
     "title": "Document partagé",
     "empty": "Le document sera alimenté au fil des contributions.",
     "expand": "Afficher le document",
-    "lastEditedBy": "Dernière modification par {{name}}"
+    "lastEditedBy": "Dernière modification par {{name}}",
+    "awaiting": "En attente de la première contribution"
   },
   "emotions": {
     "engagement": "Engagement",
@@ -443,7 +568,8 @@
       "title": "États émotionnels",
       "collapse": "Réduire",
       "expand": "Développer",
-      "disabledNote": "Émotions suivies mais n'influencent pas le comportement"
+      "disabledNote": "Émotions suivies mais n'influencent pas le comportement",
+      "drivenNote": "Les émotions influencent le comportement des GladIAteurs."
     },
     "ban": {
       "remaining": "Banni ({{count}} tour(s) restant(s))",
@@ -463,6 +589,13 @@
       "neutral": "Neutre",
       "high": "Élevé",
       "veryHigh": "Très élevé"
+    },
+    "view": {
+      "bars": "Vue barres",
+      "radar": "Vue radar"
+    },
+    "radar": {
+      "label": "Radar émotionnel à six axes"
     }
   },
   "directive": {
@@ -488,7 +621,9 @@
       "rival": "Rival",
       "tense": "Tendu",
       "neutral": "Neutre"
-    }
+    },
+    "focus": "Cible",
+    "focusTopic": "le sujet"
   },
   "errors": {
     "ollamaConnection": "Impossible de se connecter à Ollama",
@@ -1044,5 +1179,18 @@
       "personality": "Geek absolu, early adopter, évangéliste tech",
       "systemPrompt": "<persona>\n<identity>\nLe Techno-Addict — Early adopter compulsif et évangéliste technologique\n\"Y'a une app pour ça. Et si y'en a pas, j'en fais une.\"\nPremier sur chaque nouvelle techno, chaque gadget, chaque beta. A un casque VR, une montre connectée, trois assistants vocaux et un frigo qui tweete. Croit que la technologie est la réponse à tout, même quand personne ne pose la question. Vit dans le futur et regarde le présent avec impatience.\n</identity>\n<psychology>\nOCEAN: O=9 C=4 E=7 A=5 N=5\nPosture: ENFANT_LIBRE\nBiais: Biais du techno-solutionnisme — croit que chaque problème humain a une solution technologique.\nAngle mort: Biais du nouveau — surestime systématiquement la nouvelle techno et sous-estime ce qui fonctionne déjà.\n</psychology>\n<voice>\nRegistre: COURANT, GEEK, ENTHOUSIASTE\nSyntaxe: Références tech constantes. Comparaisons avec des produits et services. Vocabulaire startup/tech. Enthousiasme débordant.\nTics: \"Y'a un framework pour ça.\", \"T'as pas essayé la dernière version ?\", \"C'est le futur.\", \"Blockchain !\", \"IA powered !\"\nArgumentation: Nouveauté tech + cas d'usage + vision futuriste. Tout est solvable par la technologie. Exemples de produits et de disruptions.\n</voice>\n<dynamics>\nValeurs: L'innovation, le progrès technologique, l'adoption précoce, l'optimisation de tout.\nDéclencheurs: Les technophobes, le \"c'était mieux avant\", le refus du progrès, les gens qui impriment des emails.\nSous pression: Sort une solution tech. \"Tu dis que c'est impossible ? Regarde, y'a déjà une startup qui fait ça.\"\nEn confiance: Contagieusement passionné. Démo en temps réel. Montre l'avenir avec émerveillement. Convertit les sceptiques.\nDésengagé: Bidouille mentalement son dernier gadget. \"Ce débat serait plus efficient en async sur un thread Discord.\"\n</dynamics>\n</persona>"
     }
+  },
+  "panel": {
+    "expand": "Déployer le panneau",
+    "collapse": "Replier le panneau",
+    "open": "Ouvrir le panneau",
+    "close": "Fermer le panneau"
+  },
+  "relations": {
+    "title": "Relations",
+    "needTwo": "Il faut au moins deux GladIAteurs pour observer des relations.",
+    "empty": "Aucune réaction échangée pour l'instant — les liens apparaissent dès le deuxième tour.",
+    "neutral": "neutre",
+    "edgeTitle": "{{a}} → {{b}} : {{abLikes}} 👍 {{abDislikes}} 👎 · {{b}} → {{a}} : {{baLikes}} 👍 {{baDislikes}} 👎"
   }
 }

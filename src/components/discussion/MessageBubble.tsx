@@ -180,7 +180,9 @@ export function MessageBubble({
               className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <Brain className="h-3 w-3" />
-              {showThought ? t("arena.hideThoughts") : t("arena.showThoughts")}
+              {message.thoughtKind === "reasoning"
+                ? (showThought ? t("arena.hideReasoning") : t("arena.showReasoning"))
+                : (showThought ? t("arena.hideThoughts") : t("arena.showThoughts"))}
             </button>
           )}
         </div>
@@ -188,7 +190,10 @@ export function MessageBubble({
 
       {showThought && message.innerThought && (
         <div className="mb-3 rounded-md border border-dashed border-border bg-muted/30 p-3">
-          <p className="text-xs italic text-muted-foreground">
+          {message.thoughtKind === "reasoning" && (
+            <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-primary">{t("arena.modelReasoning")}</p>
+          )}
+          <p className="whitespace-pre-wrap text-xs italic text-muted-foreground">
             {message.innerThought}
           </p>
         </div>
@@ -230,23 +235,45 @@ export function MessageBubble({
   );
 }
 
+/** Characters of live reasoning kept on screen (the tail — the bubble must not grow unbounded). */
+const REASONING_PREVIEW_CHARS = 600;
+
 export function StreamingBubble({
   speakerName,
   role,
   content,
   emoji,
   participantNames = EMPTY_NAMES,
+  variant = "content",
 }: {
   speakerName: string;
   role: SpeakerRole;
   content: string;
   emoji?: string;
   participantNames?: string[];
+  /** "reasoning": the model is still thinking — muted tail preview */
+  variant?: "content" | "reasoning";
 }) {
+  const { t } = useTranslation();
   const highlighted = useMemo(
-    () => highlightNames(content, participantNames),
-    [content, participantNames],
+    () => (variant === "content" ? highlightNames(content, participantNames) : null),
+    [content, participantNames, variant],
   );
+  if (variant === "reasoning") {
+    const tail = content.length > REASONING_PREVIEW_CHARS ? `…${content.slice(-REASONING_PREVIEW_CHARS)}` : content;
+    return (
+      <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3 motion-safe:animate-in motion-safe:fade-in">
+        <div className="mb-1.5 flex items-center gap-2">
+          <SpeakerBadge name={speakerName} role={role} active emoji={emoji} />
+          <span className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-primary">
+            <Brain className="h-3 w-3 animate-pulse" />
+            {t("arena.reasoningLive")}
+          </span>
+        </div>
+        <p className="whitespace-pre-wrap text-xs italic text-muted-foreground">{tail}</p>
+      </div>
+    );
+  }
   return (
     <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
       <div className="mb-2">

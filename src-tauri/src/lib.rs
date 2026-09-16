@@ -4,6 +4,7 @@ mod db;
 mod engine;
 mod error;
 mod license;
+mod llm;
 mod models;
 mod ollama;
 mod rag;
@@ -116,6 +117,12 @@ pub fn run() {
             // License commands
             commands::settings::validate_license_key,
             commands::settings::check_license_status,
+            // LLM provider commands
+            commands::llm::get_llm_constants,
+            commands::llm::list_deepseek_models,
+            commands::llm::validate_deepseek_key,
+            commands::llm::get_llm_usage_period,
+            commands::llm::reset_llm_usage_period,
             // History commands
             commands::history::save_discussion_history,
             commands::history::list_discussion_history,

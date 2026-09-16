@@ -6,7 +6,6 @@ use tokio_util::sync::CancellationToken;
 use super::error::OllamaError;
 use super::types::{ChatRequest, ChatResponse, ModelInfo, PsResponse, ShowResponse};
 use crate::constants;
-use crate::models::settings::LlmParams;
 
 /// Strip `<think>...</think>` blocks from text.
 /// Some thinking models leak these tags into the content field; this ensures clean output.
@@ -27,12 +26,21 @@ pub fn strip_think_tags(text: &str) -> String {
     result.trim().to_string()
 }
 
-/// Result of a streaming chat with think mode
+/// Result of a streaming chat (content + optional thinking + token counts).
+#[derive(Debug, Default)]
 pub struct ChatStreamResult {
     pub content: String,
     pub thinking: Option<String>,
+    /// From the final chunk's `prompt_eval_count`.
+    pub prompt_eval_count: Option<u32>,
+    /// From the final chunk's `eval_count` (thinking tokens included).
+    pub eval_count: Option<u32>,
+    /// The model hit `num_predict` (`done_reason == "length"`).
+    pub truncated: bool,
 }
 
+/// Low-level HTTP client for the Ollama API. Chat requests go through
+/// `llm::ollama::OllamaProvider`, which owns the wire mapping.
 #[derive(Clone)]
 pub struct OllamaClient {
     client: reqwest::Client,
@@ -69,23 +77,9 @@ impl OllamaClient {
         Ok(())
     }
 
-    /// Chat streaming with retry and timeout.
-    /// Strips any residual `<think>` tags from the content for safety.
-    /// NOTE: on_token must be Send to cross .await boundaries
-    pub async fn chat_streaming(
-        &self,
-        request: &ChatRequest,
-        on_token: impl Fn(&str) + Send,
-        cancel: CancellationToken,
-    ) -> Result<String, OllamaError> {
-        let result = self
-            .chat_streaming_with_think(request, on_token, |_| {}, cancel)
-            .await?;
-        Ok(strip_think_tags(&result.content))
-    }
-
     /// Chat streaming with think mode — separate callbacks for content and thinking tokens.
     /// Includes retry with exponential backoff (up to 3 attempts).
+    /// NOTE: callbacks must be Send to cross .await boundaries
     pub async fn chat_streaming_with_think(
         &self,
         request: &ChatRequest,
@@ -114,19 +108,6 @@ impl OllamaClient {
         Err(OllamaError::ConnectionLost)
     }
 
-    /// Chat without streaming (for JSON responses like reactions, moderation).
-    /// Strips any residual `<think>` tags from the content for safety.
-    pub async fn chat(
-        &self,
-        request: &ChatRequest,
-        cancel: CancellationToken,
-    ) -> Result<String, OllamaError> {
-        let result = self
-            .chat_streaming_with_think(request, |_| {}, |_| {}, cancel)
-            .await?;
-        Ok(strip_think_tags(&result.content))
-    }
-
     /// Unified NDJSON streaming — buffered parsing with Vec<u8>.
     /// Handles both content and thinking tokens via separate callbacks.
     async fn stream_ndjson(
@@ -151,8 +132,13 @@ impl OllamaClient {
 
         let mut stream = response.bytes_stream();
         let mut buf = Vec::<u8>::new();
-        let mut accumulated_content = String::new();
+        let mut result = ChatStreamResult::default();
         let mut accumulated_thinking = String::new();
+
+        let finish = |mut result: ChatStreamResult, thinking: String| {
+            result.thinking = if thinking.is_empty() { None } else { Some(thinking) };
+            result
+        };
 
         loop {
             tokio::select! {
@@ -164,34 +150,13 @@ impl OllamaClient {
                                 let line: Vec<u8> = buf.drain(..=pos).collect();
                                 let line = String::from_utf8_lossy(&line);
                                 let line = line.trim();
-                                if !line.is_empty() {
-                                    let resp: ChatResponse = serde_json::from_str(line)?;
-                                    if resp.done {
-                                        if resp.done_reason.as_deref() == Some("length") {
-                                            tracing::warn!(
-                                                chars = accumulated_content.len(),
-                                                "Response truncated: model hit num_predict token limit"
-                                            );
-                                        }
-                                        return Ok(ChatStreamResult {
-                                            content: accumulated_content,
-                                            thinking: if accumulated_thinking.is_empty() {
-                                                None
-                                            } else {
-                                                Some(accumulated_thinking)
-                                            },
-                                        });
-                                    }
-                                    if let Some(thinking) = &resp.message.thinking {
-                                        if !thinking.is_empty() {
-                                            on_thinking_token(thinking);
-                                            accumulated_thinking.push_str(thinking);
-                                        }
-                                    }
-                                    if !resp.message.content.is_empty() {
-                                        on_content_token(&resp.message.content);
-                                        accumulated_content.push_str(&resp.message.content);
-                                    }
+                                if line.is_empty() {
+                                    continue;
+                                }
+                                let resp: ChatResponse = serde_json::from_str(line)?;
+                                Self::absorb_chunk(&resp, &mut result, &mut accumulated_thinking, on_content_token, on_thinking_token);
+                                if resp.done {
+                                    return Ok(finish(result, accumulated_thinking));
                                 }
                             }
                         }
@@ -203,33 +168,48 @@ impl OllamaClient {
                                 let line = line.trim();
                                 if !line.is_empty() {
                                     if let Ok(resp) = serde_json::from_str::<ChatResponse>(line) {
-                                        if !resp.message.content.is_empty() {
-                                            on_content_token(&resp.message.content);
-                                            accumulated_content.push_str(&resp.message.content);
-                                        }
-                                        if resp.done_reason.as_deref() == Some("length") {
-                                            tracing::warn!(
-                                                chars = accumulated_content.len(),
-                                                "Response truncated: model hit num_predict token limit"
-                                            );
-                                        }
+                                        Self::absorb_chunk(&resp, &mut result, &mut accumulated_thinking, on_content_token, on_thinking_token);
                                     }
                                 }
                             }
-                            return Ok(ChatStreamResult {
-                                content: accumulated_content,
-                                thinking: if accumulated_thinking.is_empty() {
-                                    None
-                                } else {
-                                    Some(accumulated_thinking)
-                                },
-                            });
+                            return Ok(finish(result, accumulated_thinking));
                         }
                     }
                 }
                 _ = cancel.cancelled() => {
                     return Err(OllamaError::Cancelled);
                 }
+            }
+        }
+    }
+
+    /// Fold one NDJSON chunk into the accumulated result (tokens, counts, truncation).
+    fn absorb_chunk(
+        resp: &ChatResponse,
+        result: &mut ChatStreamResult,
+        thinking: &mut String,
+        on_content_token: &(impl Fn(&str) + Send),
+        on_thinking_token: &(impl Fn(&str) + Send),
+    ) {
+        if let Some(t) = &resp.message.thinking {
+            if !t.is_empty() {
+                on_thinking_token(t);
+                thinking.push_str(t);
+            }
+        }
+        if !resp.message.content.is_empty() {
+            on_content_token(&resp.message.content);
+            result.content.push_str(&resp.message.content);
+        }
+        if resp.done {
+            result.prompt_eval_count = resp.prompt_eval_count;
+            result.eval_count = resp.eval_count;
+            if resp.done_reason.as_deref() == Some("length") {
+                result.truncated = true;
+                tracing::warn!(
+                    chars = result.content.len(),
+                    "Response truncated: model hit num_predict token limit"
+                );
             }
         }
     }
@@ -375,54 +355,12 @@ impl OllamaClient {
             .await
             .map_err(|e| OllamaError::ConnectionFailed(format!("list_running_models parse error: {e}")))
     }
-
-    /// Build a ChatRequest from LlmParams
-    pub fn build_request(
-        &self,
-        system_prompt: &str,
-        user_message: &str,
-        params: &LlmParams,
-        json_format: bool,
-    ) -> ChatRequest {
-        use super::types::{ChatMessage, ChatOptions};
-
-        let mut messages = vec![];
-        if !system_prompt.is_empty() {
-            messages.push(ChatMessage {
-                role: "system".to_string(),
-                content: system_prompt.to_string(),
-            });
-        }
-        messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: user_message.to_string(),
-        });
-
-        ChatRequest {
-            model: self.model.clone(),
-            messages,
-            format: if json_format {
-                Some("json".to_string())
-            } else {
-                None
-            },
-            stream: true,
-            options: Some(ChatOptions {
-                temperature: Some(params.temperature),
-                top_p: Some(params.top_p),
-                top_k: Some(params.top_k),
-                num_predict: Some(params.num_predict),
-                num_ctx: Some(params.num_ctx),
-                repeat_penalty: Some(params.repeat_penalty),
-            }),
-            think: None,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ollama::types::ChatResponseMessage;
 
     #[test]
     fn test_strip_think_tags_no_tags() {
@@ -464,5 +402,52 @@ mod tests {
     #[test]
     fn test_strip_think_tags_no_content() {
         assert_eq!(strip_think_tags(""), "");
+    }
+
+    #[test]
+    fn absorb_chunk_accumulates_tokens_counts_and_truncation() {
+        let mut result = ChatStreamResult::default();
+        let mut thinking = String::new();
+        let content_seen = std::sync::Mutex::new(Vec::new());
+        let thinking_seen = std::sync::Mutex::new(Vec::new());
+        let on_c = |t: &str| content_seen.lock().unwrap().push(t.to_string());
+        let on_t = |t: &str| thinking_seen.lock().unwrap().push(t.to_string());
+
+        let mid = ChatResponse {
+            message: ChatResponseMessage { role: "assistant".into(), content: "Bon".into(), thinking: Some("hmm".into()) },
+            done: false,
+            done_reason: None,
+            prompt_eval_count: None,
+            eval_count: None,
+        };
+        OllamaClient::absorb_chunk(&mid, &mut result, &mut thinking, &on_c, &on_t);
+        let last = ChatResponse {
+            message: ChatResponseMessage { role: "assistant".into(), content: "jour".into(), thinking: None },
+            done: true,
+            done_reason: Some("length".into()),
+            prompt_eval_count: Some(120),
+            eval_count: Some(45),
+        };
+        OllamaClient::absorb_chunk(&last, &mut result, &mut thinking, &on_c, &on_t);
+
+        assert_eq!(result.content, "Bonjour");
+        assert_eq!(thinking, "hmm");
+        assert_eq!(result.prompt_eval_count, Some(120));
+        assert_eq!(result.eval_count, Some(45));
+        assert!(result.truncated);
+        assert_eq!(content_seen.lock().unwrap().len(), 2);
+        assert_eq!(thinking_seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn chat_response_parses_final_chunk_counts() {
+        let json = r#"{"model":"m","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":321,"eval_count":87}"#;
+        let resp: ChatResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.prompt_eval_count, Some(321));
+        assert_eq!(resp.eval_count, Some(87));
+        // Older Ollama without counts still parses
+        let json = r#"{"message":{"role":"assistant","content":"x"},"done":false}"#;
+        let resp: ChatResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.eval_count.is_none());
     }
 }

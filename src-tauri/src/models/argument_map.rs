@@ -1,4 +1,8 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
+
+use crate::constants;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -105,13 +109,14 @@ impl ArgumentMap {
 
     /// Thesis-centric markdown: `# Topic / ## Thesis (Speaker) / - Icon Speaker: Arg`
     /// Each thesis gets its own markmap color (depth-2 branch). Speaker names inline.
-    pub fn to_markdown(&self, topic: &str) -> String {
+    /// Nodes whose id is in `new_ids` are flagged as new (latest extraction).
+    pub fn to_markdown(&self, topic: &str, new_ids: &HashSet<String>) -> String {
         let mut md = format!("# {topic}\n");
 
         for thesis in &self.theses {
-            md.push_str(&format!("## {} ({})\n", thesis.label, thesis.speaker_name));
+            md.push_str(&format!("## {}{} ({})\n", Self::marker(new_ids, &thesis.id), thesis.label, thesis.speaker_name));
             for arg in &thesis.arguments {
-                Self::render_argument_recursive(&mut md, arg, 0);
+                Self::render_argument_recursive(&mut md, arg, 0, new_ids);
             }
         }
 
@@ -121,12 +126,19 @@ impl ArgumentMap {
     /// Speaker-centric markdown: `# Topic / ## Speaker / ### Thesis / - Icon Speaker: Arg`
     /// Each speaker gets its own markmap color (depth-2 branch).
     /// Theses appear under their owner; cross-speaker arguments are inline with speaker name.
-    pub fn to_markdown_by_speaker(&self, topic: &str) -> String {
-        // Collect unique thesis-owning speakers in order of first appearance
+    /// A speaker who only contributed arguments gets an "Arguments" branch (label per
+    /// `lang`) listing them with the thesis they target. New nodes are flagged.
+    pub fn to_markdown_by_speaker(&self, topic: &str, new_ids: &HashSet<String>, lang: &str) -> String {
+        // Speakers in order of first appearance: thesis owners first, then argument-only ones
         let mut speakers: Vec<&str> = Vec::new();
         for thesis in &self.theses {
             if !speakers.contains(&thesis.speaker_name.as_str()) {
                 speakers.push(&thesis.speaker_name);
+            }
+        }
+        for thesis in &self.theses {
+            for arg in &thesis.arguments {
+                Self::collect_speakers(arg, &mut speakers);
             }
         }
 
@@ -134,11 +146,24 @@ impl ArgumentMap {
 
         for speaker in &speakers {
             md.push_str(&format!("## {speaker}\n"));
-            for thesis in &self.theses {
-                if thesis.speaker_name == *speaker {
-                    md.push_str(&format!("### {}\n", thesis.label));
+            let owns_thesis = self.theses.iter().any(|t| t.speaker_name == *speaker);
+            if owns_thesis {
+                for thesis in self.theses.iter().filter(|t| t.speaker_name == *speaker) {
+                    md.push_str(&format!("### {}{}\n", Self::marker(new_ids, &thesis.id), thesis.label));
                     for arg in &thesis.arguments {
-                        Self::render_argument_recursive(&mut md, arg, 0);
+                        Self::render_argument_recursive(&mut md, arg, 0, new_ids);
+                    }
+                }
+            } else {
+                let branch = match lang {
+                    "en" => "Arguments",
+                    "zh" => "论据",
+                    _ => "Arguments",
+                };
+                md.push_str(&format!("### {branch}\n"));
+                for thesis in &self.theses {
+                    for arg in &thesis.arguments {
+                        Self::render_own_arguments(&mut md, arg, speaker, &thesis.label, new_ids);
                     }
                 }
             }
@@ -147,16 +172,44 @@ impl ArgumentMap {
         md
     }
 
+    fn marker(new_ids: &HashSet<String>, id: &str) -> &'static str {
+        if new_ids.contains(id) { constants::ARGMAP_NEW_MARKER_PREFIX } else { "" }
+    }
+
     /// Render a single argument and its children recursively with indentation.
-    fn render_argument_recursive(md: &mut String, arg: &ArgumentNode, indent_level: usize) {
+    fn render_argument_recursive(md: &mut String, arg: &ArgumentNode, indent_level: usize, new_ids: &HashSet<String>) {
         let indent = "  ".repeat(indent_level);
         let icon = Self::arg_icon(&arg.arg_type);
         md.push_str(&format!(
-            "{indent}- {icon} {}: {}\n",
-            arg.speaker_name, arg.label
+            "{indent}- {icon} {}{}: {}\n",
+            Self::marker(new_ids, &arg.id), arg.speaker_name, arg.label
         ));
         for child in &arg.children {
-            Self::render_argument_recursive(md, child, indent_level + 1);
+            Self::render_argument_recursive(md, child, indent_level + 1, new_ids);
+        }
+    }
+
+    /// Flat list of the arguments a given speaker made anywhere under a thesis,
+    /// each with the thesis it relates to.
+    fn render_own_arguments(md: &mut String, arg: &ArgumentNode, speaker: &str, thesis_label: &str, new_ids: &HashSet<String>) {
+        if arg.speaker_name == speaker {
+            let icon = Self::arg_icon(&arg.arg_type);
+            md.push_str(&format!(
+                "- {icon} {}{} (→ {thesis_label})\n",
+                Self::marker(new_ids, &arg.id), arg.label
+            ));
+        }
+        for child in &arg.children {
+            Self::render_own_arguments(md, child, speaker, thesis_label, new_ids);
+        }
+    }
+
+    fn collect_speakers<'a>(arg: &'a ArgumentNode, speakers: &mut Vec<&'a str>) {
+        if !speakers.contains(&arg.speaker_name.as_str()) {
+            speakers.push(&arg.speaker_name);
+        }
+        for child in &arg.children {
+            Self::collect_speakers(child, speakers);
         }
     }
 }
@@ -187,7 +240,7 @@ mod tests {
     #[test]
     fn test_to_markdown_empty() {
         let map = ArgumentMap::default();
-        let md = map.to_markdown("Test Topic");
+        let md = map.to_markdown("Test Topic", &HashSet::new());
         assert_eq!(md, "# Test Topic\n");
     }
 
@@ -206,7 +259,7 @@ mod tests {
                 ],
             }],
         };
-        let md = map.to_markdown("AI Debate");
+        let md = map.to_markdown("AI Debate", &HashSet::new());
         assert!(md.starts_with("# AI Debate\n"));
         // Thesis-centric: thesis with speaker attribution
         assert!(md.contains("## AI is beneficial (Alice)\n"));
@@ -275,7 +328,7 @@ mod tests {
                 )],
             }],
         };
-        let md = map.to_markdown("AI Debate");
+        let md = map.to_markdown("AI Debate", &HashSet::new());
         assert!(md.contains("- \u{2705} Alice: Increases productivity\n"));
         assert!(md.contains("  - \u{274C} Bob: Most gains go to corporations\n"));
         assert!(md.contains("    - \u{1F4CA} Alice: OECD shows broad wage growth\n"));
@@ -370,6 +423,39 @@ mod tests {
     }
 
     #[test]
+    fn test_by_speaker_includes_argument_only_speakers_and_new_markers() {
+        let map = ArgumentMap {
+            theses: vec![ThesisNode {
+                id: "t-0".into(),
+                label: "AI is beneficial".into(),
+                speaker_id: "s1".into(),
+                speaker_name: "Alice".into(),
+                arguments: vec![make_arg(
+                    "a-0",
+                    "Increases productivity",
+                    ArgumentType::Support,
+                    "s1",
+                    "Alice",
+                    vec![make_arg("a-1", "Gains go to shareholders", ArgumentType::Counter, "s2", "Bob", vec![])],
+                )],
+            }],
+        };
+        let md = map.to_markdown_by_speaker("AI Debate", &HashSet::new(), "fr");
+        assert!(md.contains("## Bob\n### Arguments\n- \u{274C} Gains go to shareholders (→ AI is beneficial)\n"), "{md}");
+        let zh = map.to_markdown_by_speaker("AI Debate", &HashSet::new(), "zh");
+        assert!(zh.contains("### 论据\n"));
+
+        let new_ids: HashSet<String> = ["t-0".to_string(), "a-1".to_string()].into_iter().collect();
+        let marked = map.to_markdown("AI Debate", &new_ids);
+        assert!(marked.contains("## ✨ AI is beneficial (Alice)\n"), "{marked}");
+        assert!(marked.contains("  - \u{274C} ✨ Bob: Gains go to shareholders\n"), "{marked}");
+        assert!(marked.contains("- \u{2705} Alice: Increases productivity\n"), "unchanged node has no marker");
+        let by_speaker = map.to_markdown_by_speaker("AI Debate", &new_ids, "en");
+        assert!(by_speaker.contains("### ✨ AI is beneficial\n"));
+        assert!(by_speaker.contains("- \u{274C} ✨ Gains go to shareholders (→ AI is beneficial)\n"), "{by_speaker}");
+    }
+
+    #[test]
     fn test_to_markdown_by_speaker_recursive() {
         let map = ArgumentMap {
             theses: vec![ThesisNode {
@@ -394,7 +480,7 @@ mod tests {
                 )],
             }],
         };
-        let md = map.to_markdown_by_speaker("AI Debate");
+        let md = map.to_markdown_by_speaker("AI Debate", &HashSet::new(), "fr");
         assert!(md.starts_with("# AI Debate\n"));
         // Speaker-centric: speaker at depth-2, thesis at depth-3
         assert!(md.contains("## Alice\n"));
