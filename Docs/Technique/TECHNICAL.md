@@ -1,7 +1,7 @@
 # AIrena — Documentation Technique
 
-> **Version** : 1.16
-> **Dernière mise à jour** : 2026-09-16
+> **Version** : 2.0.0
+> **Dernière mise à jour** : 2026-09-17
 > **Auteur** : jgouv
 > **Identifiant** : `com.jgouv.airena`
 
@@ -30,6 +30,10 @@
    - 6.13 [Gestion des erreurs](#613-gestion-des-erreurs)
    - 6.14 [Fournisseurs LLM, comptage et coûts](#614-fournisseurs-llm-comptage-et-coûts)
    - 6.15 [Consolidation du moteur v1.16](#615-consolidation-du-moteur-v116)
+   - 6.16 [Arène vivante v1.17](#616-arène-vivante-v117--pertinence-sources-mesures)
+   - 6.17 [Spectacle v1.18](#617-spectacle-v118--dramaturgie-scène-voix-score)
+   - 6.18 [Enjeux et formats v1.19](#618-enjeux-et-formats-v119--agendas-casting-nouveaux-modes)
+   - 6.19 [Plateforme v1.20](#619-plateforme-v120--multi-modèle-openai-compatible-modèles-historique-mémoire)
 7. [Frontend React (src/)](#7-frontend-react-src)
    - 7.1 [Routage & Layout](#71-routage--layout)
    - 7.2 [Pages](#72-pages)
@@ -61,7 +65,7 @@
 | Plateforme cible | Windows (MSI/NSIS) |
 | Fenêtre par défaut | 1280×800 px (min. 900×600) |
 | Base de données | SQLite (WAL mode) |
-| API LLM | Ollama REST (local) ou DeepSeek (cloud, OpenAI-compatible) |
+| API LLM | Ollama REST (local), DeepSeek (cloud) ou tout serveur OpenAI-compatible (LM Studio, vLLM, llama.cpp, OpenRouter…) |
 | Recherche web | Tavily API (optionnel) |
 | Recherche encyclopédique | Wikipedia API (gratuit) |
 | Langues UI | Français (défaut), Anglais, Chinois |
@@ -355,9 +359,9 @@ pub struct AppState {
 | `SYNTHESIS_NUM_PREDICT` | 4096 | Budget tokens pour la synthèse (2× le défaut, retry avec 2× en cas de troncature) |
 | `THINK_NUM_PREDICT_MULTIPLIER` | 3 | Multiplicateur num_predict pour les modèles en mode think |
 
-#### Orchestrateur (`engine/orchestrator.rs` — ~2800 lignes)
+#### Orchestrateur (`engine/orchestrator/` — module répertoire depuis v1.20)
 
-Le cœur de l'application. Exécute la boucle de discussion complète dans une tâche tokio.
+Le cœur de l'application. Exécute la boucle de discussion complète dans une tâche tokio. Le module est découpé en cinq fichiers, chacun un bloc `impl DiscussionEngine` (méthodes `pub(super)`) : `mod.rs` (structure, cycle de vie, boucle de tours, fin de tour, synthèse — ~3 000 lignes), `staging.rs` (dramaturgie : actes, coups de théâtre, coalitions, didascalies), `structured.rs` (modes structurés, agendas cachés, mémoire des personas), `knowledge.rs` (recherche web, Wikipédia, RAG et déduplication), `analysis.rs` (analyse de fin de tour : émotions, contagion, historique, carte des arguments).
 
 **Cycle de vie d'une discussion** :
 
@@ -456,7 +460,23 @@ Mise à jour **rule-based** (sans LLM) sur 6 axes :
 | curiosité | 0-100 | Ouverture intellectuelle |
 | enthousiasme | 0-100 | Niveau d'énergie |
 
-**Règles** : likes → confiance↑ ; dislikes → frustration↑ ; ban → frustration↑↑ ; stagnation → engagement↓. Seuils d'alerte à 85 (haut) et 15 (bas).
+**Règles** : likes → confiance↑ engagement↑ ; dislikes → frustration↑ confiance↓ ; soutien (≥ 2 likes) → enthousiasme↑ ; contradiction (≥ 2 dislikes) → frustration↑ engagement↑ ; nuances typées (💡 confiance, ❓ curiosité, 😄 enthousiasme, ↩️ frustration douce) ; réactions données → accord (facteur 2, plafond 6, symétrique) ; ban → frustration↑↑ ; stagnation → engagement↓ curiosité↓. Seuils d'alerte à 85 (haut) et 15 (bas).
+
+**Modèle réaliste (v1.20.4)** — les jauges ne saturent plus :
+
+| Mécanisme | Règle | Constantes |
+|---|---|---|
+| Rendements décroissants | la n-ième réaction d'un même type pèse 1/n de la première (somme harmonique), puis le plafond du type | `scaled` |
+| Plafond de ronde | une ronde de réception ne déplace pas un axe de plus de 12 points **bruts** ; le plafond suit la sensibilité du persona (`AxisDeltas::apply_felt` : un névrosé encaisse toujours plus qu'un stable, un profil neutre ressent exactement l'événement brut — chemin doré S22 conservé) | `EMOTION_ROUND_AXIS_CAP` |
+| Résistance aux extrêmes | plein effet jusqu'à 65 (hausse) / dès 35 (baisse), puis freinage **quadratique** jusqu'à 15 % à 0 ou 100 (v1.20.5 : 58 % du delta passe encore à 75, 31 % à 85, 17 % à 95) ; jamais nul ; revenir est gratuit | `EMOTION_COMFORT_HIGH`, `EMOTION_EXTREME_RESISTANCE`, `resistance`, `elastic` |
+| Homéostasie | à chaque intervention, chaque axe regagne 12 % de sa distance au **profil initial** du persona (un point au moins) ; pour frustration et enthousiasme le taux explicite (2) est un plancher (v1.20.5) | `EMOTION_HOMEOSTASIS_PERCENT`, `EMOTION_DECAY_*_RATE`, `apply_turn_effects` |
+| Deltas de l'analyste | bornés (±10) puis élastiques comme le reste (`apply_llm_delta`) ; le prompt attend autant de baisses que de hausses | `EMOTION_LLM_DELTA_CAP` |
+| Mouvements | `dominant_shift` : le plus grand écart ≥ 15 points au profil initial ; `ShiftZones` : entrée dans la zone notable avec **hystérésis** (v1.20.5 : on ne quitte la zone qu'en deçà de 10 points, un orateur qui oscille autour de 15 n'est annoncé qu'une fois) | `EMOTION_NOTABLE_SHIFT`, `EMOTION_SHIFT_REARM` |
+| Modérateur | lissé **une fois par tour** (`settle_arbitre_emotions` : homéostasie vers le profil neutre + pénalité de stagnation, avant la contagion) ; la modération n'applique plus que le delta de ban (v1.20.5) | `apply_turn_effects` |
+
+**Simulations (`engine/emotion_sim.rs`, v1.20.5)** — le modèle est validé sans LLM par des scénarios scriptés sur huit tours (un tour = une intervention par orateur avec une ronde de réactions, puis deltas de l'analyste et contagion) : chœur poli (3 💡 par intervention, analyste flatteur), foule hostile (3 👎), réactions sincères (surtout aucune), sensibilité OCEAN (névrosé > neutre > stable à chaque pas), récupération après orage, persona extrême (confiance 85, frustration 60), modérateur flatté. Propriétés vérifiées : pic ≤ 88 sous chœur (plateau 82), plateau ~73 sous foule hostile avec confiance ≥ 18, axes 30-75 et allers-retours en réactions sincères, une entrée par axe dans la zone notable, retour vers le tempérament propre. `cargo test --lib emotion_sim_report -- --ignored --nocapture` imprime les trajectoires.
+
+Les mouvements nourrissent l'expression et le raisonnement : la couche 1 des directives ajoute une **ligne de mouvement** (`movement_line` : ébranlé, rapproché, durci, happé, refroidi, apaisé — jamais en double d'un état déclenché ; `SpeakerTurnContext.baseline`), un orateur ébranlé réfléchit davantage (`THINK_SHAKEN_BOOST`, déclencheur fort), et l'entrée dans la zone notable compte comme un franchissement de seuil (`emit_threshold_events` : flash de l'interface, marque de la frise, didascalie) à côté des seuils absolus.
 
 #### Parseur de dynamiques (`engine/dynamics_parser.rs`)
 
@@ -792,7 +812,7 @@ Lors d'une intervention, le moteur peut décider de rechercher des informations 
 
 ### 6.12 Carte des arguments
 
-**Module** : `models/argument_map.rs` + intégration dans `engine/orchestrator.rs`, `engine/prompt_builder.rs`, `engine/json_parser.rs`
+**Module** : `models/argument_map.rs` + intégration dans `engine/orchestrator/analysis.rs`, `engine/prompt_builder.rs`, `engine/json_parser.rs`
 
 Le système de carte des arguments extrait automatiquement les thèses et arguments de la discussion pour produire une visualisation en mindmap.
 
@@ -933,6 +953,62 @@ Depuis la v1.16 le moteur ne dépend plus d'Ollama : il consomme le trait `LlmPr
 - **Carte des arguments** (`engine/argument_merge.rs`) : dédoublonnage flou des thèses (tokens normalisés, Jaccard ≥ `ARGMAP_THESIS_SIMILARITY_THRESHOLD` ou containment), références résolues avec un seuil plus souple, contre-arguments orphelins rattachés à la thèse la plus proche ou parqués dans « Contre-arguments non rattachés » (jamais perdus), `MergeReport` (nouveaux nœuds ✨, dédoublonnés, non rattachés, écartés), vue par orateur avec branche « Arguments » pour les orateurs sans thèse, `ArgumentMapUpdated` transporte la structure (`map`) persistée en `argument_map_json`.
 - **Graphe de relations** : `RelationshipsUpdated { edges }` après chaque salve de réactions (`directive_builder::relationship_edges`).
 - **Tests de bout en bout** (`engine/engine_tests.rs`) : séquence d'événements, comptage, réflexion, annulation, erreurs fatales, budget, rotation du focus, stagnation, ban, fiction, UserDriven, document par tour, socratique — sur `MockLlmProvider`.
+
+---
+
+### 6.16 Arène vivante v1.17 — pertinence, sources, mesures
+
+Plan et journal d'exécution : `Docs/Technique/AUDIT-2026-09-16-arene-vivante.md` (§6 lots, §8 journal, écarts assumés).
+
+**Réactions vivantes** (`engine/reactions.rs`, `models/message.rs`) : six couleurs typées (`ReactionType` : like, dislike, insightful, question, offTopic, laugh ; classes positive / négative / neutre), citation exacte validée (`validated_quote`, `REACTION_QUOTE_*`), ronde **immédiate** après chaque intervention (`DiscussionFeatures.reaction_timing`, appels parallèles bornés par `LlmCapabilities.max_parallel_calls` via `llm/parallel.rs::run_bounded`) ou différée (v1.16), propension OCEAN (`ReactionPropensity` : E → fréquence, A → sévérité), réactions du **public** (commande `react_to_message`, `EngineCommand::AudienceReaction`, plafond `AUDIENCE_REACTIONS_PER_MESSAGE_MAX`, poids `FOCUS_WEIGHT_AUDIENCE` pour le focus), réactions visibles sous les messages du tour dans le prompt, indices pour l'extracteur d'arguments (`argument_hints`).
+
+**Intention, fils ouverts, trajectoire** (`models/intention.rs`, `engine/open_loops.rs`) : `CallKind::Intention` (JSON, sans réflexion) remplace la pensée libre — `{target, goal, angle, concession, question, answers, thought}` parsé par `json_parser::parse_intention` (alias FR/ZH, cible résolue par `match_speaker_name`, mot « sujet » → aucune cible ; une cible inconnue ou bannie devient le focus du tour) ; bloc « [Ton intention] » ≤ `INTENTION_BLOCK_MAX_CHARS` dans le prompt d'intervention (compté dans `BUDGET_DETERMINISTIC_OVERHEAD_CHARS`) ; repli prose → pensée persona, JSON cassé → rien, jamais d'erreur ; événement `IntentionGenerated`. `OpenLoopRegistry` : questions (intention, réactions `question` justifiées, `open_questions` de l'analyste mémoire), engagements (concessions) et objections (contre-arguments de la carte sans réponse, v1.20.1), FIFO ≤ `OPEN_LOOPS_MAX_PER_SPEAKER`, TTL `OPEN_LOOPS_TTL_TURNS` **interventions propres** (un banni garde ses fils), section budgétaire `BudgetSection::OpenLoops` (configurable, rang 11). `ParticipantPosition { stance, initial_stance, shift, would_change_if }` : réponse mémoire tolérante (`PositionInput` chaîne | objet), noms normalisés sur les participants connus, événement `PositionsUpdated`, bloc « [Évolution des positions] » dans la synthèse. `ReasoningPace { Normal, Fast }` (`AppSettings.reasoning_pace`, `LlmRequest.pace`) : `Auto` plafonné à `Low`, réserves DeepSeek × `DEEPSEEK_FAST_PACE_ALLOWANCE_FACTOR`.
+
+**Émotions incarnées** (`engine/{tuning,relationships,stage_directions}.rs`) : gains OCEAN (`PersonaGains`, bande neutre 4..=7 = deltas v1.16), variantes passif-agressif / frontal de la consigne de frustration (A ≥ 8 / ≤ 3), échantillonnage piloté par l'état (`modulate_sampling` : enthousiasme → température, engagement → `num_predict`, interventions seulement ; la réserve de sortie du budget vaut `num_predict × EMOTION_LEN_MAX`), didascalies sans LLM (`stage_directions::describe`, messages `kind = stageDirection`, jamais dans les prompts, ≤ 1 par orateur et par tour), relations pondérées (`RelationshipScores` : scores décroissants × `RELATIONSHIP_DECAY_PER_TURN`, classification sur le net par direction, `RelationshipEdge.score/trend`, `RelationshipShift`, réconciliation), salle (`RoomMood`, `RoomMoodUpdated`, indice dans le prompt de modération). `Tuning` centralise ces réglages (défauts = constantes).
+
+**Sources** (`models/source.rs`) : `WebSearchPerformed.results` / `WikiSearchPerformed.articles` enrichis, registre moteur des références injectées → bloc « [Sources utilisées] » + consigne « ## Sources » dans la synthèse ; le front rattache chaque source au message qu'elle a servi (`report_json.sources`, heuristique de citation), onglet Sources, ouverture des liens par le plugin opener (http/https seulement).
+
+**Pipeline et mesures** (`engine/diagnostics.rs`, `models/diagnostics.rs`) : fin de tour en `prepare_*` / `run_bounded` / `apply_*` (document, émotions, mémoire, carte), appel fusionné `CallKind::TurnAnalyst` sur les fournisseurs séquentiels (`build_turn_analyst_prompt`, `parse_turn_analyst`), `TurnTimings` par tour, `DiagnosticsReady` (JSON illisibles par type d'appel, refus, relances, conformité d'intention) avant `DiscussionEnded`.
+
+**Persistance** : `discussions.report_json` (`DiscussionReport` v1 construit par le front : sources, positions, historique émotionnel, relations, timings, diagnostics…) et `discussion_messages.kind`.
+
+**Banc de prompts** (`engine/bench.rs`, `engine/bench_metrics.rs`, `tools/bench-compare.mjs`) : test ignoré `bench_prompts` sur un vrai modèle (`AIRENA_BENCH_SCENARIOS=debat,ideation` restreint la campagne), métriques comparables (répétition, usage des noms, fuites Markdown, refus, longueur, conformité d'intention, écart entre orateurs), événements bruts de chaque scénario dans `target/bench/<date>-<fournisseur>-<scénario>.events.json` pour l'analyse a posteriori, rapports de référence sous `Docs/Technique/bench/` (v1.16, v1.17, v1.20).
+
+---
+
+### 6.17 Spectacle v1.18 — dramaturgie, scène, voix, score
+
+**Dramaturgie** (`engine/dramaturgy.rs`, `engine/scene_events.rs`) : `ActKey` (24 actes) et scripts par mode (`mode_script`), `resolve_act` (proportionnel avec limite de tours — chaque acte médian garde au moins un tour —, glissant sans limite, concessions anticipées par la stagnation, plaidoiries dès l'arrêt doux), annonce IArbitre templatée `kind = actAnnouncement` dans l'historique moteur, consigne d'acte dans le bloc « [Mise en scène de ce tour] », indice d'acte dans la modération, `ActStarted`. Événements de scène : `SceneEvent` (fait surprise, contrainte de forme, question de la salle, steelman forcé, duel, sellette), politique pure (`SCENE_EVENT_*`, jamais au tour 1 ni au dernier, écart minimal, préconditions), matérialisation par le moteur (recherche Wikipedia / web au nom de l'IArbitre, paire la plus tendue, orateur le plus réactif, fils ouverts), manipulation de l'ordre, `SceneEventTriggered`, ligne `kind = sceneEvent`. Coalitions : `SpeechAct::Relay` forcé sur le meneur, suiveur déplacé juste après, `CoalitionFormed`. **Arrêt doux** : les orateurs restants du tour font leur plaidoirie, la fin de tour s'exécute, puis la synthèse (l'arrêt forcé reste immédiat). Crochets de test `force_scene_event`, `force_coalitions`, `disable_random_staging`.
+
+**Scène** (`src/components/stage/`, `src/lib/stage.ts`, `src/stores/useUiStore.ts`) : `StageView` / `ArenaStage` (arc d'avatars, projecteur, bannis, passés, auras émotionnelles, coalition, réactions volantes `arena-burst`), `SceneBanner` (`aria-live`, `motion-safe`), `TimelineBar` (repères → `#turn-N`), réducteur `stage.ts` (acte, événement, coalition, bursts, bandeaux, timeline persistée), coulisses dans la bulle de raisonnement, thème `--arena-*` + `.font-display`, mode projection (`lib/presentation.ts`, plein écran Tauri, permission `core:window:allow-set-fullscreen`), raccourcis (`hooks/useArenaShortcuts.ts`).
+
+**Voix et sons** (`src/lib/speech.ts`, `src/lib/sounds.ts`, `src/hooks/useArenaAudio.ts`) : `SpeechEngine` (phrases complètes depuis le flux, voix par langue et par persona, prosodie OCEAN, modes `follow` | `full`, synthèse lue par l'IArbitre), `SoundEngine` Web Audio procédural (gong, murmure, applaudissements, sifflet), puits audio du store (`registerAudioSink`), réglages durables `tts_*` / `sound_*` (`TtsMode`), section « Voix et sons », boutons et raccourcis M / S.
+
+**Score et relecture** (`src/lib/score.ts`, `src/lib/replay.ts`) : `computeScores` / `computeAwards` (`report_json.awards`), onglet Score, générique de fin (`AwardsCredits`), `ReplayPlayer` (planification par deltas d'horodatage, ×1–×8, scène animée depuis `report_json.emotion_history` et la timeline).
+
+### 6.18 Enjeux et formats v1.19 — agendas, casting, nouveaux modes
+
+**Agendas cachés** (`models/agenda.rs`, `orchestrator::generate_agendas`) : après l'introduction, un appel `CallKind::Agenda` (JSON, `AGENDA_NUM_PREDICT`) par GladIAteur lancés ensemble (`run_bounded`) — `{ objectif, ligne_rouge, victoire }` bornés par champ (`AGENDA_FIELD_MAX_CHARS`), formulation « agenda d'auteur » en fiction ; échec ou réponse inutilisable → orateur sans agenda (diagnostic `agenda`). Le bloc « [Ton agenda secret — ne le révèle jamais explicitement] » (`build_agenda_block`, ≤ `AGENDA_MAX_CHARS + AGENDA_BLOCK_OVERHEAD_CHARS`, réservé via `BudgetFeatures.agenda_chars`) est injecté dans le **système** de l'intervention juste après le persona ; le prompt d'intention ne reçoit que l'objectif en rappel. La synthèse reçoit « [Agendas secrets] » et doit écrire une section « ## Agendas » ; `agenda_outcome` lit cette seule section (« partiellement » → inconnu) ; `AgendaRevealed` (aplati : `objective`, `redLine`, `victory`, `achieved`) suit `SynthesisComplete`. Modes : `DiscussionMode::supports_hidden_agenda` (débat, fiction, procès, Oxford, négociation — obligatoire en négociation). Front : `AgendaCards` (onglet Positions), `report_json.agendas`.
+
+**Casting assisté** (`commands/casting.rs`, `prompt_builder::build_casting_prompt`, `json_parser::parse_casting`) : `suggest_casting(topic, mode, lang, count)` construit le fournisseur par la factory, passe le pré-vol de budget mensuel partagé (`commands::llm::cloud_budget_preflight`), borne le catalogue « id — nom : personnalité » par le contexte (`catalogue_bound`, jamais coupé en milieu de ligne, modérateurs sur un quart), un appel `CallKind::Casting` (JSON), ids filtrés sur le catalogue, usage cloud enregistré même en cas d'erreur. Front : `CastingAssistant` (remplacer / ajouter, IArbitre suggéré), `CompatibilityMatrix` locale (`lib/casting.ts` : distance A/E/O → alliés / friction, profils frontaux, contraste du casting).
+
+**Nouveaux modes** : `Trial`, `OxfordDebate`, `Negotiation`, `SixHats`, `CrisisCell` — entrées complètes de `mode_prompts.rs` (test de balayage ×13 modes ×3 langues), libellés mémoire et instruction document, poids d'actes de parole, scripts d'actes (7 nouveaux `ActKey` : marchandage, accord, cadrage, exploration, alerte, riposte, débriefing), éligibilité aux événements de scène (procès, Oxford, négociation). **Rôles** (`engine/mode_roles.rs`) : `GladIAteurConfig.mode_role`, rôles sélectionnables (procès : accusation, défense, témoin, juré ; Oxford : pour, contre), distribution par défaut depuis l'ordre du casting, six chapeaux en rotation par tour (`hat_for`), bloc « [Ton rôle] » / « [Ton chapeau ce tour] » (`ROLE_BLOCK_MAX_CHARS`, réservé dans le budget) ajouté au persona pour l'intention et l'intervention (`system_prompt_for`), `RolesAssigned`. **Issue** (`models/outcome.rs`, `ModeOutcome` étiqueté `kind`) : procès → un appel `CallKind::Verdict` par juré (`parse_verdict`, majorité, IArbitre seul sans jury ou en départage, `by_arbitre`) ; négociation → un appel par partie (`parse_agreement`, accord si toutes signent, inutilisable = refus) ; Oxford → `AudienceSwing` depuis deux fenêtres de vote (`collect_audience_vote` après l'introduction et après le dernier tour, bornées par le délai d'intervention utilisateur, `SkipUserTurn` ferme, commande `audience_vote`). L'issue est résolue avant la synthèse, émise (`OutcomeReady`), injectée dans le prompt de synthèse (`build_outcome_synthesis_block`) et persistée dans `report_json.outcome`. **Cellule de crise** : un appel `CallKind::CrisisDispatches` après l'introduction (`max_turns` dépêches, défaut `CRISIS_DISPATCH_DEFAULT_COUNT`, plafond `CRISIS_DISPATCH_MAX_COUNT`), une par tour livrée comme `SceneEvent::Dispatch` (annonce IArbitre, consigne aux orateurs) à la place de la politique aléatoire. Front : cartes de mode, sélecteur de rôle, pastilles de rôle sur la scène, `AudienceVote`, `OutcomePanel`, `lib/modes.ts`.
+
+### 6.19 Plateforme v1.20 — multi-modèle, OpenAI-compatible, modèles, historique, mémoire
+
+**Transport OpenAI-compatible** (`llm/openai_compat.rs`) : `OpenAiCompatTransport` (types de câblage, parsing SSE, usage normalisé, retry/backoff, `/models`, classification HTTP partagée) avec `Dialect::{DeepSeek, Generic}` ; le dialecte générique n'envoie ni `thinking` ni `reasoning_effort`, borne `max_tokens` (`OPENAI_COMPAT_MAX_OUTPUT_TOKENS`) et accepte une clé vide (pas d'en-tête `Authorization`). `OpenAiCompatProvider` (`ProviderKind::OpenAiCompat`, pas de réflexion, JSON, `billable = false`) valide en tolérant l'absence de catalogue mais pas un modèle absent d'un catalogue publié ; `DeepSeekProvider` est devenu une configuration du transport (dialecte DeepSeek + `/user/balance`). Réglages `openai_compat_*`, commandes `list_openai_compat_models`, `validate_openai_compat`.
+
+**Un modèle par orateur** (`llm/routing.rs`) : `GladIAteurConfig.model` / `IArbitreConfig.model`, méthodes à défaut du trait `model_for(request)` / `capabilities_for(speaker)`, `RoutingProvider` (dispatch par `speaker_id`, repli sur le modèle global pour les utilitaires, validation nommant l'orateur en échec), `factory::build_provider_for(settings, overrides)` (un fournisseur interne par modèle distinct, refus avant le spawn), `MeteredProvider` tarifie par `model_for` et attribue `UsageLedger.by_model`, le moteur lit `capabilities_for(orateur)` pour le raisonnement. Front : sélecteur « modèle de cet orateur » (`LlmParamsForm`), `describeActiveModel(settings, overrides)` → « mixte (a, b) », avertissement VRAM.
+
+**Modèles de discussion** (`models/template.rs`, `commands/templates.rs`, table `discussion_templates`, `seed::seed_templates`) : configuration JSON opaque pour le backend, forme `TemplateConfig` côté front (`lib/templates.ts` : capture du wizard, application avec profils manquants signalés), `TemplatePicker` en tête du pas 1, quatre modèles seedés protégés (ni écrasés, ni supprimés).
+
+**Historique enrichi** : colonnes `discussions.tags` / `favorite`, index FTS5 `discussions_fts` (créé quand le module est compilé, rétro-indexé au démarrage, alimenté dans la transaction de sauvegarde, purgé à la suppression, repli `LIKE` sinon ou sur requête refusée), `search_discussions` (`fts_query` : termes cités et préfixés), `set_discussion_tags` / `set_discussion_favorite` ; front : `lib/history-filters.ts`, `HistoryFilters`, `TagEditor`, page Historique (recherche débouncée, mises à jour optimistes). **Exports** : `lib/export-html.tsx` (`renderDiscussionHtml` — page autonome, CSS en ligne, `SimpleMd` via `react-dom/server`, cartes SVG, sans script, tout échappé), « Imprimer / PDF » (`window.print()` + `@media print`).
+
+**Mémoire longue** (`models/persona_memory.rs`, table `persona_memories` FK CASCADE) : `GladIAteurConfig.source_profile_id`, appel `CallKind::Recap` par GladIAteur issu d'un profil en fin de discussion (`build_recap_prompt`, `parse_recap` borné), événement `PersonaRecapReady` persisté **par le front** avec la discussion (`SaveDiscussionRequest.recaps`), rappel au démarrage (`recall_persona_memories` : BM25 sur « sujet + recap », mots courts ignorés, récence en complément) → bloc « [Souvenirs de discussions passées] » (`build_memories_block`, ≤ `PERSONA_MEMORY_MAX_CHARS`, réservé dans le budget) ajouté au persona ; réglage `persona_memory_enabled`, commandes `count_persona_memories`, `forget_persona_memories`.
+
+**Réglages avancés** (`engine/tuning.rs`) : `Tuning` sérialisable (JSON partiel accepté), 14 boutons dont les probabilités des coups de théâtre et des coalitions, `BOUNDS`, `validate()` (bornage, paires, non-finis), `from_settings` ; réglage `advanced_tuning_json`, `set_tuning` par `start_discussion`, commande `get_tuning_info` ; front `lib/tuning.ts` + `AdvancedTuning` (curseurs bornés, seuls les écarts persistés).
+
+**Exploitation** (`commands/diagnostics.rs`) : `read_backend_log` (fin du journal du jour, `LOG_EXPORT_MAX_BYTES`), `get_app_version`, `LlmConstants.releases_url` ; section « À propos et maintenance » (version, « Vérifier les mises à jour » → page des versions, « Exporter le journal » = tampon du front + journal moteur). Versions alignées à **2.0.0** (`package.json`, `Cargo.toml`, `tauri.conf.json`). **Updater Tauri** : non activé — l'activation demande un point de publication signant les paquets (`tauri-plugin-updater`, `plugins.updater.pubkey` + `endpoints` dans `tauri.conf.json`, `bundle.createUpdaterArtifacts`, clé privée `TAURI_SIGNING_PRIVATE_KEY` au build) ; d'ici là, la vérification est manuelle.
 
 ---
 
@@ -1264,23 +1340,25 @@ Produit dans `src-tauri/target/release/bundle/` :
 
 ```bash
 cd src-tauri
-cargo test --lib              # 376 tests (unitaires + moteur de bout en bout sur MockLlmProvider)
+cargo test --lib              # 495 tests (unitaires + moteur de bout en bout sur MockLlmProvider)
 cargo test test_name          # Un test spécifique
 cargo test -- --ignored deepseek_live_spike   # Spike réel DeepSeek (clé dans DEEPSEEK_API_KEY)
+cargo test --lib export_event_fixture -- --ignored   # Régénère src-tauri/fixtures/events-full.json (rejouée par le front)
+AIRENA_BENCH_PROVIDER=ollama OLLAMA_MODEL=<modèle> cargo test --lib bench_prompts -- --ignored --nocapture   # Banc de prompts (vrai modèle)
 cargo clippy --all-targets    # Lint (0 avertissement exigé)
 ```
 
-**Couverture** : parseur JSON, moteur émotionnel, gestionnaire de mémoire, matching flou, budget de tokens, fournisseurs (golden tests Ollama, SSE/erreurs/backoff/tarification DeepSeek), période glissante, dépôt SQLite (aller-retour v1.16), fusion de la carte des arguments, focus, moteur complet (`engine/engine_tests.rs`).
+**Couverture** : parseur JSON, moteur émotionnel, gestionnaire de mémoire, matching flou, budget de tokens, fournisseurs (golden tests Ollama, SSE/erreurs/backoff/tarification DeepSeek), période glissante, dépôt SQLite (aller-retour v1.16), fusion de la carte des arguments, focus, réactions, fils ouverts, relations, didascalies, diagnostics, moteur complet (`engine/engine_tests.rs` : simulations S1–S12, S18–S22, S25–S26, S27–S38 du plan, nouveaux modes, agendas, casting, mémoire longue), transport OpenAI-compatible (serveur TCP jetable), routage multi-modèle, FTS5 / templates / tags / souvenirs (dépôt), `Tuning`.
 
 ### TypeScript
 
 ```bash
 npm run typecheck     # tsc --noEmit
-npm test              # vitest — stores, helpers purs (40 tests)
+npm test              # vitest — stores, réducteurs, helpers purs, moteurs audio sur doubles, matrice de casting, modèles, filtres d'historique, export HTML (react-dom/server), tuning, fixture d'événements rejouée (92 tests)
 npm run i18n:check    # Parité des clés FR/EN/ZH (bloquant dans npm run build)
 ```
 
-**Ratchets qualité** : Rust ≥ 376 tests, front ≥ 40 tests, clippy 0, parité i18n exacte, aucun fichier `pages/*` > 400 lignes (`PersonaEditor.tsx`, 596 lignes, est l'exception préexistante).
+**Ratchets qualité** : Rust ≥ 530 tests, front ≥ 95 tests, clippy 0, parité i18n exacte (1 301 clés), aucun fichier `pages/*` > 400 lignes (`PersonaEditor.tsx`, 596 lignes, est l'exception préexistante).
 
 ---
 
@@ -1329,22 +1407,32 @@ AIrena/
         ├── state.rs           # AppState (Mutex + rag_store)
         ├── error.rs           # CommandError enum
         ├── constants.rs       # Constantes centralisées (limites, seuils, quotas RAG)
-        ├── commands/          # Handlers IPC (discussion, ollama, settings, history, rag)
+        ├── commands/          # Handlers IPC (discussion, casting, templates, diagnostics, ollama, settings, history, rag, llm)
         ├── engine/            # Cœur métier
-        │   ├── orchestrator.rs    # Boucle de discussion
+        │   ├── orchestrator/      # Boucle de discussion (mod, staging, structured, knowledge, analysis)
         │   ├── turn_manager.rs    # Distribution des tours
         │   ├── prompt_builder.rs  # Construction de prompts
         │   ├── directive_builder.rs # Personnalités cognitives + graphe de relations
-        │   ├── emotion_engine.rs  # Moteur émotionnel
+        │   ├── emotion_engine.rs  # Moteur émotionnel (gains OCEAN, échantillonnage, salle)
         │   ├── focus.rs           # Focus conversationnel tournant
         │   ├── argument_merge.rs  # Fusion floue de la carte des arguments
-        │   ├── memory_manager.rs  # Gestion mémoire
+        │   ├── reactions.rs       # Rondes de réactions : vocabulaire, propension OCEAN, indices
+        │   ├── open_loops.rs      # Fils ouverts (questions, engagements) par orateur
+        │   ├── relationships.rs   # Graphe de relations pondéré (décroissance, tendance)
+        │   ├── stage_directions.rs # Didascalies sans LLM
+        │   ├── tuning.rs          # Réglages dynamiques (défauts = constantes)
+        │   ├── diagnostics.rs     # Compteurs de diagnostic + chronomètre de tour
+        │   ├── bench.rs / bench_metrics.rs # Banc de prompts (test ignoré) et métriques
+        │   ├── memory_manager.rs  # Gestion mémoire (trajectoire des positions)
         │   ├── json_parser.rs     # Parsing robuste + matching flou
         │   ├── dynamics_parser.rs # Extraction XML <dynamics>
-        │   ├── mode_prompts.rs    # Instructions par mode
+        │   ├── mode_prompts.rs    # Instructions par mode (13 modes)
+        │   ├── mode_roles.rs      # Rôles des modes structurés, six chapeaux (v1.19)
+        │   ├── tuning.rs          # Réglages avancés bornés (v1.20)
+        │   ├── dramaturgy.rs / scene_events.rs # Actes, événements de scène, dépêches
         │   └── engine_tests.rs    # Tests de bout en bout (MockLlmProvider)
-        ├── llm/               # Fournisseurs : trait, ollama, deepseek, pricing, metered, factory, mock
-        ├── models/            # Structures de données (llm, relationship, argument_map…)
+        ├── llm/               # Fournisseurs : trait, ollama, deepseek, openai_compat, routing, pricing, metered, factory, mock, parallel
+        ├── models/            # Structures de données (llm, relationship, intention, agenda, outcome, template, persona_memory, source, diagnostics…)
         ├── db/                # SQLite (schema, repository, seed, rolling_period)
         ├── ollama/            # Client HTTP + streaming NDJSON (utilisé par llm/ollama.rs)
         ├── rag/               # Système RAG (parser, chunker, embedder, bm25, store)
@@ -1355,6 +1443,83 @@ AIrena/
 ---
 
 ## 15. Changelog
+
+### v2.0.0 (2026-09-17) — Arène vivante
+
+Première version publiée depuis la 1.16 : elle consolide les jalons internes 1.17 → 1.20.5 ci-dessous (réactions typées et sincères, intentions et fils ouverts, dramaturgie, agendas secrets, casting assisté, cinq modes structurés, un modèle par orateur, serveurs compatibles OpenAI, modèles de discussion, historique plein texte, export HTML, mémoire longue des personas, réglages avancés bornés, scène et générique, mode pas-à-pas, public participant, annonces dans la voix du modérateur, modèle émotionnel réaliste validé par simulations et bancs réels, relations recalibrées). Les commentaires du code et le journal d'audit conservent ces numéros de jalon. Correction de publication : `RELEASES_URL` et les liens du README pointent désormais sur le dépôt réel (`jgouviergmail/AIrena`).
+
+### v1.20.5 (2026-09-17, jalon interne) — Repasse d'équilibrage : simulations, hystérésis, freinage quadratique, modérateur lissé
+
+**Backend** : harnais de simulation déterministe du modèle émotionnel (`engine/emotion_sim.rs`, 7 scénarios + rapport) ; résistance **quadratique** près des extrêmes (`resistance`) ; homéostasie unifiée (les taux explicites de frustration / enthousiasme deviennent un plancher) ; `ShiftZones` (hystérésis `EMOTION_SHIFT_REARM`) à la place de la détection sans état des mouvements — plus de didascalie à chaque oscillation autour du seuil ; modérateur lissé une fois par tour (`settle_arbitre_emotions` : homéostasie + stagnation, `EMOTION_ARBITRE_STAGNATION_ENG` supprimée) ; métriques de banc `reactions_per_intervention`, `reaction_insightful_share`, `reaction_critical_share`, `emotion_peak`, `emotion_saturated_share` (`LivelinessTally`, gardées par `tools/bench-compare.mjs`) ; banc multi-passes (`AIRENA_BENCH_RUNS`, `AIRENA_BENCH_TAG`, `BenchMetrics::mean`, lignes par passe sous la moyenne) et rejeu d'une passe sauvegardée (`bench_replay`, `AIRENA_BENCH_REPLAY`) ; `json_parser::mentions_name` (l'article est facultatif : « Créatif, tu… » s'adresse à Le Créatif) partagé par le diagnostic de conformité d'intention du moteur et par les métriques du banc ; test S28 recalé sur le modèle élastique ; test réaliste étendu (pic ≤ 92, didascalies rares, modérateur borné). Bancs réels rejoués sur `mistral-small3.1` (une passe) et `deepseek-flash` (trois passes moyennées, quatre campagnes), références archivées sous `Docs/Technique/bench/`. Relations (`engine/relationships.rs`) recalibrées pour le régime sincère : classification sur la **somme** des deux sens (alliés / rivaux ≥ 2,5, chaque sens penchant du bon côté ≥ 0,8 — `RELATIONSHIP_MUTUAL_MIN`), rivalité seulement sans approbation fraîche (un mot aimable la fait passer en tension : réconciliation conservée), tension aussi quand **un seul sens** est froid de 2,0 (critique persistant) ; `lean_of` nomme le critique et la consigne de couche 2 le dit (`RelationshipLean`). Sincérité sur modèle réel : `deepseek-flash` réagissait à 100 % des interventions avec 36-43 % de 💡 quelle que soit la formulation (ancres quantitatives, exemple « none ») → deux leviers indépendants du modèle : le champ `"reacts"` décidé en premier dans la réponse (`RawReaction::declined`, silence comme `none`) et le **crédit 💡** (`INSIGHTFUL_CREDIT_WINDOW` = 5 : un point fort au plus par cinq réactions données — `recent_given_kinds`, `insightful_credit`, ligne de prompt « crédit épuisé », 💡 excédentaire enregistré comme 👍).
+
+### v1.20.4 (2026-09-17) — Émotions réalistes, réactions sincères, phrases entières
+
+**Backend** : modèle émotionnel réaliste (`AxisDeltas`, `apply_felt`, `resistance` / `elastic`, rendements décroissants harmoniques, plafond de ronde par axe suivant les gains, homéostasie sur les six axes vers le profil initial, deltas de l'analyste élastiques via `apply_llm_delta` — `EmotionalProfile::apply_delta` supprimé ; accord donné facteur 2 / plafond 6 ; enthousiasme taux de rappel 2) ; mouvements depuis le profil initial (`dominant_shift`, `detect_shift_crossings`, `EMOTION_NOTABLE_SHIFT`) : ligne de mouvement dans la couche 1 des directives (`movement_line`, `SpeakerTurnContext.baseline`), `THINK_SHAKEN_BOOST` dans l'heuristique de raisonnement, franchissements de seuil relatifs dans `emit_threshold_events` ; prompt de réaction sincère (`reactions::sincerity_rules`, exemple sans « insightful » tournant avec le contenu — `example_reaction_kind` —, sens de 💡 « rare », indulgence = « like ») ; prompt de l'analyste : les baisses sont attendues ; `truncate_at_sentence_boundary` (annonces 900 / 220 jetons, didascalies 240, faits surprenants 500). Tests : unités émotions réécrites en propriétés (rendements, résistance, homéostasie, mouvements, franchissements), directive (ligne de mouvement), prompt de réaction (rotation, sincérité, fiction), troncature par phrases ; fixture d'événements régénérée.
+
+### v1.20.3 (2026-09-17) — Réalisme : annonces dans la voix du modérateur, question de la salle ancrée, conscience du casting, état du débat
+
+**Backend** : annonces d'actes et d'événements dites par le modérateur (`voice_announcement`, `CallKind::Announcement`, brief = gabarit, ouvertures récentes interdites, repli sur le gabarit) ; question de la salle écrite depuis le débat (`CallKind::AudienceQuestion`, `build_audience_question_prompt`, `parse_audience_question` ; pas de question exploitable → pas d'événement) et portée par `SceneEvent::AudienceQuestion { target, question }` ; cycle des types d'événements (`SceneContext.used_kinds`) ; `engine/cast.rs` (portraits lus des kernels, bloc « [Les autres participants — qui ils sont] » dans le prompt système des orateurs, « [Ton plateau — qui ils sont] » dans celui du modérateur, réservé au budget) ; section de budget `DebateState` (rang 12, documents en 13-14, activée avec la carte) rendue par `debate_state_block` (« [État du débat] » : thèses les plus argumentées avec leur auteur et leurs objections ouvertes, dernières objections sans réponse) ; `prompt_builder.rs` reformaté (rustfmt) après une normalisation des continuations de chaînes.
+
+**Frontend** : section « État du débat » dans les priorités du budget (ajoutée après les sections v1.16/v1.17 d'un ordre sauvegardé), phrases du générique affichées en entier, libellés des nouveaux types d'appel.
+
+### v1.20.2 (2026-09-17) — Retours du deuxième build : le public dans le débat, variété de forme, démarrage
+
+**Backend** : le public devient participant dès sa première intervention (`user_reply_pending` / `user_has_spoken` dans le moteur ; focus forcé sur l'utilisateur pour l'orateur suivant, rappel « réponds-lui d'abord » dans la directive à la place de « n'est qu'un observateur », noms adressables, indice de modération `audience_hint_for` quand l'intervention l'ignore, noms connus de l'extracteur et de l'analyste, id `USER_SPEAKER_ID` dans la carte) ; variété de forme (`ModerationSituation` / `ModerationStyle` : ouvertures récentes du modérateur citées, taux de commentaires plafonné à `MODERATION_COMMENT_RATE_MAX_PERCENT` ; couche 4 des directives : ouvertures des dernières interventions citées, fenêtre `SELF_MEMORY_MESSAGES` ; contrat d'intention assoupli) ; journal des décisions de modération ; démarrage : `startup_preload_plan` ne précharge le modèle de chat Ollama que si Ollama sert la discussion.
+
+**Frontend** : `lib/stage.ts` (`spokenParticipants`, `userHasSpoken`, `USER_SPEAKER_ID`) — l'utilisateur prend place sur la scène, entre au score et au générique, rejoint le graphe des relations.
+
+### v1.20.1 (2026-09-16) — Retours du premier build : pas-à-pas vocal, contrôles de la voix, profondeur argumentative
+
+**Backend** : mode pas-à-pas (`EngineCommand::SetStepMode` / `NextSpeaker`, `ArenaEvent::AwaitingCue`, `DiscussionEngine::await_cue` avant chaque orateur, commandes `set_step_mode` / `next_speaker`) ; profondeur argumentative : `ArgumentMap::unanswered_objections` / `depth_stats` (champ `depth` de `ArgumentMapUpdated`), `OpenLoopKind::Objection` ouvert sur le débiteur après chaque extraction (modes `DiscussionMode::rewards_depth`), acte de parole `Deepen` (bonus constant, renforcé quand une objection est due, nul hors modes argumentatifs), indice de profondeur dans le prompt de modération (`depth_hint_for`) et critère de profondeur du débat ; parseur d'extraction tolérant (`loose_text`, `loose_list`, type déduit d'`against_thesis`) — sur le banc, `mistral-small3.1` produisait des thèses `null` ou objets, un objet unique pour `arguments` et des types `null` : aucune carte n'était construite ; champs d'intention conservés en entier pour les coulisses (`INTENTION_DISPLAY_MAX_CHARS`) ; banc : `AIRENA_BENCH_SCENARIOS`, `AIRENA_BENCH_TURNS`, `AIRENA_BENCH_TRACE`, événements bruts par scénario, métriques de profondeur (`argmapMaxDepth`, `argmapDeepShare`, `argmapUnanswered`), réponse brute journalisée quand l'extraction échoue deux fois (`ARGMAP_RAW_LOG_MAX_CHARS`).
+
+**Frontend** : bouton « Orateur suivant » (raccourci N) piloté par `awaitingCue` ; mode pas-à-pas synchronisé avec la voix « suivre » ; pause / reprise de la voix et bascule suivre ↔ tout lire dans la barre de l'arène ; panneau droit sans largeur maximale fixe (la fenêtre moins la largeur minimale du fil) ; coulisses sans troncature (humeur, bannière de scène sur deux lignes) ; compteurs de profondeur et d'objections sans réponse sur la carte.
+
+### v1.20 (2026-09-16) — Plateforme : multi-modèle, OpenAI-compatible, modèles, historique enrichi, exports, mémoire, réglages avancés
+
+**Revue adversariale à froid (clôture)** : validation OpenAI-compatible stricte (un serveur injoignable n'est plus confondu avec un serveur sans catalogue), jury muet → verdict du modérateur, recaps de mémoire jamais écrits après épuisement du budget mensuel, repli `LIKE` de la recherche en une seule requête, tags et modèles bornés côté serveur (`HISTORY_TAGS_MAX`, `HISTORY_TAG_MAX_CHARS`, `TEMPLATE_NAME_MAX_CHARS`, `TEMPLATE_CONFIG_MAX_BYTES`), export du journal lu par position, migrations de colonnes tabulées (`COLUMN_MIGRATIONS`) avec test de migration depuis une base v1.16, nom du modèle « mixte » persisté dans l'historique, configuration de modèle validée au chargement (`parseTemplateConfig`), SVG des cartes assaini dans l'export HTML (`sanitizeSvg`), échecs d'export signalés à l'utilisateur.
+
+**Nouveaux fichiers** : `src-tauri/src/llm/{openai_compat,routing}.rs`, `src-tauri/src/models/{template,persona_memory}.rs`, `src-tauri/src/commands/{templates,diagnostics}.rs` ; `src/lib/{modes,templates,history-filters,tuning}.ts` (+ tests), `src/lib/export-html.tsx` (+ test), `src/components/settings/{OpenAiCompatSettings,AdvancedTuning,MemorySettings,AboutSettings}.tsx`, `src/components/setup/TemplatePicker.tsx`, `src/components/history/{HistoryFilters,TagEditor}.tsx`.
+
+**Backend** : transport SSE partagé à deux dialectes (DeepSeek conservé à l'identique, générique sans champs de réflexion, clé vide acceptée), `ProviderKind::OpenAiCompat`, routage par orateur (`model_for`, `capabilities_for`, `by_model`, validation nommant l'orateur), FTS5 + tags + favoris + templates seedés, `persona_memories` (recaps `CallKind::Recap`, rappel BM25, cascade, oubli), `Tuning` sérialisable et borné branché sur le moteur (coups de théâtre, coalitions), journal exportable, version 1.20.0. Tests : 474 → 495.
+
+**Frontend** : troisième fournisseur, modèle par orateur, « mixte », modèles de discussion, recherche / filtres / favoris / tags, export HTML et impression, mémoire des personas, réglages avancés, à propos. vitest 80 → 92, i18n 1 284 clés × 3.
+
+### v1.19 (2026-09-16) — Enjeux et formats : agendas cachés, casting assisté, cinq nouveaux modes
+
+**Nouveaux fichiers** : `src-tauri/src/models/{agenda,outcome}.rs`, `src-tauri/src/engine/mode_roles.rs`, `src-tauri/src/commands/casting.rs` ; `src/lib/{casting,modes}.ts` (+ test), `src/components/setup/CastingAssistant.tsx`, `src/components/report/{AgendaCards,OutcomePanel}.tsx`, `src/components/discussion/AudienceVote.tsx`.
+
+**Backend** : agendas secrets (`CallKind::Agenda`, bloc système, synthèse « ## Agendas », `AgendaRevealed`), casting (`suggest_casting`, `CallKind::Casting`, pré-vol de budget partagé), modes Procès / Débat d'Oxford / Négociation / Six chapeaux / Cellule de crise (prompts complets ×3 langues, rôles `mode_role`, `RolesAssigned`, verdicts et accords `CallKind::Verdict`, votes du public `audience_vote`, dépêches `CallKind::CrisisDispatches` / `SceneEvent::Dispatch`, `OutcomeReady`, 7 nouveaux actes), budget (`agenda_chars`, bloc de rôle), diagnostics `agenda` / `verdict` / `crisisDispatches`. Tests : 452 → 474.
+
+**Frontend** : assistant de casting et affinités probables (étape GladIAteurs), sélecteur de rôle, cartes de mode, agendas révélés et issue de mode sur le résumé et l'historique (`report_json.agendas`, `report_json.outcome` typé), fenêtre de vote du public, pastilles de rôle / chapeau sur la scène, aperçu de budget tenant compte de l'agenda. vitest 75 → 80, i18n 1 165 clés × 3.
+
+### v1.18 (2026-09-16) — Spectacle : dramaturgie, scène, voix et sons, score et relecture
+
+**Nouveaux fichiers** : `src-tauri/src/engine/{dramaturgy,scene_events}.rs` ; `src/lib/{stage,speech,sounds,score,replay,presentation}.ts` (+ tests), `src/stores/useUiStore.ts`, `src/stores/arena/reducers/stage.ts`, `src/components/stage/{ArenaStage,SceneBanner,TimelineBar,Scoreboard}.tsx`, `src/components/report/{AwardsCredits,ReplayPlayer}.tsx`, `src/components/settings/AudioSettings.tsx`, `src/hooks/{useArenaShortcuts,useArenaAudio}.ts`.
+
+**Backend** : actes par mode (`ActStarted`, annonces `actAnnouncement`, consignes d'acte, indice de modération), événements de scène (`SceneEventTriggered`, lignes `sceneEvent`, fait surprise cherché par l'IArbitre, duel / sellette réordonnant le tour), coalitions (`SpeechAct::Relay`, `CoalitionFormed`), arrêt doux = plaidoiries des orateurs restants, réglages audio (`tts_enabled`, `tts_mode`, `tts_volume`, `sound_enabled`, `sound_volume`). Tests : 437 → 452.
+
+**Frontend** : scène de l'arène (arc, projecteur, auras, coalition, réactions volantes), bandeaux, timeline cliquable, coulisses dans la bulle de raisonnement, thème arène, mode projection (plein écran), raccourcis clavier, voix des participants (synthèse vocale système, prosodie OCEAN, modes suivre / tout lire), sons procéduraux, onglet Score, générique de fin, relecture au rythme réel avec scène animée, pastille de l'acte en cours. vitest 55 → 75, i18n 1 078 clés × 3.
+
+### v1.17 (2026-09-16) — Arène vivante : réactions, intention, émotions incarnées, sources, mesures
+
+Plan, simulations et journal : `Docs/Technique/AUDIT-2026-09-16-arene-vivante.md`.
+
+**Nouveaux fichiers** :
+- `src-tauri/src/engine/{reactions,open_loops,relationships,stage_directions,tuning,diagnostics,bench,bench_metrics}.rs`, `llm/parallel.rs`, `models/{intention,source,diagnostics}.rs`, `src-tauri/fixtures/events-full.json`
+- `src/lib/{report,reactions,sources}.ts`, `src/stores/arena/{types,streaming}.ts` + `reducers/*`, `src/components/report/{DiscussionReportView,PositionsTable,DiagnosticsPanel}.tsx`, `src/components/sources/*`, `src/components/discussion/ReactionBar.tsx`, `src/components/setup/steps/LivelinessOptions.tsx`, `tools/bench-compare.mjs`, `Docs/Technique/bench/`
+
+**Backend** :
+- Réactions typées et citées, ronde immédiate parallèle, propension OCEAN, réactions du public (`react_to_message`, `get_engine_constants`), réactions dans le prompt, indices pour la carte
+- Intention JSON avant chaque intervention (`CallKind::Intention`, `IntentionGenerated`), fils ouverts (section budgétaire `OpenLoops`), trajectoire des positions (`PositionsUpdated`, « Évolution des positions » dans la synthèse), `reasoning_pace`
+- Gains OCEAN, échantillonnage émotionnel, didascalies (`kind = stageDirection`), relations pondérées avec décroissance et réconciliation (`RelationshipShift`), salle (`RoomMoodUpdated`), `Tuning`
+- Sources des recherches web / Wikipedia exposées et listées dans la synthèse ; repli lexical du RAG quand les embeddings différés échouent
+- Fin de tour parallèle bornée, appel fusionné `TurnAnalyst` en local, `TurnTimings`, `DiagnosticsReady`
+- Migrations : `discussions.report_json`, `discussion_messages.kind` ; priorités de budget migrées (section ajoutée après l'ordre sauvegardé) ; plancher des positions par participant ; réserve de sortie × `EMOTION_LEN_MAX`
+- Tests : 376 → 437 (`cargo test --lib`), fixture d'événements, banc de prompts
+
+**Frontend** :
+- Store d'arène découpé en réducteurs purs ; `DiscussionReport` partagé Résumé / Historique (onglets Sources, Positions, panneau Diagnostic) ; réactions typées avec citation, barre de réactions du public (optimiste), didascalies, pastille d'ambiance, tendances des relations, chronomètre de réflexion, coulisses avec intention, options de mise en scène dans l'assistant, rythme de réflexion dans les réglages, section « Fils ouverts » dans les priorités de budget
+- vitest 40 → 55 tests (dont la fixture d'événements rejouée), i18n 1 016 clés × 3
 
 ### v1.16 (2026-09-16) — Fournisseur DeepSeek, comptage des coûts, consolidation du moteur, UX
 
@@ -1392,7 +1557,7 @@ AIrena/
 - `ArgumentNode::count_all()`, `find_depth_by_label()`, `find_by_label_mut()` — méthodes récursives pour la navigation dans l'arbre
 - `ArgumentMap::to_markdown_by_speaker()` — nouvelle vue speaker-centric du markdown
 - `ParsedArgument.targets_argument: Option<String>` — ciblage d'argument existant pour créer des sous-arguments
-- `build_existing_arguments_context()` dans orchestrator — contexte récursif tronqué pour le prompt d'extraction
+- `build_existing_arguments_context()` dans `orchestrator/analysis.rs` — contexte récursif tronqué pour le prompt d'extraction
 - Insertion arborescente dans `merge_extractions()` — 2-pass borrow checker pattern (immutable depth check → mutable insertion)
 - Ellipsis stripping dans le fuzzy matching — `trim_end_matches('…')` avant comparaison
 - 3 nouvelles constantes : `ARGMAP_MAX_ARGUMENT_DEPTH`, `ARGMAP_PROMPT_MAX_EXISTING_ARGUMENTS`, `ARGMAP_PROMPT_LABEL_CHARS`

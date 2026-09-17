@@ -2,13 +2,50 @@ import { create } from "zustand";
 import { logger } from "@/lib/logger";
 import { extractErrorMessage } from "@/lib/error-utils";
 import { toast } from "@/stores/useToastStore";
-import type { AppSettings, LlmConstants, ModelBudgetInfo, ModelInfo, PredefinedProfile, ProviderKind } from "@/lib/types";
+import type { AppSettings, EngineConstants, LlmConstants, ModelBudgetInfo, ModelInfo, PredefinedProfile, ProviderKind } from "@/lib/types";
 import * as api from "@/lib/tauri-api";
 
 /** Model label shown in summaries/history: "provider · model". */
-export function describeActiveModel(settings: AppSettings): string {
-  const model = settings.llmProvider === "deepseek" ? settings.deepseekModel : settings.ollamaModel;
+/** The provider's global model (empty when none is configured). */
+export function globalModel(settings: AppSettings): string {
+  switch (settings.llmProvider) {
+    case "deepseek": return settings.deepseekModel;
+    case "openaiCompat": return settings.openaiCompatModel;
+    default: return settings.ollamaModel;
+  }
+}
+
+/** "provider · model", or "provider · mixte (a, b)" when speakers override the model (v1.20). */
+export function describeActiveModel(settings: AppSettings, overrides: (string | undefined)[] = []): string {
+  const model = globalModel(settings);
+  const distinct = [...new Set([model, ...overrides.map((m) => m?.trim() ?? "")].filter((m) => m.length > 0))];
+  if (distinct.length > 1) return `${settings.llmProvider} · mixte (${distinct.join(", ")})`;
   return model ? `${settings.llmProvider} · ${model}` : settings.llmProvider;
+}
+
+/** Manual model list of the OpenAI-compatible server (a JSON array; anything else → empty). */
+export function parseModelList(json: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(json || "[]");
+    return Array.isArray(parsed) ? parsed.filter((m): m is string => typeof m === "string" && m.trim().length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function serialiseModelList(models: string[]): string {
+  return JSON.stringify(models);
+}
+
+/** Models a speaker may pick for the active provider (the global one first). */
+export function availableModels(settings: AppSettings, ollamaModels: { name: string }[], constants: LlmConstants | null): string[] {
+  const global = globalModel(settings);
+  const pool = settings.llmProvider === "ollama"
+    ? ollamaModels.map((m) => m.name)
+    : settings.llmProvider === "deepseek"
+      ? (constants?.deepseekKnownModels ?? [])
+      : parseModelList(settings.openaiCompatModels);
+  return [...new Set([global, ...pool].filter((m) => m.trim().length > 0))];
 }
 
 /** Whether Ollama must be reachable for the current configuration (chat or embeddings). */
@@ -32,10 +69,13 @@ interface SettingsState {
   ollamaInitialized: boolean;
   /** Backend-owned provider limits (loaded once). */
   llmConstants: LlmConstants | null;
+  /** Backend-owned engine limits (loaded once). */
+  engineConstants: EngineConstants | null;
 
   hydrate: () => Promise<void>;
   setProvider: (provider: ProviderKind) => void;
   loadLlmConstants: () => Promise<LlmConstants | null>;
+  loadEngineConstants: () => Promise<EngineConstants | null>;
   updateSettings: (patch: Partial<AppSettings>) => void;
   saveSettings: () => Promise<void>;
   checkOllama: () => Promise<boolean>;
@@ -73,12 +113,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     llmProvider: "ollama",
     reasoningLevel: "auto",
     showModelReasoning: true,
+    reasoningPace: "normal",
+    ttsEnabled: false,
+    ttsMode: "follow",
+    ttsVolume: 1,
+    soundEnabled: false,
+    soundVolume: 0.5,
     deepseekApiKey: "",
     deepseekModel: "",
     deepseekMonthlyBudgetUsd: 0,
     deepseekPeriodStart: "",
     deepseekPeriodUsageJson: "{}",
     deepseekUsageHistory: "[]",
+    openaiCompatBaseUrl: "",
+    openaiCompatApiKey: "",
+    openaiCompatModel: "",
+    openaiCompatModels: "[]",
+    advancedTuningJson: "{}",
+    personaMemoryEnabled: true,
   },
   profiles: [],
   arbitreProfiles: [],
@@ -93,6 +145,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   initializingOllama: false,
   ollamaInitialized: false,
   llmConstants: null,
+  engineConstants: null,
 
   setProvider: (provider) => {
     // numCtx changes meaning with the provider: Ollama's KV-cache window
@@ -118,6 +171,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       return llmConstants;
     } catch (e) {
       logger.error("settings", "Failed to load LLM constants", e);
+      return null;
+    }
+  },
+
+  loadEngineConstants: async () => {
+    const cached = get().engineConstants;
+    if (cached) return cached;
+    try {
+      const engineConstants = await api.getEngineConstants();
+      set({ engineConstants });
+      return engineConstants;
+    } catch (e) {
+      logger.error("settings", "Failed to load engine constants", e);
       return null;
     }
   },

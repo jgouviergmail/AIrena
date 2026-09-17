@@ -12,6 +12,9 @@ pub enum ProviderKind {
     #[default]
     Ollama,
     DeepSeek,
+    /// Any OpenAI-compatible server (LM Studio, vLLM, llama.cpp, OpenRouter…), v1.20
+    #[serde(rename = "openaiCompat")]
+    OpenAiCompat,
 }
 
 impl ProviderKind {
@@ -19,6 +22,7 @@ impl ProviderKind {
         match self {
             Self::Ollama => "ollama",
             Self::DeepSeek => "deepseek",
+            Self::OpenAiCompat => "openaiCompat",
         }
     }
 
@@ -26,6 +30,7 @@ impl ProviderKind {
     pub fn parse(value: &str) -> Self {
         match value.trim().to_lowercase().as_str() {
             "deepseek" => Self::DeepSeek,
+            "openaicompat" => Self::OpenAiCompat,
             _ => Self::Ollama,
         }
     }
@@ -73,12 +78,48 @@ impl ReasoningLevel {
     }
 }
 
+/// How much wall-clock time the reasoning may take (v1.17). `Fast` caps the
+/// `Auto` heuristic at `Low` and scales down the providers' reasoning allowances.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningPace {
+    #[default]
+    Normal,
+    Fast,
+}
+
+impl ReasoningPace {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Fast => "fast",
+        }
+    }
+
+    /// Parse a stored value; unknown values fall back to `Normal`.
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_lowercase().as_str() {
+            "fast" => Self::Fast,
+            _ => Self::Normal,
+        }
+    }
+
+    /// Level the `Auto` heuristic may reach under this pace (explicit levels are never capped).
+    pub fn cap_auto(&self, level: ReasoningLevel) -> ReasoningLevel {
+        match (self, level) {
+            (Self::Fast, ReasoningLevel::High | ReasoningLevel::Max) => ReasoningLevel::Low,
+            _ => level,
+        }
+    }
+}
+
 /// Purpose of an LLM call. Drives the reasoning policy, the provider-specific
 /// token budget and the usage ledger breakdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CallKind {
     Introduction,
+    /// Legacy (≤ v1.16) free-text inner thought — kept for persisted ledgers; the engine now issues `Intention`
     Thought,
     Intervention,
     Reaction,
@@ -93,6 +134,24 @@ pub enum CallKind {
     Synthesis,
     Socratic,
     RespondOrPass,
+    /// Structured pre-speech contract (target, goal, angle…) — replaces `Thought` (v1.17)
+    Intention,
+    /// Secret objective generated for a participant at the start
+    Agenda,
+    /// Cast suggestion for a topic (outside a discussion)
+    Casting,
+    /// End-of-discussion memory of a participant (long-term persona memory)
+    Recap,
+    /// Fused end-of-turn analysis (summary + positions + emotions) on sequential providers
+    TurnAnalyst,
+    /// Verdict / agreement vote at the end of trial-like modes
+    Verdict,
+    /// The moderator voices an act or scene announcement in its own words (v1.20.3)
+    Announcement,
+    /// The moderator writes the room's question to a participant (v1.20.3)
+    AudienceQuestion,
+    /// The crisis cell's dispatches, generated once at the start (v1.19)
+    CrisisDispatches,
 }
 
 impl CallKind {
@@ -151,14 +210,18 @@ pub struct UsageLedger {
     pub by_call_kind: HashMap<CallKind, LlmUsage>,
     #[serde(default)]
     pub by_speaker: HashMap<String, LlmUsage>,
+    /// Usage per model when several models serve the discussion (v1.20)
+    #[serde(default)]
+    pub by_model: HashMap<String, LlmUsage>,
     /// Estimated spend in USD (None: free provider or unknown price list).
     #[serde(default)]
     pub estimated_cost_usd: Option<f64>,
 }
 
 impl UsageLedger {
-    /// Record one call. `cost_usd` is the estimated price of this call when known.
-    pub fn record(&mut self, call_kind: CallKind, speaker_id: Option<&str>, usage: &LlmUsage, cost_usd: Option<f64>) {
+    /// Record one call served by `model` (attributed per model as well, v1.20).
+    /// `cost_usd` is the estimated price of this call when known.
+    pub fn record(&mut self, call_kind: CallKind, speaker_id: Option<&str>, model: Option<&str>, usage: &LlmUsage, cost_usd: Option<f64>) {
         if usage.is_empty() {
             return;
         }
@@ -167,6 +230,9 @@ impl UsageLedger {
         self.by_call_kind.entry(call_kind).or_default().add(usage);
         if let Some(id) = speaker_id {
             self.by_speaker.entry(id.to_string()).or_default().add(usage);
+        }
+        if let Some(m) = model {
+            self.by_model.entry(m.to_string()).or_default().add(usage);
         }
         if let Some(c) = cost_usd {
             self.estimated_cost_usd = Some(self.estimated_cost_usd.unwrap_or(0.0) + c);
@@ -247,10 +313,11 @@ mod tests {
         let mut ledger = UsageLedger::default();
         let u1 = LlmUsage { prompt_tokens: 100, cached_tokens: 40, completion_tokens: 20, reasoning_tokens: 5 };
         let u2 = LlmUsage { prompt_tokens: 50, cached_tokens: 0, completion_tokens: 10, reasoning_tokens: 0 };
-        ledger.record(CallKind::Intervention, Some("g1"), &u1, Some(0.01));
-        ledger.record(CallKind::Reaction, Some("g1"), &u2, Some(0.005));
-        ledger.record(CallKind::Memory, None, &u2, None);
-        ledger.record(CallKind::Memory, None, &LlmUsage::default(), Some(9.0)); // ignored
+        ledger.record(CallKind::Intervention, Some("g1"), Some("m1"), &u1, Some(0.01));
+        ledger.record(CallKind::Reaction, Some("g1"), Some("m2"), &u2, Some(0.005));
+        assert_eq!(ledger.by_model.len(), 2);
+        ledger.record(CallKind::Memory, None, None, &u2, None);
+        ledger.record(CallKind::Memory, None, None, &LlmUsage::default(), Some(9.0)); // ignored
 
         assert_eq!(ledger.calls, 3);
         assert_eq!(ledger.total.prompt_tokens, 200);
@@ -263,7 +330,7 @@ mod tests {
         assert!((ledger.estimated_cost_usd.unwrap() - 0.015).abs() < 1e-12);
 
         let mut free = UsageLedger::default();
-        free.record(CallKind::Memory, None, &u2, None);
+        free.record(CallKind::Memory, None, None, &u2, None);
         assert!(free.estimated_cost_usd.is_none());
 
         // Serializes with enum keys as strings (frontend-friendly)

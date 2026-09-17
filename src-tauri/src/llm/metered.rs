@@ -39,14 +39,15 @@ impl MeteredProvider {
 
     fn record(&self, request: &LlmRequest, response: &LlmResponse) {
         let Some(usage) = &response.usage else { return };
-        // Price each call at the tariff in force when it completed.
-        let cost = if self.inner.capabilities().billable {
-            pricing::estimate_cost_usd(self.inner.model_name(), usage, pricing::is_peak_hour(chrono::Utc::now()))
+        // Price each call at the tariff in force when it completed, for the model that served it.
+        let model = self.inner.model_for(request);
+        let cost = if self.inner.capabilities_for(request.speaker_id.as_deref()).billable {
+            pricing::estimate_cost_usd(model, usage, pricing::is_peak_hour(chrono::Utc::now()))
         } else {
             None
         };
         let mut ledger = self.ledger.lock().unwrap_or_else(|e| e.into_inner());
-        ledger.record(request.call_kind, request.speaker_id.as_deref(), usage, cost);
+        ledger.record(request.call_kind, request.speaker_id.as_deref(), Some(model), usage, cost);
     }
 }
 
@@ -62,6 +63,14 @@ impl LlmProvider for MeteredProvider {
 
     fn capabilities(&self) -> &LlmCapabilities {
         self.inner.capabilities()
+    }
+
+    fn model_for(&self, request: &LlmRequest) -> &str {
+        self.inner.model_for(request)
+    }
+
+    fn capabilities_for(&self, speaker_id: Option<&str>) -> &LlmCapabilities {
+        self.inner.capabilities_for(speaker_id)
     }
 
     async fn chat_stream(
@@ -116,6 +125,7 @@ mod tests {
         let ledger = metered.snapshot();
         assert_eq!(ledger.calls, 3);
         assert_eq!(ledger.total.prompt_tokens, 30);
+        assert_eq!(ledger.by_model.len(), 1, "one model serves everything: {:?}", ledger.by_model.keys());
         assert_eq!(ledger.total.reasoning_tokens, 3);
         assert_eq!(ledger.by_speaker["g1"].completion_tokens, 10);
         assert_eq!(ledger.by_call_kind[&CallKind::Memory].prompt_tokens, 10);
@@ -143,6 +153,7 @@ mod tests {
             chars_per_token_cjk: 1.7,
             reports_usage: true,
             billable: true,
+            max_parallel_calls: 1,
         })
         .with_model_name("deepseek-flash");
         let metered = MeteredProvider::new(Arc::new(mock));

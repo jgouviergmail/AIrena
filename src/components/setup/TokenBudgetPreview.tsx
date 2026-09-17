@@ -25,6 +25,7 @@ const SECTION_COLORS: Record<string, string> = {
   ragContext: "bg-violet-500",
   webWikiSearch: "bg-orange-500",
   positionalMap: "bg-amber-500",
+  openLoops: "bg-rose-500",
 };
 
 export function TokenBudgetPreviewPanel({ preview, documentInjectionMode, hasDocuments, nGladiateurs, numPredict }: Props) {

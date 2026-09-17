@@ -21,6 +21,14 @@ describe("parsePriorities", () => {
     expect(p[0].section).toBe(CONFIGURABLE_BUDGET_SECTIONS[CONFIGURABLE_BUDGET_SECTIONS.length - 1]);
     expect(p.some((s) => s.section === "fullDocument")).toBe(false);
   });
+
+  it("appends the sections a v1.16 order predates, after the user's order", () => {
+    const v116 = ["positionalMap", "currentTurnMessages", "immediateMemory", "contextualSummary", "cognitiveDirectives", "arbitreDirectives", "webWikiSearch"]
+      .map((section, i) => ({ section, rank: i + 4, floor: 0, ceiling: 0 }));
+    const p = parsePriorities(JSON.stringify(v116));
+    expect(p.map((s) => s.section)).toEqual([...v116.map((s) => s.section), "openLoops", "debateState"]);
+    expect(p.map((s) => s.rank)).toEqual(p.map((_, i) => i + 4));
+  });
 });
 
 describe("moveSection", () => {

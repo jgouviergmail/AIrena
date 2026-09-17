@@ -1,14 +1,18 @@
 import { useTranslation } from "react-i18next";
 import { ArrowDown, ArrowUp, Layers, RotateCcw } from "lucide-react";
 import { useSettingsStore } from "@/stores/useSettingsStore";
-import { CONFIGURABLE_BUDGET_SECTIONS } from "@/lib/types";
+import { CONFIGURABLE_BUDGET_SECTIONS, LATER_BUDGET_SECTIONS } from "@/lib/types";
 import type { SectionPriority } from "@/lib/types";
 import { Explainer, Field, Section } from "./SettingsPrimitives";
 
 /** First rank of the user-configurable sections (ranks 1–3 are fixed by the backend). */
 const FIRST_CONFIGURABLE_RANK = 4;
 
-/** Parse the stored JSON, falling back to the default order when incomplete. */
+/**
+ * Parse the stored JSON, falling back to the default order when incomplete.
+ * Sections added after v1.16 that the saved order lacks are appended after the
+ * user's sections (mirrors the backend's `apply_default_bounds`).
+ */
 export function parsePriorities(value: string): SectionPriority[] {
   try {
     if (value) {
@@ -16,8 +20,12 @@ export function parsePriorities(value: string): SectionPriority[] {
       // Filter to CONFIGURABLE sections only (document sections are auto-managed by backend)
       const configurable = parsed.filter((p) => CONFIGURABLE_BUDGET_SECTIONS.includes(p.section));
       const present = new Set(configurable.map((p) => p.section));
-      if (CONFIGURABLE_BUDGET_SECTIONS.every((s) => present.has(s))) {
-        return [...configurable].sort((a, b) => a.rank - b.rank);
+      if (CONFIGURABLE_BUDGET_SECTIONS.every((s) => present.has(s) || LATER_BUDGET_SECTIONS.includes(s))) {
+        const ordered = [...configurable].sort((a, b) => a.rank - b.rank);
+        for (const section of LATER_BUDGET_SECTIONS) {
+          if (!present.has(section)) ordered.push({ section, rank: 0, floor: 0, ceiling: 0 });
+        }
+        return ordered.map((s, i) => ({ ...s, rank: i + FIRST_CONFIGURABLE_RANK }));
       }
     }
   } catch { /* fall through to defaults */ }

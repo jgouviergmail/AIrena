@@ -36,6 +36,7 @@ export function ArgumentMapPanel() {
   const argumentMap = useArenaStore((s) => s.argumentMap);
   const newNodeIds = useArenaStore((s) => s.argumentMapNewNodeIds);
   const droppedCount = useArenaStore((s) => s.argumentMapDroppedCount);
+  const depth = useArenaStore((s) => s.argumentMapDepth);
   const analysing = useArenaStore((s) => s.activityStatus?.type === "argumentMap");
   const bySpeaker = useMemo(() => countNodesBySpeaker(argumentMap), [argumentMap]);
 
@@ -47,6 +48,12 @@ export function ArgumentMapPanel() {
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-1.5 text-[10px] text-muted-foreground">
         <span>{t("mindmap.thesesCount", { count: thesesCount })}</span>
         <span>{t("mindmap.argumentsCount", { count: argumentsCount })}</span>
+        {depth && depth.maxDepth > 0 && (
+          <span title={t("mindmap.depthHint")}>{t("mindmap.depth", { count: depth.maxDepth })}</span>
+        )}
+        {depth && depth.unansweredCounters > 0 && (
+          <span className="text-amber-500" title={t("mindmap.unansweredHint")}>{t("mindmap.unanswered", { count: depth.unansweredCounters })}</span>
+        )}
         {newNodeIds.length > 0 && (
           <span className="inline-flex items-center gap-0.5 text-primary">
             <Sparkles className="h-3 w-3" />

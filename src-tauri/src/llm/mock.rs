@@ -15,6 +15,8 @@ pub struct MockLlmProvider {
     script: Script,
     caps: LlmCapabilities,
     model_name: String,
+    /// What `validate` answers (`None` = success)
+    validation_error: Option<LlmError>,
     /// Every request received, in order (for assertions).
     pub calls: Mutex<Vec<LlmRequest>>,
     /// Simulated streaming chunk size (chars); 0 = deliver content in one callback.
@@ -35,8 +37,12 @@ impl MockLlmProvider {
                 chars_per_token_cjk: constants::CHARS_PER_TOKEN_CJK,
                 reports_usage: true,
                 billable: false,
+                // Two: the end-of-turn calls stay separate (memory, emotion…); set 1
+                // with `with_capabilities` to exercise the fused turn analyst.
+                max_parallel_calls: 2,
             },
             model_name: "mock-model".to_string(),
+            validation_error: None,
             calls: Mutex::new(Vec::new()),
             chunk_chars: 4,
         }
@@ -49,6 +55,12 @@ impl MockLlmProvider {
 
     pub fn with_model_name(mut self, name: &str) -> Self {
         self.model_name = name.to_string();
+        self
+    }
+
+    /// Make `validate` fail (the error is cloned by kind on each call).
+    pub fn failing_validation(mut self, error: LlmError) -> Self {
+        self.validation_error = Some(error);
         self
     }
 
@@ -92,7 +104,12 @@ impl LlmProvider for MockLlmProvider {
     }
 
     async fn validate(&self) -> Result<(), LlmError> {
-        Ok(())
+        match &self.validation_error {
+            None => Ok(()),
+            Some(LlmError::ModelNotFound(m)) => Err(LlmError::ModelNotFound(m.clone())),
+            Some(LlmError::Auth) => Err(LlmError::Auth),
+            Some(other) => Err(LlmError::Connection(other.to_string())),
+        }
     }
 }
 

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import i18n from "@/i18n/config";
 import type {
   DiscussionConfig,
+  DiscussionFeatures,
   DiscussionMode,
   DocumentFormat,
   DocumentInjectionMode,
@@ -12,7 +13,7 @@ import type {
   RagDocumentInfo,
   TokenBudgetPreview,
 } from "@/lib/types";
-import { DEFAULT_LLM_PARAMS } from "@/lib/types";
+import { DEFAULT_DISCUSSION_FEATURES, DEFAULT_LLM_PARAMS } from "@/lib/types";
 import { clearRagStore } from "@/lib/tauri-api";
 
 interface SetupState {
@@ -32,7 +33,11 @@ interface SetupState {
   documentInjectionMode: DocumentInjectionMode;
   documentUpdateGranularity: DocumentUpdateGranularity;
   tokenBudgetPreview: TokenBudgetPreview | null;
+  features: DiscussionFeatures;
 
+  setFeatures: (patch: Partial<DiscussionFeatures>) => void;
+  /** Apply the wizard fields of a template (`lib/templates.ts`), keeping everything else */
+  applyTemplatePatch: (patch: Partial<Pick<SetupState, "topic" | "discussionLanguage" | "discussionMode" | "maxTurns" | "gladiateurs" | "features" | "documentFormat" | "documentInjectionMode" | "argumentMapEnabled" | "webSearchPool" | "wikiSearchPool">>) => void;
   setDocumentInjectionMode: (mode: DocumentInjectionMode) => void;
   setDocumentUpdateGranularity: (g: DocumentUpdateGranularity) => void;
   setTokenBudgetPreview: (preview: TokenBudgetPreview | null) => void;
@@ -85,7 +90,10 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   documentInjectionMode: "rag" as DocumentInjectionMode,
   documentUpdateGranularity: "turn" as DocumentUpdateGranularity,
   tokenBudgetPreview: null,
+  features: { ...DEFAULT_DISCUSSION_FEATURES },
 
+  setFeatures: (patch) => set((s) => ({ features: { ...s.features, ...patch } })),
+  applyTemplatePatch: (patch) => set(patch),
   setDocumentInjectionMode: (mode) => set({ documentInjectionMode: mode }),
   setDocumentUpdateGranularity: (g) => set({ documentUpdateGranularity: g }),
   setTokenBudgetPreview: (preview) => set({ tokenBudgetPreview: preview }),
@@ -180,6 +188,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       argumentMapEnabled: s.argumentMapEnabled,
       documentInjectionMode: s.documentInjectionMode,
       documentUpdateGranularity: s.documentUpdateGranularity,
+      features: { ...s.features },
     };
   },
 
@@ -203,6 +212,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
       documentInjectionMode: "rag" as DocumentInjectionMode,
       documentUpdateGranularity: "turn" as DocumentUpdateGranularity,
       tokenBudgetPreview: null,
+      features: { ...DEFAULT_DISCUSSION_FEATURES },
     });
   },
 }));

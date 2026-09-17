@@ -6,7 +6,9 @@
 //! token usage:
 //!
 //! - [`ollama::OllamaProvider`] — local Ollama (iso-functional with the historical client)
-//! - [`deepseek::DeepSeekProvider`] — DeepSeek cloud API (OpenAI-compatible, SSE)
+//! - [`deepseek::DeepSeekProvider`] — DeepSeek cloud API (the OpenAI-compatible transport, DeepSeek dialect)
+//! - [`openai_compat::OpenAiCompatProvider`] — any OpenAI-compatible server (generic dialect, v1.20)
+//! - [`routing::RoutingProvider`] — one model per speaker over the same provider kind (v1.20)
 //! - [`metered::MeteredProvider`] — decorator recording usage into a [`UsageLedger`]
 //!
 //! Streaming is the only transport: `chat()` is `chat_stream()` with no-op callbacks.
@@ -15,7 +17,10 @@ pub mod deepseek;
 pub mod factory;
 pub mod metered;
 pub mod ollama;
+pub mod openai_compat;
+pub mod parallel;
 pub mod pricing;
+pub mod routing;
 #[cfg(test)]
 pub mod mock;
 
@@ -23,7 +28,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::models::llm::{CallKind, LlmUsage, ProviderKind, ReasoningLevel};
+use crate::models::llm::{CallKind, LlmUsage, ProviderKind, ReasoningLevel, ReasoningPace};
 use crate::models::settings::LlmParams;
 use crate::ollama::error::OllamaError;
 
@@ -40,6 +45,8 @@ pub struct LlmRequest {
     pub json_mode: bool,
     /// Resolved reasoning level — never [`ReasoningLevel::Auto`].
     pub reasoning: ReasoningLevel,
+    /// Wall-clock pace of the reasoning (providers scale their allowances on `Fast`).
+    pub pace: ReasoningPace,
     pub call_kind: CallKind,
     /// Speaker on whose behalf the call is made (usage attribution).
     pub speaker_id: Option<String>,
@@ -53,9 +60,16 @@ impl LlmRequest {
             params: params.clone(),
             json_mode: false,
             reasoning: ReasoningLevel::Off,
+            pace: ReasoningPace::Normal,
             call_kind,
             speaker_id: None,
         }
+    }
+
+    /// Reasoning pace (only matters when a reasoning level is active).
+    pub fn pace(mut self, pace: ReasoningPace) -> Self {
+        self.pace = pace;
+        self
     }
 
     /// Structured JSON output: enables the provider's JSON mode and pins the
@@ -112,6 +126,9 @@ pub struct LlmCapabilities {
     pub reports_usage: bool,
     /// Usage costs money.
     pub billable: bool,
+    /// How many requests the provider serves concurrently with a real benefit
+    /// (1 = strictly sequential — local GPUs interleave without gaining throughput).
+    pub max_parallel_calls: usize,
 }
 
 /// Unified error type. Providers map their transport/API errors onto it.
@@ -168,6 +185,16 @@ pub trait LlmProvider: Send + Sync {
     fn kind(&self) -> ProviderKind;
     fn model_name(&self) -> &str;
     fn capabilities(&self) -> &LlmCapabilities;
+
+    /// Model that will serve this request (a routing provider picks it by speaker, v1.20).
+    fn model_for(&self, _request: &LlmRequest) -> &str {
+        self.model_name()
+    }
+
+    /// Capabilities of the model serving this speaker (`None` = the default model).
+    fn capabilities_for(&self, _speaker_id: Option<&str>) -> &LlmCapabilities {
+        self.capabilities()
+    }
 
     /// Stream a chat completion. Content tokens go to `on_content`, reasoning
     /// tokens (when exposed) to `on_reasoning`. Returns the full response.

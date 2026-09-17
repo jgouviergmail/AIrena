@@ -1,4 +1,5 @@
-//! DeepSeek provider — OpenAI-compatible chat completions over SSE.
+//! DeepSeek provider — the OpenAI-compatible transport configured for the
+//! DeepSeek dialect, plus the DeepSeek-only endpoints (`/user/balance`).
 //!
 //! Verified against the official API reference (2026-09-10):
 //! - `thinking: {type}` + `reasoning_effort` control reasoning; while thinking is
@@ -9,157 +10,28 @@
 //!   is reset by any traffic.
 //! - `max_tokens` is always sent explicitly (API defaults reach 64K/128K when
 //!   thinking, which would be a cost hazard).
+//!
+//! The wire mapping, the SSE parsing and the retry policy live in
+//! [`super::openai_compat`] (shared with the generic OpenAI-compatible provider).
 
 use std::fmt;
-use std::time::Duration;
 
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+use super::openai_compat::{Dialect, OpenAiCompatTransport};
+#[cfg(test)]
+use super::openai_compat::ChatCompletionRequest;
 use super::{LlmCapabilities, LlmError, LlmProvider, LlmRequest, LlmResponse, TokenCallback};
 use crate::constants;
-use crate::models::llm::{LlmUsage, ProviderKind, ReasoningLevel};
-
-// ── Wire types ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-pub struct WireMessage {
-    pub role: &'static str,
-    pub content: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct StreamOptions {
-    pub include_usage: bool,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ResponseFormat {
-    #[serde(rename = "type")]
-    pub kind: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-pub struct Thinking {
-    #[serde(rename = "type")]
-    pub kind: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ChatCompletionRequest {
-    pub model: String,
-    pub messages: Vec<WireMessage>,
-    pub stream: bool,
-    pub stream_options: StreamOptions,
-    pub max_tokens: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_format: Option<ResponseFormat>,
-    pub thinking: Thinking,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<&'static str>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct Delta {
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    reasoning_content: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct StreamChoice {
-    #[serde(default)]
-    delta: Delta,
-    #[serde(default)]
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct PromptTokensDetails {
-    #[serde(default)]
-    cached_tokens: Option<u32>,
-    #[serde(default)]
-    prompt_cache_hit_tokens: Option<u32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct CompletionTokensDetails {
-    #[serde(default)]
-    reasoning_tokens: Option<u32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct WireUsage {
-    #[serde(default)]
-    prompt_tokens: u32,
-    #[serde(default)]
-    completion_tokens: u32,
-    #[serde(default)]
-    prompt_tokens_details: Option<PromptTokensDetails>,
-    #[serde(default)]
-    completion_tokens_details: Option<CompletionTokensDetails>,
-    /// Legacy top-level field kept by the API for compatibility.
-    #[serde(default)]
-    prompt_cache_hit_tokens: Option<u32>,
-}
-
-impl From<WireUsage> for LlmUsage {
-    fn from(u: WireUsage) -> Self {
-        let cached = u
-            .prompt_tokens_details
-            .as_ref()
-            .and_then(|d| d.cached_tokens.or(d.prompt_cache_hit_tokens))
-            .or(u.prompt_cache_hit_tokens)
-            .unwrap_or(0);
-        Self {
-            prompt_tokens: u.prompt_tokens,
-            cached_tokens: cached.min(u.prompt_tokens),
-            completion_tokens: u.completion_tokens,
-            reasoning_tokens: u
-                .completion_tokens_details
-                .and_then(|d| d.reasoning_tokens)
-                .unwrap_or(0)
-                .min(u.completion_tokens),
-        }
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct StreamChunk {
-    #[serde(default)]
-    choices: Vec<StreamChoice>,
-    #[serde(default)]
-    usage: Option<WireUsage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiErrorDetail {
-    #[serde(default)]
-    message: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiErrorBody {
-    error: ApiErrorDetail,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelEntry {
-    id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsResponse {
-    #[serde(default)]
-    data: Vec<ModelEntry>,
-}
+use crate::models::llm::ProviderKind;
+#[cfg(test)]
+use super::openai_compat::{backoff_delay, parse_sse_line, SseLine, StreamChunk, WireUsage};
+#[cfg(test)]
+use crate::models::llm::{LlmUsage, ReasoningLevel, ReasoningPace};
+#[cfg(test)]
+use std::time::Duration;
 
 /// Balance information from `GET /user/balance` (sent to the frontend).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,26 +68,19 @@ struct WireBalance {
 // ── Provider ────────────────────────────────────────────────────────────
 
 pub struct DeepSeekProvider {
-    http: reqwest::Client,
-    base_url: String,
-    api_key: String,
-    model: String,
+    transport: OpenAiCompatTransport,
     caps: LlmCapabilities,
 }
 
 impl fmt::Debug for DeepSeekProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DeepSeekProvider")
-            .field("base_url", &self.base_url)
-            .field("model", &self.model)
+            .field("base_url", &constants::DEEPSEEK_BASE_URL)
+            .field("model", &self.transport.model())
             .field("api_key", &"***")
             .finish()
     }
 }
-
-/// Outcome of one streaming attempt: the error plus whether tokens were already
-/// forwarded (a retry would duplicate them).
-type AttemptError = (LlmError, bool);
 
 impl DeepSeekProvider {
     pub fn new(api_key: &str, model: &str, context_budget: u32) -> Result<Self, LlmError> {
@@ -224,24 +89,13 @@ impl DeepSeekProvider {
 
     /// Constructor with a custom base URL (tests against a local mock server).
     pub fn with_base_url(base_url: &str, api_key: &str, model: &str, context_budget: u32) -> Result<Self, LlmError> {
-        let api_key = api_key.trim();
-        if api_key.is_empty() {
+        if api_key.trim().is_empty() {
             return Err(LlmError::Auth);
         }
-        let http = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(constants::DEEPSEEK_CONNECT_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| LlmError::Connection(format!("HTTP client build failed: {e}")))?;
-        let model = if model.trim().is_empty() {
-            constants::DEEPSEEK_DEFAULT_MODEL.to_string()
-        } else {
-            model.trim().to_string()
-        };
+        let model = if model.trim().is_empty() { constants::DEEPSEEK_DEFAULT_MODEL } else { model.trim() };
+        let transport = OpenAiCompatTransport::new(base_url, api_key, model, Dialect::DeepSeek)?;
         Ok(Self {
-            http,
-            base_url: base_url.trim_end_matches('/').to_string(),
-            api_key: api_key.to_string(),
-            model,
+            transport,
             caps: LlmCapabilities {
                 supports_reasoning: true,
                 reasoning_levels: true,
@@ -252,212 +106,26 @@ impl DeepSeekProvider {
                 chars_per_token_cjk: constants::DEEPSEEK_CHARS_PER_TOKEN_CJK,
                 reports_usage: true,
                 billable: true,
+                max_parallel_calls: constants::DEEPSEEK_MAX_PARALLEL_CALLS,
             },
         })
     }
 
-    fn url(&self, path: &str) -> String {
-        format!("{}{}", self.base_url, path)
-    }
-
-    fn effort_name(level: ReasoningLevel) -> Option<&'static str> {
-        match level {
-            ReasoningLevel::Low => Some("low"),
-            ReasoningLevel::High => Some("high"),
-            ReasoningLevel::Max => Some("max"),
-            ReasoningLevel::Off | ReasoningLevel::Auto => None,
-        }
-    }
-
-    fn reasoning_allowance(level: ReasoningLevel) -> i32 {
-        match level {
-            ReasoningLevel::Low => constants::DEEPSEEK_REASONING_ALLOWANCE_LOW,
-            ReasoningLevel::High => constants::DEEPSEEK_REASONING_ALLOWANCE_HIGH,
-            ReasoningLevel::Max => constants::DEEPSEEK_REASONING_ALLOWANCE_MAX,
-            ReasoningLevel::Off | ReasoningLevel::Auto => 0,
-        }
-    }
-
-    /// Translate a generic request into the chat-completions body.
+    /// Translate a generic request into the chat-completions body (DeepSeek dialect).
+    #[cfg(test)]
     pub fn to_wire(&self, request: &LlmRequest) -> ChatCompletionRequest {
-        let thinking = request.reasoning.is_active();
-        let params = &request.params;
-
-        let mut messages = Vec::with_capacity(2);
-        if !request.system.is_empty() {
-            messages.push(WireMessage { role: "system", content: request.system.clone() });
-        }
-        messages.push(WireMessage { role: "user", content: request.user.clone() });
-
-        let max_tokens = params
-            .num_predict
-            .saturating_add(Self::reasoning_allowance(request.reasoning))
-            .clamp(1, constants::DEEPSEEK_MAX_OUTPUT_TOKENS);
-
-        ChatCompletionRequest {
-            model: self.model.clone(),
-            messages,
-            stream: true,
-            stream_options: StreamOptions { include_usage: true },
-            max_tokens,
-            // Unsupported while thinking — omitted rather than rejected by the API.
-            temperature: (!thinking).then_some(params.temperature),
-            top_p: Some(if thinking {
-                params.top_p.max(constants::DEEPSEEK_TOP_P_MIN_THINKING)
-            } else {
-                params.top_p
-            }),
-            response_format: request.json_mode.then_some(ResponseFormat { kind: "json_object" }),
-            thinking: Thinking { kind: if thinking { "enabled" } else { "disabled" } },
-            reasoning_effort: if thinking { Self::effort_name(request.reasoning) } else { None },
-        }
+        self.transport.to_wire(request)
     }
 
-    /// Map an HTTP error response to `LlmError` (body is the API's JSON error).
+    /// Map an HTTP error response to `LlmError` (shared classification).
+    #[cfg(test)]
     fn classify_http_error(status: u16, body: &str) -> LlmError {
-        let message = serde_json::from_str::<ApiErrorBody>(body)
-            .map(|b| b.error.message)
-            .unwrap_or_else(|_| body.chars().take(200).collect());
-        let lower = message.to_lowercase();
-        match status {
-            401 => LlmError::Auth,
-            402 => LlmError::InsufficientBalance,
-            429 => LlmError::RateLimited,
-            503 => LlmError::Overloaded,
-            400 | 404 if lower.contains("model") && (lower.contains("not exist") || lower.contains("not found")) => {
-                LlmError::ModelNotFound(message)
-            }
-            400 | 404 | 422 => LlmError::Client(format!("HTTP {status}: {message}")),
-            500..=599 => LlmError::Connection(format!("HTTP {status}: {message}")),
-            _ => LlmError::Client(format!("HTTP {status}: {message}")),
-        }
+        super::openai_compat::classify_http_error(status, body)
     }
 
-    async fn stream_once(
-        &self,
-        wire: &ChatCompletionRequest,
-        on_content: TokenCallback<'_>,
-        on_reasoning: TokenCallback<'_>,
-        cancel: &CancellationToken,
-    ) -> Result<LlmResponse, AttemptError> {
-        let send = self
-            .http
-            .post(self.url(constants::DEEPSEEK_CHAT_PATH))
-            .bearer_auth(&self.api_key)
-            .json(wire)
-            .send();
-
-        let response = tokio::select! {
-            r = send => r.map_err(|e| (LlmError::Connection(e.to_string()), false))?,
-            _ = cancel.cancelled() => return Err((LlmError::Cancelled, false)),
-        };
-
-        let status = response.status().as_u16();
-        if status != 200 {
-            let body = response.text().await.unwrap_or_default();
-            return Err((Self::classify_http_error(status, &body), false));
-        }
-
-        let mut stream = response.bytes_stream();
-        let mut buf: Vec<u8> = Vec::new();
-        let mut content = String::new();
-        let mut reasoning = String::new();
-        let mut usage: Option<LlmUsage> = None;
-        let mut truncated = false;
-        let mut emitted = false;
-        let idle = Duration::from_secs(constants::DEEPSEEK_IDLE_TIMEOUT_SECS);
-
-        loop {
-            let next = tokio::select! {
-                n = tokio::time::timeout(idle, stream.next()) => n,
-                _ = cancel.cancelled() => return Err((LlmError::Cancelled, emitted)),
-            };
-            let chunk = match next {
-                Err(_) => {
-                    return Err((
-                        LlmError::Connection(format!("No data for {}s (idle timeout)", constants::DEEPSEEK_IDLE_TIMEOUT_SECS)),
-                        emitted,
-                    ))
-                }
-                Ok(None) => break, // EOF without [DONE]: accept what we have
-                Ok(Some(Err(e))) => return Err((LlmError::Connection(e.to_string()), emitted)),
-                Ok(Some(Ok(bytes))) => bytes,
-            };
-            buf.extend_from_slice(&chunk);
-
-            let mut done = false;
-            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                let line: Vec<u8> = buf.drain(..=pos).collect();
-                let line = String::from_utf8_lossy(&line);
-                match parse_sse_line(line.trim()) {
-                    SseLine::Skip => {}
-                    SseLine::Done => {
-                        done = true;
-                        break;
-                    }
-                    SseLine::Data(payload) => {
-                        let parsed: StreamChunk = serde_json::from_str(payload)
-                            .map_err(|e| (LlmError::Json(format!("bad SSE chunk: {e}")), emitted))?;
-                        if let Some(u) = parsed.usage {
-                            usage = Some(u.into());
-                        }
-                        for choice in parsed.choices {
-                            if let Some(r) = choice.delta.reasoning_content.filter(|s| !s.is_empty()) {
-                                on_reasoning(&r);
-                                reasoning.push_str(&r);
-                                emitted = true;
-                            }
-                            if let Some(c) = choice.delta.content.filter(|s| !s.is_empty()) {
-                                on_content(&c);
-                                content.push_str(&c);
-                                emitted = true;
-                            }
-                            match choice.finish_reason.as_deref() {
-                                Some("length") => truncated = true,
-                                Some("insufficient_system_resource") | Some("aborted") => {
-                                    return Err((LlmError::Overloaded, emitted))
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
-            if done {
-                break;
-            }
-        }
-
-        if truncated {
-            tracing::warn!(chars = content.len(), model = %self.model, "DeepSeek response truncated (max_tokens reached)");
-        }
-        Ok(LlmResponse {
-            content: content.trim().to_string(),
-            reasoning: (!reasoning.is_empty()).then_some(reasoning),
-            usage,
-            truncated,
-        })
-    }
-
-    /// `GET /models` → model ids. Falls back to the documented list on failure.
+    /// `GET /models` → model ids. Falls back to the documented list when the API lists none.
     pub async fn list_models(&self) -> Result<Vec<String>, LlmError> {
-        let resp = self
-            .http
-            .get(self.url(constants::DEEPSEEK_MODELS_PATH))
-            .bearer_auth(&self.api_key)
-            .send()
-            .await
-            .map_err(|e| LlmError::Connection(e.to_string()))?;
-        let status = resp.status().as_u16();
-        if status != 200 {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Self::classify_http_error(status, &body));
-        }
-        let parsed: ModelsResponse = resp
-            .json()
-            .await
-            .map_err(|e| LlmError::Json(format!("models response: {e}")))?;
-        let mut ids: Vec<String> = parsed.data.into_iter().map(|m| m.id).collect();
+        let mut ids = self.transport.list_models().await?;
         if ids.is_empty() {
             ids = constants::DEEPSEEK_KNOWN_MODELS.iter().map(|s| s.to_string()).collect();
         }
@@ -467,16 +135,13 @@ impl DeepSeekProvider {
     /// `GET /user/balance` — also the cheapest way to validate an API key.
     pub async fn balance(&self) -> Result<DeepSeekBalance, LlmError> {
         let resp = self
-            .http
-            .get(self.url(constants::DEEPSEEK_BALANCE_PATH))
-            .bearer_auth(&self.api_key)
+            .transport
+            .get(constants::DEEPSEEK_BALANCE_PATH)
             .send()
             .await
             .map_err(|e| LlmError::Connection(e.to_string()))?;
-        let status = resp.status().as_u16();
-        if status != 200 {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Self::classify_http_error(status, &body));
+        if resp.status().as_u16() != 200 {
+            return Err(OpenAiCompatTransport::error_from(resp).await);
         }
         let parsed: WireBalance = resp
             .json()
@@ -493,38 +158,6 @@ impl DeepSeekProvider {
     }
 }
 
-enum SseLine<'a> {
-    Skip,
-    Done,
-    Data(&'a str),
-}
-
-/// Parse one SSE line: comments (`: keep-alive`), empty lines and non-data
-/// fields are skipped; `data: [DONE]` ends the stream.
-fn parse_sse_line(line: &str) -> SseLine<'_> {
-    if line.is_empty() || line.starts_with(':') {
-        return SseLine::Skip;
-    }
-    let Some(payload) = line.strip_prefix("data:") else {
-        return SseLine::Skip;
-    };
-    let payload = payload.trim();
-    if payload == "[DONE]" {
-        SseLine::Done
-    } else if payload.is_empty() {
-        SseLine::Skip
-    } else {
-        SseLine::Data(payload)
-    }
-}
-
-fn backoff_delay(attempt: u32) -> Duration {
-    use rand::Rng;
-    let base = constants::DEEPSEEK_RETRY_BASE_MS.saturating_mul(1u64 << attempt.min(6));
-    let jitter = rand::thread_rng().gen_range(0..=constants::DEEPSEEK_RETRY_JITTER_MS);
-    Duration::from_millis(base + jitter)
-}
-
 #[async_trait]
 impl LlmProvider for DeepSeekProvider {
     fn kind(&self) -> ProviderKind {
@@ -532,7 +165,7 @@ impl LlmProvider for DeepSeekProvider {
     }
 
     fn model_name(&self) -> &str {
-        &self.model
+        self.transport.model()
     }
 
     fn capabilities(&self) -> &LlmCapabilities {
@@ -546,26 +179,7 @@ impl LlmProvider for DeepSeekProvider {
         on_reasoning: TokenCallback<'_>,
         cancel: CancellationToken,
     ) -> Result<LlmResponse, LlmError> {
-        let wire = self.to_wire(request);
-        let mut attempt = 0u32;
-        loop {
-            match self.stream_once(&wire, on_content, on_reasoning, &cancel).await {
-                Ok(r) => return Ok(r),
-                Err((e, emitted)) => {
-                    let retry = e.is_retryable() && !emitted && attempt < constants::DEEPSEEK_MAX_RETRIES;
-                    if !retry {
-                        return Err(e);
-                    }
-                    let delay = backoff_delay(attempt);
-                    tracing::warn!(error = %e, attempt = attempt + 1, delay_ms = delay.as_millis() as u64, "DeepSeek transient error — retrying");
-                    tokio::select! {
-                        _ = tokio::time::sleep(delay) => {}
-                        _ = cancel.cancelled() => return Err(LlmError::Cancelled),
-                    }
-                    attempt += 1;
-                }
-            }
-        }
+        self.transport.chat_stream(request, on_content, on_reasoning, cancel).await
     }
 
     async fn validate(&self) -> Result<(), LlmError> {
@@ -574,8 +188,8 @@ impl LlmProvider for DeepSeekProvider {
             return Err(LlmError::InsufficientBalance);
         }
         let models = self.list_models().await?;
-        if !models.iter().any(|m| m == &self.model) {
-            return Err(LlmError::ModelNotFound(self.model.clone()));
+        if !models.iter().any(|m| m == self.model_name()) {
+            return Err(LlmError::ModelNotFound(self.model_name().to_string()));
         }
         Ok(())
     }
@@ -654,6 +268,13 @@ mod tests {
             assert_eq!(json["max_tokens"], 1000 + allowance, "{level:?}");
             assert!(json.get("response_format").is_none());
         }
+        // Fast pace: the allowance is scaled down (S12), the level itself is untouched
+        let params = LlmParams { num_predict: 1000, ..Default::default() };
+        let req = LlmRequest::new("s", "u", &params, CallKind::Intervention).reasoning(ReasoningLevel::High).pace(ReasoningPace::Fast);
+        let json = serde_json::to_value(provider().to_wire(&req)).unwrap();
+        let expected = (f64::from(constants::DEEPSEEK_REASONING_ALLOWANCE_HIGH) * constants::DEEPSEEK_FAST_PACE_ALLOWANCE_FACTOR) as i64;
+        assert_eq!(json["max_tokens"], 1000 + expected);
+        assert_eq!(json["reasoning_effort"], "high");
         // top_p above the floor is kept
         let params = LlmParams { top_p: 0.99, ..Default::default() };
         let req = LlmRequest::new("s", "u", &params, CallKind::Intervention).reasoning(ReasoningLevel::Low);

@@ -1,6 +1,95 @@
 use tokio_rusqlite::Connection;
 
 use crate::models::profile::PredefinedProfile;
+use crate::models::template::DiscussionTemplate;
+
+/// Builtin discussion templates (v1.20). Their configuration follows the
+/// frontend's `TemplateConfig` (`src/lib/templates.ts`); names are translated
+/// by the frontend from the template id (`templates.<id>`).
+pub fn builtin_templates() -> Vec<DiscussionTemplate> {
+    let tpl = |id: &str, name: &str, config: serde_json::Value| DiscussionTemplate {
+        id: id.to_string(),
+        name: name.to_string(),
+        config_json: config.to_string(),
+        builtin: true,
+        created_at: String::new(),
+    };
+    vec![
+        tpl("tpl-trial-of-an-idea", "Procès d'une idée", serde_json::json!({
+            "topic": "Le télétravail généralisé est-il coupable d'avoir affaibli la culture d'entreprise ?",
+            "discussionLanguage": "fr",
+            "discussionMode": "trial",
+            "maxTurns": 6,
+            "arbitreProfileId": "arb-strict",
+            "gladiateurs": [
+                { "profileId": "lawyer", "modeRole": "prosecutor" },
+                { "profileId": "devils-advocate", "modeRole": "defense" },
+                { "profileId": "psychologist", "modeRole": "witness" },
+                { "profileId": "economist", "modeRole": "juror" }
+            ],
+            "features": { "reactionTiming": "immediate", "audienceReactions": true, "sceneEvents": true, "hiddenAgenda": true, "coalitions": false }
+        })),
+        tpl("tpl-product-brainstorm", "Brainstorming produit", serde_json::json!({
+            "topic": "Imaginer la fonctionnalité qui ferait revenir nos utilisateurs chaque semaine",
+            "discussionLanguage": "fr",
+            "discussionMode": "ideation",
+            "maxTurns": 4,
+            "arbitreProfileId": "arb-entertainer",
+            "gladiateurs": [
+                { "profileId": "product-owner" },
+                { "profileId": "dev-ux-ui" },
+                { "profileId": "marketing" },
+                { "profileId": "data-analyst" }
+            ],
+            "features": { "reactionTiming": "immediate", "audienceReactions": true, "sceneEvents": true, "hiddenAgenda": false, "coalitions": true }
+        })),
+        tpl("tpl-document-review", "Revue d'un document", serde_json::json!({
+            "topic": "Passer en revue le document fourni : forces, faiblesses, recommandations",
+            "discussionLanguage": "fr",
+            "discussionMode": "critiqueReview",
+            "maxTurns": 3,
+            "arbitreProfileId": "arb-scientific",
+            "gladiateurs": [
+                { "profileId": "critic" },
+                { "profileId": "software-engineer" },
+                { "profileId": "journalist" }
+            ],
+            "documentInjectionMode": "rag",
+            "features": { "reactionTiming": "immediate", "audienceReactions": true, "sceneEvents": false, "hiddenAgenda": false, "coalitions": false }
+        })),
+        tpl("tpl-fiction-three-voices", "Fiction à trois voix", serde_json::json!({
+            "topic": "Une nuit, la dernière bibliothèque de la ville reçoit un livre qui n'a pas encore été écrit.",
+            "discussionLanguage": "fr",
+            "discussionMode": "collaborativeFiction",
+            "maxTurns": 4,
+            "arbitreProfileId": "arb-impartial",
+            "gladiateurs": [
+                { "profileId": "writer" },
+                { "profileId": "philosopher" },
+                { "profileId": "historian" }
+            ],
+            "features": { "reactionTiming": "deferred", "audienceReactions": true, "sceneEvents": false, "hiddenAgenda": true, "coalitions": false }
+        })),
+    ]
+}
+
+/// Upsert the builtin templates (a user cannot overwrite them: their id is reserved).
+pub async fn seed_templates(db: &Connection) -> Result<(), tokio_rusqlite::Error> {
+    let templates = builtin_templates();
+    db.call(move |conn| {
+        let tx = conn.transaction()?;
+        for t in &templates {
+            tx.execute(
+                "INSERT INTO discussion_templates (id, name, config_json, builtin, created_at) VALUES (?1, ?2, ?3, 1, ?4)
+                 ON CONFLICT(id) DO UPDATE SET name = ?2, config_json = ?3, builtin = 1",
+                rusqlite::params![t.id, t.name, t.config_json, t.created_at],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+    .await
+}
 
 pub async fn seed_profiles(db: &Connection) -> Result<(), tokio_rusqlite::Error> {
     let mut all = builtin_profiles();
@@ -30,7 +119,7 @@ fn g(id: &str, name: &str, personality: &str, prompt: &str, category: &str, init
     }
 }
 
-fn builtin_profiles() -> Vec<PredefinedProfile> {
+pub fn builtin_profiles() -> Vec<PredefinedProfile> {
     vec![
         // EXPERTS
         g("scientist", "Le Scientifique", "Empirique, méthodique, gardien de la preuve", r#"<persona>
@@ -3689,7 +3778,7 @@ Désengagé: Silence complet. Regard vide mais pas absent — il voit tout, il n
     ]
 }
 
-fn builtin_arbitre_profiles() -> Vec<PredefinedProfile> {
+pub fn builtin_arbitre_profiles() -> Vec<PredefinedProfile> {
     let a = |id: &str, name: &str, personality: &str, prompt: &str| -> PredefinedProfile {
         PredefinedProfile {
             id: id.to_string(), name: name.to_string(), personality: personality.to_string(),

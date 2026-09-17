@@ -1,14 +1,26 @@
 import { useMemo } from "react";
 import { MessageBubble } from "./MessageBubble";
+import type { SourceRecord } from "@/lib/report";
 import type { Message, ParticipantInfo } from "@/lib/types";
 
 export function ReadOnlyFeed({
   messages,
   participants,
+  sources = [],
 }: {
   messages: Message[];
   participants: ParticipantInfo[];
+  /** Persisted sources (report) to show under the messages they served */
+  sources?: SourceRecord[];
 }) {
+  const sourcesPerMessage = useMemo(() => {
+    const map = new Map<string, SourceRecord[]>();
+    for (const s of sources) {
+      if (!s.messageId) continue;
+      map.set(s.messageId, [...(map.get(s.messageId) ?? []), s]);
+    }
+    return map;
+  }, [sources]);
   const emojiMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const p of participants) {
@@ -31,6 +43,7 @@ export function ReadOnlyFeed({
           emoji={emojiMap.get(msg.speakerId)}
           participantNames={participantNames}
           emojiMap={emojiMap}
+          sources={sourcesPerMessage.get(msg.id)}
         />
       ))}
     </div>

@@ -94,10 +94,15 @@ function parseIdentity(raw: string): IdentityData {
   return { nameTitle, quote, biography };
 }
 
-function parseOcean(text: string): OceanScores {
+/** The OCEAN scores written in a persona (`O=7 C=5 E=6 A=4 N=3`), or null when it carries none. */
+export function parseOceanScores(text: string): OceanScores | null {
   const m = text.match(/O=(\d+)\s+C=(\d+)\s+E=(\d+)\s+A=(\d+)\s+N=(\d+)/);
-  if (!m) return { O: 5, C: 5, E: 5, A: 5, N: 5 };
+  if (!m) return null;
   return { O: +m[1], C: +m[2], E: +m[3], A: +m[4], N: +m[5] };
+}
+
+function parseOcean(text: string): OceanScores {
+  return parseOceanScores(text) ?? { O: 5, C: 5, E: 5, A: 5, N: 5 };
 }
 
 function parsePosture(text: string): PostureValue {

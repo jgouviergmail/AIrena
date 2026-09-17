@@ -36,6 +36,26 @@ pub fn mode_descriptor(mode: &DiscussionMode, lang: &str) -> &'static str {
         (DiscussionMode::CollaborativeFiction, "en") => "collaborative fiction",
         (DiscussionMode::CollaborativeFiction, "zh") => "协作小说",
         (DiscussionMode::CollaborativeFiction, _) => "fiction collaborative",
+
+        (DiscussionMode::Trial, "en") => "trial",
+        (DiscussionMode::Trial, "zh") => "审判",
+        (DiscussionMode::Trial, _) => "procès",
+
+        (DiscussionMode::OxfordDebate, "en") => "Oxford-style debate",
+        (DiscussionMode::OxfordDebate, "zh") => "牛津式辩论",
+        (DiscussionMode::OxfordDebate, _) => "débat d'Oxford",
+
+        (DiscussionMode::Negotiation, "en") => "negotiation",
+        (DiscussionMode::Negotiation, "zh") => "谈判",
+        (DiscussionMode::Negotiation, _) => "négociation",
+
+        (DiscussionMode::SixHats, "en") => "six thinking hats session",
+        (DiscussionMode::SixHats, "zh") => "六顶思考帽",
+        (DiscussionMode::SixHats, _) => "session des six chapeaux",
+
+        (DiscussionMode::CrisisCell, "en") => "crisis cell",
+        (DiscussionMode::CrisisCell, "zh") => "危机小组",
+        (DiscussionMode::CrisisCell, _) => "cellule de crise",
     }
 }
 
@@ -81,6 +101,31 @@ pub fn mode_introduction_instructions(mode: &DiscussionMode, lang: &str) -> &'st
         (DiscussionMode::CollaborativeFiction, "en") => "Explain briefly that this is a relay-written story: the user is invited to write the opening (a co-author does it otherwise), then each co-author continues in sequence. Encourage seamless transitions and narrative coherence.",
         (DiscussionMode::CollaborativeFiction, "zh") => "简要解释这是接力写作故事：邀请用户写开头（否则由一位共同作者来写），然后每位共同作者按顺序继续。鼓励无缝过渡和叙事连贯。",
         (DiscussionMode::CollaborativeFiction, _) => "Explique brièvement que c'est une histoire écrite en relais : l'utilisateur est invité à écrire l'ouverture (sinon un co-auteur s'en charge), puis chaque co-auteur continue à la suite. Encourage les transitions fluides et la cohérence narrative.",
+
+        // Trial
+        (DiscussionMode::Trial, "en") => "Open the hearing: restate the question on trial (the topic), present the roles — prosecution, defence, witnesses, jurors — and the rules: everyone speaks in turn, the jurors listen and question, the verdict comes at the end. Give the floor to the prosecution.",
+        (DiscussionMode::Trial, "zh") => "开庭：重申受审的问题（主题），介绍各方角色——控方、辩方、证人、陪审员——以及规则：依次发言，陪审员倾听并提问，裁决在最后作出。请控方发言。",
+        (DiscussionMode::Trial, _) => "Ouvre l'audience : rappelle la question jugée (le sujet), présente les rôles — accusation, défense, témoins, jurés — et les règles : chacun parle à son tour, les jurés écoutent et questionnent, le verdict viendra à la fin. Donne la parole à l'accusation.",
+
+        // Oxford debate
+        (DiscussionMode::OxfordDebate, "en") => "Open the Oxford debate: state the motion (the topic) exactly as it will be voted, present the camp For and the camp Against, remind everyone that the audience votes before and after and that the camp moving the most votes wins. Invite the first speaker of the camp For.",
+        (DiscussionMode::OxfordDebate, "zh") => "开启牛津式辩论：按将要表决的措辞陈述辩题（主题），介绍正方和反方，提醒大家听众在辩论前后投票，争取到最多改变票数的一方获胜。请正方第一位辩手发言。",
+        (DiscussionMode::OxfordDebate, _) => "Ouvre le débat d'Oxford : énonce la motion (le sujet) telle qu'elle sera votée, présente le camp Pour et le camp Contre, rappelle que le public vote avant et après et que le camp qui déplace le plus de voix l'emporte. Invite le premier orateur du camp Pour.",
+
+        // Negotiation
+        (DiscussionMode::Negotiation, "en") => "Open the negotiation: restate what is at stake (the topic), present the parties and their apparent interests, set the frame — an agreement acceptable to all, opening positions first, bargaining next. Invite each party to table its opening offer.",
+        (DiscussionMode::Negotiation, "zh") => "开启谈判：重申谈判对象（主题），介绍各方及其表面利益，设定框架——寻求各方都能接受的协议，先陈述开局立场，再讨价还价。请各方提出开局报价。",
+        (DiscussionMode::Negotiation, _) => "Ouvre la négociation : rappelle l'objet (le sujet), présente les parties et leurs intérêts apparents, fixe le cadre — recherche d'un accord acceptable par tous, positions d'ouverture d'abord, marchandage ensuite. Invite chaque partie à poser son offre d'ouverture.",
+
+        // Six hats
+        (DiscussionMode::SixHats, "en") => "Open the six-hats session: restate the question (the topic), explain that every turn each participant wears a hat that dictates one way of thinking (facts, feelings, caution, benefits, creativity, process) and that the hats rotate every turn. Ask for the first contributions, each strictly under their hat.",
+        (DiscussionMode::SixHats, "zh") => "开启六顶思考帽会议：重申问题（主题），说明每一轮每位参与者都戴一顶帽子，它规定一种思维方式（事实、情感、谨慎、益处、创意、流程），并且帽子每轮轮换。请大家各自严格按帽子作出第一轮贡献。",
+        (DiscussionMode::SixHats, _) => "Ouvre la session des six chapeaux : rappelle la question (le sujet), explique qu'à chaque tour chaque participant porte un chapeau qui impose un mode de pensée (faits, émotions, prudence, bénéfices, créativité, processus) et que les chapeaux tournent à chaque tour. Demande les premières contributions, chacune strictement sous son chapeau.",
+
+        // Crisis cell
+        (DiscussionMode::CrisisCell, "en") => "Open the crisis cell: lay out the situation (the topic) as an unfolding crisis, present the members of the cell and their expertise, set the rule — dispatches will come in every turn, everyone must decide and act, not merely analyse. Ask for a first assessment.",
+        (DiscussionMode::CrisisCell, "zh") => "启动危机小组：把局势（主题）作为正在发生的危机来陈述，介绍小组成员及其专长，设定规则——每一轮都会有急电传来，每个人都必须决定并行动，而不只是分析。请大家给出首次评估。",
+        (DiscussionMode::CrisisCell, _) => "Ouvre la cellule de crise : expose la situation (le sujet) comme une crise en cours, présente les membres de la cellule et leurs expertises, fixe la règle — des dépêches tomberont à chaque tour, chacun doit décider et agir, pas seulement analyser. Demande un premier état des lieux.",
     }
 }
 
@@ -119,6 +164,26 @@ pub fn mode_intervention_preamble(mode: &DiscussionMode, lang: &str) -> &'static
         (DiscussionMode::CollaborativeFiction, "en") => "Continue the story where the previous writer stopped. Ensure a seamless transition. Advance the plot while maintaining narrative coherence.",
         (DiscussionMode::CollaborativeFiction, "zh") => "从上一位作者停笔处继续故事。确保无缝过渡。推进情节同时保持叙事连贯。",
         (DiscussionMode::CollaborativeFiction, _) => "Continue l'histoire là où l'auteur précédent s'est arrêté. Assure une transition fluide. Fais avancer l'intrigue en maintenant la cohérence narrative.",
+
+        (DiscussionMode::Trial, "en") => "Hold your role in the trial: the prosecution accuses and proves, the defence contests and protects, the witness reports what they know without pleading, the juror listens, questions and reserves judgement. Address the court.",
+        (DiscussionMode::Trial, "zh") => "在审判中坚守你的角色：控方指控并举证，辩方质疑并保护，证人陈述所知而不辩护，陪审员倾听、提问并保留裁决。向法庭发言。",
+        (DiscussionMode::Trial, _) => "Tiens ton rôle dans le procès : l'accusation accuse et prouve, la défense conteste et protège, le témoin rapporte ce qu'il sait sans plaider, le juré écoute, questionne et se réserve. Parle à la cour.",
+
+        (DiscussionMode::OxfordDebate, "en") => "Defend your camp on the motion, never switching sides. Aim at the audience: they are the ones you must win over, not your opponent. Rebut point by point, then push forward.",
+        (DiscussionMode::OxfordDebate, "zh") => "为你的阵营捍卫辩题，绝不换边。面向听众：你要争取的是他们，而不是对手。逐点反驳，然后推进。",
+        (DiscussionMode::OxfordDebate, _) => "Défends ton camp sur la motion, sans jamais en changer. Vise le public : c'est lui que tu dois faire basculer, pas ton adversaire. Réfute point par point, puis avance.",
+
+        (DiscussionMode::Negotiation, "en") => "Negotiate for your party: defend your interests, not only your positions. Make conditional offers, get something for every concession, seek the agreement you could sign.",
+        (DiscussionMode::Negotiation, "zh") => "为你的一方谈判：捍卫你的利益，而不只是立场。提出有条件的报价，每一次让步都要换取回报，寻求你能签署的协议。",
+        (DiscussionMode::Negotiation, _) => "Négocie pour ta partie : défends tes intérêts, pas seulement tes positions. Fais des offres conditionnelles, obtiens quelque chose pour chaque concession, cherche l'accord que tu pourras signer.",
+
+        (DiscussionMode::SixHats, "en") => "Think only with the hat you wear this turn, even against your temperament. One mode of thinking at a time: that is the rule of the game.",
+        (DiscussionMode::SixHats, "zh") => "只用你本轮所戴的帽子思考，哪怕它与你的性情相悖。一次只用一种思维方式：这是游戏规则。",
+        (DiscussionMode::SixHats, _) => "Pense uniquement avec le chapeau que tu portes ce tour, même s'il va contre ton tempérament. Un seul mode de pensée à la fois : c'est la règle du jeu.",
+
+        (DiscussionMode::CrisisCell, "en") => "You sit in a crisis cell: react to the latest dispatch, decide, propose concrete and prioritised actions, own the uncertainty. No analysis without a decision.",
+        (DiscussionMode::CrisisCell, "zh") => "你身处危机小组：回应最新急电，作出决定，提出具体且有优先级的行动，承担不确定性。没有决定的分析毫无意义。",
+        (DiscussionMode::CrisisCell, _) => "Tu es en cellule de crise : réagis à la dernière dépêche, décide, propose des actions concrètes et priorisées, assume l'incertitude. Pas d'analyse sans décision.",
     }
 }
 
@@ -158,6 +223,26 @@ pub fn mode_thought_focus(mode: &DiscussionMode, lang: &str, has_context: bool) 
             (DiscussionMode::CollaborativeFiction, "en") => "What happens next in this story? How can I build on the opening?",
             (DiscussionMode::CollaborativeFiction, "zh") => "这个故事接下来会发生什么？我如何在开头的基础上展开？",
             (DiscussionMode::CollaborativeFiction, _) => "Que se passe-t-il ensuite dans cette histoire ? Comment puis-je construire sur l'ouverture ?",
+
+            (DiscussionMode::Trial, "en") => "What is my role, and which decisive fact must I establish or contest from the start?",
+            (DiscussionMode::Trial, "zh") => "我的角色是什么？我必须从一开始就确立或质疑的决定性事实是什么？",
+            (DiscussionMode::Trial, _) => "Quel est mon rôle et quel est le fait décisif que je dois établir ou contester d'entrée ?",
+
+            (DiscussionMode::OxfordDebate, "en") => "What is the most convincing argument for my camp in the eyes of the audience?",
+            (DiscussionMode::OxfordDebate, "zh") => "在听众眼中，对我方最有说服力的论点是什么？",
+            (DiscussionMode::OxfordDebate, _) => "Quel est l'argument le plus convaincant pour mon camp aux yeux du public ?",
+
+            (DiscussionMode::Negotiation, "en") => "What are my real interests, my opening offer and my walk-away line?",
+            (DiscussionMode::Negotiation, "zh") => "我的真实利益、开局报价和底线是什么？",
+            (DiscussionMode::Negotiation, _) => "Quels sont mes intérêts réels, mon offre d'ouverture et ma limite ?",
+
+            (DiscussionMode::SixHats, "en") => "What does my hat for this turn say about the question?",
+            (DiscussionMode::SixHats, "zh") => "我本轮的帽子对这个问题说了什么？",
+            (DiscussionMode::SixHats, _) => "Que dit mon chapeau de ce tour sur cette question ?",
+
+            (DiscussionMode::CrisisCell, "en") => "What is the state of the situation and the first decision to take?",
+            (DiscussionMode::CrisisCell, "zh") => "局势如何？首先要作出什么决定？",
+            (DiscussionMode::CrisisCell, _) => "Quel est l'état de la situation et la première décision à prendre ?",
         };
     }
     match (mode, lang) {
@@ -192,6 +277,26 @@ pub fn mode_thought_focus(mode: &DiscussionMode, lang: &str, has_context: bool) 
         (DiscussionMode::CollaborativeFiction, "en") => "Where did the previous writer leave off? What development would be most natural and engaging?",
         (DiscussionMode::CollaborativeFiction, "zh") => "上一位作者写到哪里了？什么发展最自然、最引人入胜？",
         (DiscussionMode::CollaborativeFiction, _) => "Où l'auteur précédent s'est-il arrêté ? Quel développement serait le plus naturel et captivant ?",
+
+        (DiscussionMode::Trial, "en") => "What has been established? Which testimony or argument must I exploit or dismantle now, given my role?",
+        (DiscussionMode::Trial, "zh") => "已经确立了什么？根据我的角色，现在必须利用或拆解哪份证词或论点？",
+        (DiscussionMode::Trial, _) => "Qu'est-ce qui a été établi ? Quel témoignage ou argument dois-je exploiter ou démonter maintenant, selon mon rôle ?",
+
+        (DiscussionMode::OxfordDebate, "en") => "Which opposing point lands with the audience, and how do I turn it around?",
+        (DiscussionMode::OxfordDebate, "zh") => "对方哪个论点打动了听众？我如何扭转它？",
+        (DiscussionMode::OxfordDebate, _) => "Quel point adverse fait mouche auprès du public et comment le retourner ?",
+
+        (DiscussionMode::Negotiation, "en") => "What does the other party really want? Which concession can I trade, and for what?",
+        (DiscussionMode::Negotiation, "zh") => "对方真正想要什么？我可以用哪项让步换取什么？",
+        (DiscussionMode::Negotiation, _) => "Qu'est-ce que l'autre partie veut vraiment ? Quelle concession puis-je échanger contre quoi ?",
+
+        (DiscussionMode::SixHats, "en") => "Under this turn's hat, what have the others missed?",
+        (DiscussionMode::SixHats, "zh") => "戴着本轮的帽子，其他人遗漏了什么？",
+        (DiscussionMode::SixHats, _) => "Sous mon chapeau du tour, qu'est-ce que les autres ont manqué ?",
+
+        (DiscussionMode::CrisisCell, "en") => "What does the latest dispatch change? Which action do I decide now, and at what cost?",
+        (DiscussionMode::CrisisCell, "zh") => "最新急电改变了什么？我现在决定采取什么行动，代价是什么？",
+        (DiscussionMode::CrisisCell, _) => "Que change la dernière dépêche ? Quelle action décider maintenant et à quel coût ?",
     }
 }
 
@@ -229,15 +334,35 @@ pub fn mode_synthesis_instructions(mode: &DiscussionMode, lang: &str) -> &'stati
         (DiscussionMode::CollaborativeFiction, "en") => "Summarize the complete story arc from beginning to end. Assess narrative coherence across all segments and highlight the strongest story contributions.",
         (DiscussionMode::CollaborativeFiction, "zh") => "从头到尾总结完整的故事弧线。评估所有片段的叙事连贯性，并突出最强的故事贡献。",
         (DiscussionMode::CollaborativeFiction, _) => "Résume l'arc narratif complet du début à la fin. Évalue la cohérence narrative entre tous les segments et souligne les contributions narratives les plus fortes.",
+
+        (DiscussionMode::Trial, "en") => "Write the hearing report: the charges, the prosecution's and the defence's arguments, what the testimonies established, the jurors' questions, then the verdict returned and its grounds.",
+        (DiscussionMode::Trial, "zh") => "撰写庭审报告：罪状、控方与辩方的论点、证词确立了什么、陪审员的提问，然后是作出的裁决及其理由。",
+        (DiscussionMode::Trial, _) => "Rédige le compte rendu d'audience : les charges, les arguments de l'accusation et de la défense, ce que les témoignages ont établi, les questions des jurés, puis le verdict rendu et sa motivation.",
+
+        (DiscussionMode::OxfordDebate, "en") => "Write the debate's review: the motion, each camp's best arguments, the turning points, the audience's vote before and after, and the camp that won by moving votes.",
+        (DiscussionMode::OxfordDebate, "zh") => "撰写辩论总结：辩题、双方最佳论点、转折点、听众辩论前后的投票，以及通过改变票数获胜的一方。",
+        (DiscussionMode::OxfordDebate, _) => "Rédige le bilan du débat : la motion, les meilleurs arguments de chaque camp, les moments de bascule, le vote du public avant et après et le camp qui l'a emporté par déplacement.",
+
+        (DiscussionMode::Negotiation, "en") => "Write the negotiation record: opening positions, concessions traded, points of agreement and deadlock, the final agreement (or its absence) and what each party obtains.",
+        (DiscussionMode::Negotiation, "zh") => "撰写谈判纪要：开局立场、交换的让步、达成一致和僵持的要点、最终协议（或未达成协议）以及各方所得。",
+        (DiscussionMode::Negotiation, _) => "Rédige le relevé de négociation : positions d'ouverture, concessions échangées, points d'accord et de blocage, l'accord final (ou l'absence d'accord) et ce que chaque partie obtient.",
+
+        (DiscussionMode::SixHats, "en") => "Write the synthesis hat by hat: established facts (white), feelings (red), risks (black), benefits (yellow), new ideas (green), and the process conclusion (blue): what to decide and how.",
+        (DiscussionMode::SixHats, "zh") => "按帽子撰写总结：确立的事实（白）、感受（红）、风险（黑）、益处（黄）、新点子（绿），以及流程结论（蓝）：决定什么、如何决定。",
+        (DiscussionMode::SixHats, _) => "Rédige la synthèse par chapeau : faits établis (blanc), ressentis (rouge), risques (noir), bénéfices (jaune), idées neuves (vert), et la conclusion de processus (bleu) : que décider et comment.",
+
+        (DiscussionMode::CrisisCell, "en") => "Write the crisis report: timeline of the dispatches, decisions taken and by whom, actions launched, remaining risks, and the lessons for next time.",
+        (DiscussionMode::CrisisCell, "zh") => "撰写危机报告：急电时间线、已作出的决定及决策人、已启动的行动、剩余风险，以及今后的经验教训。",
+        (DiscussionMode::CrisisCell, _) => "Rédige le rapport de crise : chronologie des dépêches, décisions prises et par qui, actions engagées, risques restants, et les leçons pour la suite.",
     }
 }
 
 /// Returns moderation criteria for IArbitre based on the mode.
 pub fn mode_moderation_criteria(mode: &DiscussionMode, lang: &str) -> &'static str {
     match (mode, lang) {
-        (DiscussionMode::Debate, "en") => "Evaluate: relevance to the topic, constructiveness, respect for others, quality of argumentation.",
-        (DiscussionMode::Debate, "zh") => "评估：与主题的相关性、建设性、对他人的尊重、论证质量。",
-        (DiscussionMode::Debate, _) => "Évalue : pertinence par rapport au sujet, constructivité, respect des autres, qualité de l'argumentation.",
+        (DiscussionMode::Debate, "en") => "Evaluate: relevance to the topic, constructiveness, respect for others, quality of argumentation. Depth: if a speaker piles up claims without answering the objections made to them, ask in one sentence for an answer on the merits — without imposing a topic.",
+        (DiscussionMode::Debate, "zh") => "评估：与主题的相关性、建设性、对他人的尊重、论证质量。深度：如果发言者堆砌主张而不回应针对他们的反驳，用一句话要求就实质作出回应——不强加话题。",
+        (DiscussionMode::Debate, _) => "Évalue : pertinence par rapport au sujet, constructivité, respect des autres, qualité de l'argumentation. Profondeur : si un orateur empile des affirmations sans répondre aux objections qui lui ont été faites, demande en une phrase d'y répondre sur le fond — sans imposer de sujet.",
 
         (DiscussionMode::Ideation, "en") => "Evaluate: idea diversity, originality, building on others' ideas. Penalize premature criticism of ideas. If a participant argues or criticizes ideas instead of proposing or building, issue a comment redirecting them to creative ideation.",
         (DiscussionMode::Ideation, "zh") => "评估：想法多样性、原创性、在他人想法上构建。惩罚对想法的过早批评。如果参与者争论或批评想法而不是提出或构建，发出评论引导他们回到创意构思。",
@@ -266,6 +391,26 @@ pub fn mode_moderation_criteria(mode: &DiscussionMode, lang: &str) -> &'static s
         (DiscussionMode::CollaborativeFiction, "en") => "Evaluate: seamless continuation from previous segment, narrative coherence, story advancement, creativity. If a participant restarts the story, comments on it instead of writing, inserts themselves or other co-authors as characters, or breaks the narrative flow, redirect them to continue writing as an invisible narrator.",
         (DiscussionMode::CollaborativeFiction, "zh") => "评估：与上一段的无缝衔接、叙事连贯性、故事推进、创造力。如果参与者重新开始故事、评论而不是写作、将自己或其他共同作者作为角色插入、或打破叙事流，引导他们作为隐形叙述者继续写作。",
         (DiscussionMode::CollaborativeFiction, _) => "Évalue : continuité fluide avec le segment précédent, cohérence narrative, avancement de l'histoire, créativité. Si un participant recommence l'histoire, la commente au lieu d'écrire, s'insère ou insère d'autres co-auteurs comme personnages, ou brise le flux narratif, recadre-le pour qu'il continue à écrire en tant que narrateur invisible.",
+
+        (DiscussionMode::Trial, "en") => "Evaluate: respect of the role (the prosecution accuses, the defence defends, the witness does not plead, the juror does not rule before the end), rigour of the evidence, respect for the court. If a participant steps out of their role or attacks the person rather than the facts, redirect them.",
+        (DiscussionMode::Trial, "zh") => "评估：角色的遵守（控方指控、辩方辩护、证人不辩护、陪审员在结束前不裁决）、证据的严谨性、对法庭的尊重。如果参与者脱离角色或攻击个人而非事实，引导他们回到正轨。",
+        (DiscussionMode::Trial, _) => "Évalue : respect du rôle (l'accusation accuse, la défense défend, le témoin ne plaide pas, le juré ne tranche pas avant la fin), rigueur des preuves, respect de la cour. Si un participant sort de son rôle ou attaque la personne plutôt que les faits, recadre-le.",
+
+        (DiscussionMode::OxfordDebate, "en") => "Evaluate: loyalty to the camp, persuasive force for the audience, fair rebuttal. If a speaker switches sides, ignores the motion or attacks the opponent rather than their arguments, redirect them.",
+        (DiscussionMode::OxfordDebate, "zh") => "评估：对阵营的忠诚、对听众的说服力、公允的反驳。如果辩手换边、无视辩题或攻击对手而非其论点，引导他们回到正轨。",
+        (DiscussionMode::OxfordDebate, _) => "Évalue : fidélité au camp, force de persuasion pour le public, réfutation loyale. Si un orateur change de camp, ignore la motion ou attaque l'adversaire plutôt que ses arguments, recadre-le.",
+
+        (DiscussionMode::Negotiation, "en") => "Evaluate: good faith, concrete offers, movement towards an agreement. If a party stonewalls without counterpart, bluffs crudely or attacks the other, redirect them towards the search for an agreement.",
+        (DiscussionMode::Negotiation, "zh") => "评估：诚意、具体的报价、向协议推进。如果一方无对价地阻挠、粗暴虚张声势或攻击对方，引导他们回到寻求协议。",
+        (DiscussionMode::Negotiation, _) => "Évalue : bonne foi, offres concrètes, mouvement vers l'accord. Si une partie bloque sans contrepartie, bluffe grossièrement ou attaque l'autre, recadre-la vers la recherche d'accord.",
+
+        (DiscussionMode::SixHats, "en") => "Evaluate: strict respect of the hat worn this turn. If a participant thinks with another hat than their own (for instance criticises under the yellow hat), redirect them to their hat.",
+        (DiscussionMode::SixHats, "zh") => "评估：是否严格遵守本轮所戴的帽子。如果参与者用别的帽子思考（例如戴着黄帽却在批评），引导他们回到自己的帽子。",
+        (DiscussionMode::SixHats, _) => "Évalue : respect strict du chapeau porté ce tour. Si un participant pense avec un autre chapeau que le sien (par exemple critique sous le chapeau jaune), recadre-le vers son chapeau.",
+
+        (DiscussionMode::CrisisCell, "en") => "Evaluate: responsiveness to the dispatches, concrete decisions, coordination with the other members. If a participant analyses without deciding or ignores the latest dispatch, redirect them towards action.",
+        (DiscussionMode::CrisisCell, "zh") => "评估：对急电的响应、具体的决定、与其他成员的协调。如果参与者只分析不决定或无视最新急电，引导他们采取行动。",
+        (DiscussionMode::CrisisCell, _) => "Évalue : réactivité aux dépêches, décisions concrètes, coordination avec les autres membres. Si un participant analyse sans décider ou ignore la dernière dépêche, recadre-le vers l'action.",
     }
 }
 
@@ -456,6 +601,26 @@ pub fn mode_opening_action(mode: &DiscussionMode, lang: &str) -> &'static str {
         (DiscussionMode::CollaborativeFiction, "en") => "Continue the story from its opening. Pick up exactly where the previous writer left off with a seamless transition that advances the narrative.",
         (DiscussionMode::CollaborativeFiction, "zh") => "从故事的开头继续。从上一位作者停笔处无缝衔接，推进叙事。",
         (DiscussionMode::CollaborativeFiction, _) => "Continue l'histoire à partir de son ouverture. Reprends exactement là où l'auteur précédent s'est arrêté avec une transition fluide qui fait avancer le récit.",
+
+        (DiscussionMode::Trial, "en") => "Set your role from the start: prosecution → state the charges and your key piece of evidence; defence → contest them and announce your line; witness → say what you saw or know; juror → say what you expect to see established.",
+        (DiscussionMode::Trial, "zh") => "一开始就确立你的角色：控方→陈述罪状和关键证据；辩方→质疑并宣布辩护路线；证人→说出你所见或所知；陪审员→说出你期望被确立的事实。",
+        (DiscussionMode::Trial, _) => "Pose ton rôle d'entrée : accusation → énonce les charges et la preuve maîtresse ; défense → conteste et annonce ta ligne ; témoin → dis ce que tu as vu ou sais ; juré → dis ce que tu attends d'être établi.",
+
+        (DiscussionMode::OxfordDebate, "en") => "Open for your camp: state the motion as you defend it and your strongest argument, addressed to the audience.",
+        (DiscussionMode::OxfordDebate, "zh") => "为你的阵营开场：按你捍卫的方式陈述辩题和你最有力的论点，面向听众。",
+        (DiscussionMode::OxfordDebate, _) => "Ouvre pour ton camp : énonce la motion telle que tu la défends et ton argument massue, adressé au public.",
+
+        (DiscussionMode::Negotiation, "en") => "Table your opening offer: what you want, what you propose in exchange, and what is not negotiable for now.",
+        (DiscussionMode::Negotiation, "zh") => "提出你的开局报价：你想要什么、你愿意用什么交换、目前哪些不可谈判。",
+        (DiscussionMode::Negotiation, _) => "Pose ton offre d'ouverture : ce que tu veux, ce que tu proposes en échange, et ce qui n'est pas négociable pour l'instant.",
+
+        (DiscussionMode::SixHats, "en") => "Put on this turn's hat and apply it to the question: nothing but that mode of thinking.",
+        (DiscussionMode::SixHats, "zh") => "戴上本轮的帽子并将它用于这个问题：只用这一种思维方式。",
+        (DiscussionMode::SixHats, _) => "Prends ton chapeau du tour et applique-le à la question : rien d'autre que ce mode de pensée.",
+
+        (DiscussionMode::CrisisCell, "en") => "Give a first assessment from your expertise and propose the first urgent decision.",
+        (DiscussionMode::CrisisCell, "zh") => "从你的专业角度给出首次评估，并提出第一个紧急决定。",
+        (DiscussionMode::CrisisCell, _) => "Dresse un premier état des lieux depuis ton expertise et propose la première décision urgente.",
     }
 }
 
@@ -494,6 +659,26 @@ pub fn mode_engage_action(mode: &DiscussionMode, lang: &str) -> &'static str {
         (DiscussionMode::CollaborativeFiction, "en") => "Continue the story where the previous writer stopped. You MUST advance the plot concretely: introduce a new event, a character action, a revelation, or a turning point. Do NOT write purely atmospheric descriptions — something must HAPPEN. Never insert co-authors as characters.",
         (DiscussionMode::CollaborativeFiction, "zh") => "从上一位作者停笔处继续故事。你必须具体推进情节：引入新事件、角色行动、揭示或转折点。不要写纯粹的氛围描写——必须有事情发生。绝不将共同作者作为角色插入。",
         (DiscussionMode::CollaborativeFiction, _) => "Continue l'histoire là où l'auteur précédent s'est arrêté. Tu DOIS faire avancer l'intrigue concrètement : introduis un nouvel événement, une action de personnage, une révélation ou un retournement. N'écris PAS de descriptions purement atmosphériques — il doit se PASSER quelque chose. N'insère jamais les co-auteurs comme personnages.",
+
+        (DiscussionMode::Trial, "en") => "React according to your role: exploit or dismantle the latest testimony, address the opposing side by name, ask the court to record a point.",
+        (DiscussionMode::Trial, "zh") => "按你的角色回应：利用或拆解最新的证词，点名对方，请法庭记录一个要点。",
+        (DiscussionMode::Trial, _) => "Réagis selon ton rôle : exploite ou démonte le dernier témoignage, interpelle la partie adverse par son nom, demande à la cour d'acter un point.",
+
+        (DiscussionMode::OxfordDebate, "en") => "Rebut the latest opposing argument point by point, then push on for the audience with a fresh argument or a striking example.",
+        (DiscussionMode::OxfordDebate, "zh") => "逐点反驳对方最新的论点，然后用一个新论点或鲜明的例子向听众推进。",
+        (DiscussionMode::OxfordDebate, _) => "Réfute le dernier argument adverse point par point, puis relance pour le public avec un argument neuf ou un exemple frappant.",
+
+        (DiscussionMode::Negotiation, "en") => "Answer the latest offer: accept, counter or condition it. Every concession must get something in return. Name the party you address.",
+        (DiscussionMode::Negotiation, "zh") => "回应最新的报价：接受、还价或附加条件。每一次让步都必须换取回报。点名你所针对的一方。",
+        (DiscussionMode::Negotiation, _) => "Réponds à la dernière offre : accepte, contre-propose ou conditionne. Chaque concession doit obtenir quelque chose en retour. Nomme la partie à qui tu t'adresses.",
+
+        (DiscussionMode::SixHats, "en") => "Under this turn's hat, complete or correct what the other hats brought — without leaving your mode of thinking.",
+        (DiscussionMode::SixHats, "zh") => "戴着本轮的帽子，补充或纠正其他帽子带来的内容——不要脱离你的思维方式。",
+        (DiscussionMode::SixHats, _) => "Sous ton chapeau du tour, complète ou corrige ce que les autres chapeaux ont apporté — sans sortir de ton mode de pensée.",
+
+        (DiscussionMode::CrisisCell, "en") => "React to the latest dispatch: what it changes, what you decide, what you ask of the other members — by name.",
+        (DiscussionMode::CrisisCell, "zh") => "回应最新急电：它改变了什么、你决定什么、你要求其他成员做什么——点名说明。",
+        (DiscussionMode::CrisisCell, _) => "Réagis à la dernière dépêche : ce qu'elle change, ce que tu décides, ce que tu demandes aux autres membres — nommément.",
     }
 }
 
@@ -531,6 +716,26 @@ pub fn mode_key_constraint(mode: &DiscussionMode, lang: &str) -> &'static str {
         (DiscussionMode::CollaborativeFiction, "en") => "You are an INVISIBLE narrator — NEVER insert yourself or other co-authors as characters. Advance the plot: something NEW must happen. NEVER restart or repeat.",
         (DiscussionMode::CollaborativeFiction, "zh") => "你是隐形叙述者——绝不将自己或其他共同作者作为角色插入。推进情节：必须发生新的事情。绝不重新开始或重复。",
         (DiscussionMode::CollaborativeFiction, _) => "Tu es un narrateur INVISIBLE — n'insère JAMAIS ton nom ni celui des co-auteurs comme personnages. Fais avancer l'intrigue : quelque chose de NOUVEAU doit se passer. Ne recommence JAMAIS et ne répète pas.",
+
+        (DiscussionMode::Trial, "en") => "Stay in your role. Facts and evidence first.",
+        (DiscussionMode::Trial, "zh") => "坚守你的角色。事实和证据优先。",
+        (DiscussionMode::Trial, _) => "Reste dans ton rôle. Les faits et les preuves d'abord.",
+
+        (DiscussionMode::OxfordDebate, "en") => "Never switch sides. Win the audience over.",
+        (DiscussionMode::OxfordDebate, "zh") => "绝不换边。说服听众。",
+        (DiscussionMode::OxfordDebate, _) => "Ne change jamais de camp. Convaincs le public.",
+
+        (DiscussionMode::Negotiation, "en") => "Seek the agreement. Nothing without a counterpart.",
+        (DiscussionMode::Negotiation, "zh") => "寻求协议。没有对价就不让步。",
+        (DiscussionMode::Negotiation, _) => "Cherche l'accord. Rien sans contrepartie.",
+
+        (DiscussionMode::SixHats, "en") => "One hat only: this turn's.",
+        (DiscussionMode::SixHats, "zh") => "只戴一顶帽子：本轮的那顶。",
+        (DiscussionMode::SixHats, _) => "Un seul chapeau : celui du tour.",
+
+        (DiscussionMode::CrisisCell, "en") => "Decide and act. Every intervention carries a decision.",
+        (DiscussionMode::CrisisCell, "zh") => "决定并行动。每次发言都要包含一个决定。",
+        (DiscussionMode::CrisisCell, _) => "Décide et agis. Chaque intervention contient une décision.",
     }
 }
 
@@ -702,7 +907,7 @@ pub fn mode_context_instruction(
             } else if *mode == DiscussionMode::CollaborativeFiction {
                 format!("{} wrote a story segment — continue the story from where they left off.", user_name)
             } else {
-                format!("{} shared a comment — acknowledge it if relevant, but focus on other participants.", user_name)
+                format!("{} spoke from the audience — answer them first, by name, then carry on with the other participants.", user_name)
             };
             format!(
                 "=== YOUR TASK ===\n\
@@ -721,7 +926,7 @@ pub fn mode_context_instruction(
             } else if *mode == DiscussionMode::CollaborativeFiction {
                 format!("{}写了一段故事——从他们停笔的地方继续。", user_name)
             } else {
-                format!("{}发了一条评论——如果相关可以提及，但主要集中于其他参与者。", user_name)
+                format!("现场观众{}发言了——先点名回应他，再继续与其他参与者交流。", user_name)
             };
             format!(
                 "=== 你的任务 ===\n\
@@ -740,7 +945,7 @@ pub fn mode_context_instruction(
             } else if *mode == DiscussionMode::CollaborativeFiction {
                 format!("{} a écrit un segment de l'histoire — continue le récit là où il s'est arrêté.", user_name)
             } else {
-                format!("{} a partagé un commentaire — mentionne-le si pertinent, mais concentre-toi sur les autres participants.", user_name)
+                format!("{} a pris la parole depuis le public — réponds-lui d'abord, en le nommant, puis poursuis avec les autres participants.", user_name)
             };
             format!(
                 "=== VOTRE TÂCHE ===\n\
@@ -860,6 +1065,26 @@ pub fn mode_reaction_meanings(mode: &DiscussionMode, lang: &str) -> (&'static st
         (DiscussionMode::CollaborativeFiction, "en") => ("seamless and engaging continuation", "breaks narrative flow or is incoherent"),
         (DiscussionMode::CollaborativeFiction, "zh") => ("流畅且引人入胜的延续", "打破叙事流或不连贯"),
         (DiscussionMode::CollaborativeFiction, _) => ("continuation fluide et captivante", "brise le flux narratif ou incohérent"),
+
+        (DiscussionMode::Trial, "en") => ("point convincingly established", "out of role or weak evidence"),
+        (DiscussionMode::Trial, "zh") => ("令人信服地确立了要点", "脱离角色或证据薄弱"),
+        (DiscussionMode::Trial, _) => ("point établi de façon convaincante", "hors rôle ou preuve faible"),
+
+        (DiscussionMode::OxfordDebate, "en") => ("argument that sways the audience", "weak or unfair argument"),
+        (DiscussionMode::OxfordDebate, "zh") => ("能改变听众的论点", "薄弱或不公允的论点"),
+        (DiscussionMode::OxfordDebate, _) => ("argument qui fait basculer le public", "argument faible ou déloyal"),
+
+        (DiscussionMode::Negotiation, "en") => ("constructive offer that brings the agreement closer", "stonewalling or bad faith"),
+        (DiscussionMode::Negotiation, "zh") => ("有助于达成协议的建设性报价", "阻挠或缺乏诚意"),
+        (DiscussionMode::Negotiation, _) => ("offre constructive qui rapproche de l'accord", "blocage ou mauvaise foi"),
+
+        (DiscussionMode::SixHats, "en") => ("true to their hat and enlightening", "off their hat or shallow"),
+        (DiscussionMode::SixHats, "zh") => ("忠于帽子且富有启发", "脱离帽子或肤浅"),
+        (DiscussionMode::SixHats, _) => ("fidèle à son chapeau et éclairant", "hors chapeau ou superficiel"),
+
+        (DiscussionMode::CrisisCell, "en") => ("clear and relevant decision", "analysis without decision or off the dispatch"),
+        (DiscussionMode::CrisisCell, "zh") => ("清晰而切题的决定", "只分析不决定或偏离急电"),
+        (DiscussionMode::CrisisCell, _) => ("décision claire et pertinente", "analyse sans décision ou hors dépêche"),
     }
 }
 
@@ -896,6 +1121,26 @@ pub fn mode_override_clause(mode: &DiscussionMode, lang: &str) -> &'static str {
         (DiscussionMode::CollaborativeFiction, "en") => "=== DISCUSSION FORMAT: COLLABORATIVE FICTION ===\nThis is a relay-written story. Each co-author continues the narrative where the previous one stopped.\nIMPORTANT: Co-authors are INVISIBLE narrators, NOT characters in the story. NEVER insert your name or other co-authors' names as characters. The characters are those created IN the story by the writers.\nWrite the next segment: advance the plot with a concrete event, action, or revelation. Do NOT write purely atmospheric text. Do NOT comment on, discuss, or summarize the story.",
         (DiscussionMode::CollaborativeFiction, "zh") => "=== 讨论格式：协作小说 ===\n这是一个接力写作故事。每位共同作者从上一位停笔处继续叙事。\n重要：共同作者是隐形叙述者，不是故事中的角色。绝不将你的名字或其他共同作者的名字作为角色插入。角色是作者们在故事中创造的。\n写下一段：用具体的事件、行动或揭示推进情节。不要写纯粹的氛围文字。不要评论、讨论或总结故事。",
         (DiscussionMode::CollaborativeFiction, _) => "=== FORMAT DE DISCUSSION : FICTION COLLABORATIVE ===\nC'est une histoire écrite en relais. Chaque co-auteur continue le récit là où le précédent s'est arrêté.\nIMPORTANT : Les co-auteurs sont des narrateurs INVISIBLES, PAS des personnages de l'histoire. N'insère JAMAIS ton nom ni celui des autres co-auteurs comme personnages. Les personnages sont ceux créés DANS l'histoire par les auteurs.\nÉcris le prochain segment : fais avancer l'intrigue avec un événement concret, une action ou une révélation. N'écris PAS de texte purement atmosphérique. Ne commente PAS, ne discute pas et ne résume pas l'histoire.",
+
+        (DiscussionMode::Trial, "en") => "=== DISCUSSION FORMAT: TRIAL ===\nThis session is an adversarial trial. Everyone holds a role — prosecution, defence, witness, juror — and never leaves it. Facts and evidence outweigh eloquence; the jurors return the verdict at the end.",
+        (DiscussionMode::Trial, "zh") => "=== 讨论格式：审判 ===\n本次会议是一场对抗式审判。每个人都扮演一个角色——控方、辩方、证人、陪审员——并始终坚守。事实和证据重于雄辩；陪审员在最后作出裁决。",
+        (DiscussionMode::Trial, _) => "=== FORMAT DE DISCUSSION : PROCÈS ===\nCette session est un procès contradictoire. Chacun tient un rôle — accusation, défense, témoin, juré — et ne le quitte pas. Les faits et les preuves priment sur l'éloquence ; le verdict sera rendu à la fin par les jurés.",
+
+        (DiscussionMode::OxfordDebate, "en") => "=== DISCUSSION FORMAT: OXFORD DEBATE ===\nThis session is a formal debate on a motion, in two fixed camps — For and Against. The audience votes before and after: the goal is to move votes, not to be right among yourselves. Switching sides is off-track.",
+        (DiscussionMode::OxfordDebate, "zh") => "=== 讨论格式：牛津式辩论 ===\n本次会议是围绕一个辩题的正式辩论，分为固定的两个阵营——正方和反方。听众在辩论前后投票：目标是改变票数，而不是在你们之间争对错。换边不符合此格式。",
+        (DiscussionMode::OxfordDebate, _) => "=== FORMAT DE DISCUSSION : DÉBAT D'OXFORD ===\nCette session est un débat formel sur une motion, en deux camps fixes — Pour et Contre. Le public vote avant et après : l'objectif est de déplacer des voix, pas d'avoir raison entre soi. Changer de camp est hors-cadre.",
+
+        (DiscussionMode::Negotiation, "en") => "=== DISCUSSION FORMAT: NEGOTIATION ===\nThis session is a negotiation between parties with distinct interests. The goal is an agreement acceptable to all; each party defends its interests, makes offers and obtains counterparts. Debating to be right is off-track.",
+        (DiscussionMode::Negotiation, "zh") => "=== 讨论格式：谈判 ===\n本次会议是利益各异的各方之间的谈判。目标是各方都能接受的协议；各方捍卫自身利益、提出报价并获得对价。为争对错而辩论不符合此格式。",
+        (DiscussionMode::Negotiation, _) => "=== FORMAT DE DISCUSSION : NÉGOCIATION ===\nCette session est une négociation entre parties aux intérêts distincts. L'objectif est un accord acceptable par tous ; chaque partie défend ses intérêts, fait des offres et obtient des contreparties. Débattre pour avoir raison est hors-cadre.",
+
+        (DiscussionMode::SixHats, "en") => "=== DISCUSSION FORMAT: SIX THINKING HATS ===\nThis session applies the six-hats method: every turn, each participant thinks only according to the hat they are given (white: facts; red: feelings; black: caution; yellow: benefits; green: creativity; blue: process). Thinking outside one's hat is off-track.",
+        (DiscussionMode::SixHats, "zh") => "=== 讨论格式：六顶思考帽 ===\n本次会议采用六顶思考帽方法：每一轮，每位参与者只按分配到的帽子思考（白：事实；红：情感；黑：谨慎；黄：益处；绿：创意；蓝：流程）。脱离帽子思考不符合此格式。",
+        (DiscussionMode::SixHats, _) => "=== FORMAT DE DISCUSSION : SIX CHAPEAUX ===\nCette session applique la méthode des six chapeaux : à chaque tour, chaque participant pense uniquement selon le chapeau qui lui est attribué (blanc : faits ; rouge : émotions ; noir : prudence ; jaune : bénéfices ; vert : créativité ; bleu : processus). Penser hors de son chapeau est hors-cadre.",
+
+        (DiscussionMode::CrisisCell, "en") => "=== DISCUSSION FORMAT: CRISIS CELL ===\nThis session is a real-time crisis cell: dispatches come in every turn and demand decisions. Every intervention carries a decision or a concrete action. Analysing without deciding is off-track.",
+        (DiscussionMode::CrisisCell, "zh") => "=== 讨论格式：危机小组 ===\n本次会议是一个实时危机小组：每一轮都有急电传来并要求作出决定。每次发言都要包含一个决定或具体行动。只分析不决定不符合此格式。",
+        (DiscussionMode::CrisisCell, _) => "=== FORMAT DE DISCUSSION : CELLULE DE CRISE ===\nCette session est une cellule de crise en temps réel : des dépêches tombent à chaque tour et exigent des décisions. Chaque intervention contient une décision ou une action concrète. Analyser sans décider est hors-cadre.",
     }
 }
 
@@ -904,16 +1149,30 @@ mod tests {
     use super::*;
 
     fn all_modes() -> Vec<DiscussionMode> {
-        vec![
-            DiscussionMode::Debate,
-            DiscussionMode::Ideation,
-            DiscussionMode::CoConstruction,
-            DiscussionMode::UserDriven,
-            DiscussionMode::Socratic,
-            DiscussionMode::Tutorial,
-            DiscussionMode::CritiqueReview,
-            DiscussionMode::CollaborativeFiction,
-        ]
+        DiscussionMode::ALL.to_vec()
+    }
+
+    fn non_debate_modes() -> Vec<DiscussionMode> {
+        all_modes().into_iter().filter(|m| *m != DiscussionMode::Debate).collect()
+    }
+
+    #[test]
+    fn every_mode_has_its_full_set_of_texts_in_three_languages() {
+        for mode in all_modes() {
+            for lang in all_langs() {
+                for (name, text) in [
+                    ("descriptor", mode_descriptor(&mode, lang)),
+                    ("introduction", mode_introduction_instructions(&mode, lang)),
+                    ("preamble", mode_intervention_preamble(&mode, lang)),
+                    ("thought (first)", mode_thought_focus(&mode, lang, false)),
+                    ("thought", mode_thought_focus(&mode, lang, true)),
+                    ("synthesis", mode_synthesis_instructions(&mode, lang)),
+                    ("moderation", mode_moderation_criteria(&mode, lang)),
+                ] {
+                    assert!(!text.is_empty(), "{mode:?}/{lang}: empty {name}");
+                }
+            }
+        }
     }
 
     fn all_langs() -> Vec<&'static str> {
@@ -1049,16 +1308,7 @@ mod tests {
 
     #[test]
     fn test_mode_override_clause_non_debate_format() {
-        let non_debate = vec![
-            DiscussionMode::Ideation,
-            DiscussionMode::CoConstruction,
-            DiscussionMode::UserDriven,
-            DiscussionMode::Socratic,
-            DiscussionMode::Tutorial,
-            DiscussionMode::CritiqueReview,
-            DiscussionMode::CollaborativeFiction,
-        ];
-        for mode in non_debate {
+        for mode in non_debate_modes() {
             let result = mode_override_clause(&mode, "en");
             assert!(
                 result.contains("=== DISCUSSION FORMAT"),
@@ -1069,16 +1319,7 @@ mod tests {
 
     #[test]
     fn test_mode_moderation_criteria_redirect() {
-        let non_debate = vec![
-            DiscussionMode::Ideation,
-            DiscussionMode::CoConstruction,
-            DiscussionMode::UserDriven,
-            DiscussionMode::Socratic,
-            DiscussionMode::Tutorial,
-            DiscussionMode::CritiqueReview,
-            DiscussionMode::CollaborativeFiction,
-        ];
-        for mode in &non_debate {
+        for mode in &non_debate_modes() {
             let en = mode_moderation_criteria(mode, "en");
             assert!(en.contains("redirect"), "Missing 'redirect' in EN moderation for {mode:?}");
 

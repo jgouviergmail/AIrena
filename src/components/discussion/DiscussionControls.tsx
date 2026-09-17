@@ -5,6 +5,7 @@ import {
   OctagonX,
   Pause,
   Play,
+  SkipForward,
   Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,7 @@ export function DiscussionControls({
   const { t } = useTranslation();
   const dispatchEvent = useArenaStore((s) => s.handleEvent);
   const interventionRequested = useArenaStore((s) => s.interventionRequested);
+  const awaitingCue = useArenaStore((s) => s.awaitingCue);
   const [confirmHardStop, setConfirmHardStop] = useState(false);
 
   const handleError = (e: unknown) => {
@@ -62,6 +64,16 @@ export function DiscussionControls({
     setConfirmHardStop(false);
   };
 
+  // Step mode: the voice finished reading, the next speaker may talk
+  const handleNextSpeaker = async () => {
+    try {
+      await api.nextSpeaker();
+      useArenaStore.setState({ awaitingCue: null });
+    } catch (e) {
+      handleError(e);
+    }
+  };
+
   const handleIntervene = async () => {
     try {
       await api.userWantsToIntervene();
@@ -77,6 +89,16 @@ export function DiscussionControls({
     <div className="flex items-center gap-2">
       {status !== "synthesizing" && (
         <>
+          {awaitingCue && (
+            <button
+              onClick={handleNextSpeaker}
+              className="flex animate-pulse items-center gap-1.5 rounded-md border-2 border-primary bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary"
+              title={t("arena.nextSpeakerHint")}
+            >
+              <SkipForward className="h-3.5 w-3.5" />
+              {t("arena.nextSpeaker", { name: awaitingCue.speakerName })}
+            </button>
+          )}
           <button
             onClick={handleIntervene}
             disabled={userTurnActive || interventionRequested || status === "paused"}

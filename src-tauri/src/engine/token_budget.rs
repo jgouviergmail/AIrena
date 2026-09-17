@@ -25,6 +25,10 @@ pub enum BudgetSection {
     RagContext,
     WebWikiSearch,
     PositionalMap,
+    /// Questions and commitments awaiting the speaker (v1.17)
+    OpenLoops,
+    /// The theses on the table and the objections nobody answered (argument map, v1.20.3)
+    DebateState,
 }
 
 impl BudgetSection {
@@ -37,7 +41,13 @@ impl BudgetSection {
         BudgetSection::ArbitreDirectives,
         BudgetSection::WebWikiSearch,
         BudgetSection::PositionalMap,
+        BudgetSection::OpenLoops,
+        BudgetSection::DebateState,
     ];
+
+    /// Configurable sections added after v1.16: a saved order without them is
+    /// still valid (they are appended after the user's sections).
+    pub const ADDED_AFTER_V116: &[BudgetSection] = &[BudgetSection::OpenLoops, BudgetSection::DebateState];
 
     /// Document-related sections — always last in the waterfall, not user-configurable.
     pub const DOCUMENT: &[BudgetSection] = &[
@@ -53,7 +63,7 @@ impl BudgetSection {
 #[serde(rename_all = "camelCase")]
 pub struct SectionPriority {
     pub section: BudgetSection,
-    /// Priority rank: 4 = highest variable priority, 12 = lowest. Fixed sections (1-3) not here.
+    /// Priority rank: 4 = highest variable priority, 13 = lowest. Fixed sections (1-3) not here.
     pub rank: u8,
     /// Minimum chars allocated to this section.
     pub floor: usize,
@@ -71,6 +81,11 @@ pub struct BudgetFeatures {
     pub wiki_search_enabled: bool,
     pub rag_enabled: bool,
     pub document_chars: usize,
+    /// Chars of the hidden agenda block in the system prompt (0 when the feature is off, v1.19)
+    #[serde(default)]
+    pub agenda_chars: usize,
+    /// The argument map feeds the "[État du débat]" block (v1.20.3)
+    pub argument_map_enabled: bool,
 }
 
 /// All inputs needed to compute a token budget.
@@ -122,6 +137,11 @@ pub struct TokenBudget {
     pub web_wiki_chars: usize,
     /// Max total chars for positional map.
     pub positional_map_chars: usize,
+    /// Max total chars for the open loops block (v1.17).
+    #[serde(default)]
+    pub open_loops_chars: usize,
+    /// Chars of the "[État du débat]" block (theses on the table, unanswered objections)
+    pub debate_state_chars: usize,
 }
 
 impl TokenBudget {
@@ -149,6 +169,8 @@ impl Default for TokenBudget {
             web_wiki_chars: constants::SEARCH_MAX_CONTEXT_LEN,
             // ~5 participants × 200 chars/participant — reasonable default fallback.
             positional_map_chars: constants::BUDGET_CEIL_POSITIONAL_MAP_PER_PARTICIPANT * 5,
+            open_loops_chars: constants::BUDGET_CEIL_OPEN_LOOPS,
+            debate_state_chars: constants::BUDGET_CEIL_DEBATE_STATE,
         }
     }
 }
@@ -312,6 +334,8 @@ impl TokenBudget {
             rag_context_chars: 0,
             web_wiki_chars: 0,
             positional_map_chars: 0,
+            open_loops_chars: 0,
+            debate_state_chars: 0,
         };
 
         for entry in &entries {
@@ -355,6 +379,12 @@ impl TokenBudget {
                 }
                 BudgetSection::PositionalMap => {
                     budget.positional_map_chars = entry.allocated;
+                }
+                BudgetSection::OpenLoops => {
+                    budget.open_loops_chars = entry.allocated;
+                }
+                BudgetSection::DebateState => {
+                    budget.debate_state_chars = entry.allocated;
                 }
             }
         }
@@ -402,6 +432,8 @@ impl TokenBudget {
                     BudgetSection::RagContext => budget.rag_context_chars,
                     BudgetSection::WebWikiSearch => budget.web_wiki_chars,
                     BudgetSection::PositionalMap => budget.positional_map_chars,
+                    BudgetSection::OpenLoops => budget.open_loops_chars,
+                    BudgetSection::DebateState => budget.debate_state_chars,
                 };
                 SectionAllocation {
                     section: p.section,
@@ -452,7 +484,7 @@ impl TokenBudget {
 
 // ── Default priorities ─────────────────────────────────────────────────
 
-/// Build default section priorities. Rank 4 = highest variable priority, 12 = lowest.
+/// Build default section priorities. Rank 4 = highest variable priority, 13 = lowest.
 pub fn default_priorities() -> Vec<SectionPriority> {
     use BudgetSection::*;
     vec![
@@ -498,16 +530,28 @@ pub fn default_priorities() -> Vec<SectionPriority> {
             floor: constants::BUDGET_FLOOR_POSITIONAL_MAP,
             ceiling: constants::BUDGET_CEIL_POSITIONAL_MAP_PER_PARTICIPANT,
         },
+        SectionPriority {
+            section: OpenLoops,
+            rank: 11,
+            floor: constants::BUDGET_FLOOR_OPEN_LOOPS,
+            ceiling: constants::BUDGET_CEIL_OPEN_LOOPS,
+        },
+        SectionPriority {
+            section: DebateState,
+            rank: 12,
+            floor: constants::BUDGET_FLOOR_DEBATE_STATE,
+            ceiling: constants::BUDGET_CEIL_DEBATE_STATE,
+        },
         // Document sections — always last, not user-configurable
         SectionPriority {
             section: FullDocument,
-            rank: 11,
+            rank: 13,
             floor: constants::BUDGET_FLOOR_FULL_DOCUMENT,
             ceiling: 0, // Ceiling is dynamic (= document_chars), set during compute.
         },
         SectionPriority {
             section: RagContext,
-            rank: 12,
+            rank: 14,
             floor: constants::BUDGET_FLOOR_RAG_CONTEXT,
             ceiling: constants::BUDGET_CEIL_RAG_CONTEXT,
         },
@@ -517,7 +561,8 @@ pub fn default_priorities() -> Vec<SectionPriority> {
 /// Parse user-customized priorities from a JSON string (stored in DB settings).
 /// Returns `default_priorities()` if the string is empty, invalid, or incomplete.
 ///
-/// Validation: every `BudgetSection` must appear exactly once.
+/// Validation: every configurable `BudgetSection` must appear (sections added
+/// after v1.16 may be missing — `apply_default_bounds()` appends them).
 /// User JSON only controls **rank order** — floor/ceiling always come from constants
 /// via `apply_default_bounds()`.
 pub fn parse_priorities_or_default(json: &str) -> Vec<SectionPriority> {
@@ -530,7 +575,7 @@ pub fn parse_priorities_or_default(json: &str) -> Vec<SectionPriority> {
             // Validate completeness: every CONFIGURABLE section must be present.
             // Document sections are auto-appended by apply_default_bounds().
             let has_all = BudgetSection::CONFIGURABLE.iter().all(|s| {
-                priorities.iter().any(|p| p.section == *s)
+                BudgetSection::ADDED_AFTER_V116.contains(s) || priorities.iter().any(|p| p.section == *s)
             });
             if has_all {
                 apply_default_bounds(&priorities)
@@ -555,12 +600,14 @@ pub fn parse_priorities_or_default(json: &str) -> Vec<SectionPriority> {
 /// preserve their rank order, but replace floor/ceiling with the correct default constants.
 ///
 /// The frontend Settings page only controls rank order for CONFIGURABLE sections.
-/// Document sections (FullDocument, RagContext) are always appended at fixed ranks (11-12)
+/// Document sections (FullDocument, RagContext) are always appended at fixed ranks (13-14)
 /// to ensure they're allocated last in the waterfall.
 ///
 /// Old saved data with 9 sections (including documents) is handled gracefully:
 /// document sections are stripped from the input and re-appended at fixed ranks.
-/// Configurable section ranks are re-numbered to contiguous 4..N to prevent collisions.
+/// Sections added after v1.16 that the saved order lacks are appended after the
+/// user's sections (their order is kept). Configurable section ranks are
+/// re-numbered to contiguous 4..N to prevent collisions.
 pub fn apply_default_bounds(user_priorities: &[SectionPriority]) -> Vec<SectionPriority> {
     let defaults = default_priorities();
     let default_map: HashMap<BudgetSection, (usize, usize)> = defaults
@@ -588,15 +635,18 @@ pub fn apply_default_bounds(user_priorities: &[SectionPriority]) -> Vec<SectionP
         })
         .collect();
 
+    // 2. Sort by user-defined rank order, append the sections the saved order
+    //    predates, then re-assign contiguous ranks 4..N. Prevents rank collision
+    //    with fixed document ranks when migrating old saved data.
+    result.sort_by_key(|p| p.rank);
+    for newer in defaults.iter().filter(|d| BudgetSection::ADDED_AFTER_V116.contains(&d.section) && !seen.contains(&d.section)) {
+        result.push(newer.clone());
+    }
+
     // Guard: if input doesn't contain all configurable sections, fall back to defaults.
     if result.len() != BudgetSection::CONFIGURABLE.len() {
         return default_priorities();
     }
-
-    // 2. Sort by user-defined rank order, then re-assign contiguous ranks 4..N.
-    //    Prevents rank collision with fixed document ranks (11-12) when migrating
-    //    old saved data that had WebWikiSearch at rank 11, PositionalMap at rank 12.
-    result.sort_by_key(|p| p.rank);
     for (i, p) in result.iter_mut().enumerate() {
         p.rank = (i + 4) as u8;
     }
@@ -612,13 +662,14 @@ pub fn apply_default_bounds(user_priorities: &[SectionPriority]) -> Vec<SectionP
 // ── Helpers ────────────────────────────────────────────────────────────
 
 /// Compute the number of tokens reserved for non-negotiable sections
-/// (system prompt + deterministic overhead + num_predict).
+/// (system prompt + deterministic overhead + num_predict). The output reserve
+/// covers the emotion-driven length modulation (`EMOTION_LEN_MAX`, v1.17).
 fn compute_reserved_tokens(params: &BudgetParams, chars_per_token: f64) -> usize {
     let system_prompt_tokens =
         (params.system_prompt_chars as f64 / chars_per_token).ceil() as usize;
     let deterministic_tokens =
-        (constants::BUDGET_DETERMINISTIC_OVERHEAD_CHARS as f64 / chars_per_token).ceil() as usize;
-    let num_predict_tokens = params.num_predict.max(0) as usize;
+        ((constants::BUDGET_DETERMINISTIC_OVERHEAD_CHARS + params.features.agenda_chars) as f64 / chars_per_token).ceil() as usize;
+    let num_predict_tokens = (f64::from(params.num_predict.max(0)) * f64::from(constants::EMOTION_LEN_MAX)).ceil() as usize;
     system_prompt_tokens + deterministic_tokens + num_predict_tokens
 }
 
@@ -628,8 +679,8 @@ pub fn chars_per_token_for_language(lang: &str, provider: ProviderKind) -> f64 {
     match (provider, cjk) {
         (ProviderKind::DeepSeek, true) => constants::DEEPSEEK_CHARS_PER_TOKEN_CJK,
         (ProviderKind::DeepSeek, false) => constants::DEEPSEEK_CHARS_PER_TOKEN_LATIN,
-        (ProviderKind::Ollama, true) => constants::CHARS_PER_TOKEN_CJK,
-        (ProviderKind::Ollama, false) => constants::CHARS_PER_TOKEN_LATIN,
+        (ProviderKind::Ollama | ProviderKind::OpenAiCompat, true) => constants::CHARS_PER_TOKEN_CJK,
+        (ProviderKind::Ollama | ProviderKind::OpenAiCompat, false) => constants::CHARS_PER_TOKEN_LATIN,
     }
 }
 
@@ -639,6 +690,7 @@ fn is_section_active(section: BudgetSection, features: &BudgetFeatures) -> bool 
         BudgetSection::WebWikiSearch => features.web_search_enabled || features.wiki_search_enabled,
         BudgetSection::RagContext => features.rag_enabled,
         BudgetSection::FullDocument => features.document_chars > 0,
+        BudgetSection::DebateState => features.argument_map_enabled,
         // Always active sections:
         _ => true,
     }
@@ -673,8 +725,8 @@ fn scale_section_bounds(
             (base_floor, params.features.document_chars)
         }
         BudgetSection::PositionalMap => {
-            // Floor is flat minimum, ceiling is per-participant.
-            (base_floor, base_ceiling * n_speakers)
+            // Floor and ceiling are per-participant (a flat floor starved the section on 8k contexts).
+            (base_floor * n_speakers, base_ceiling * n_speakers)
         }
         // All other sections: priority values are totals, no scaling needed.
         _ => (base_floor, base_ceiling),
@@ -705,6 +757,8 @@ mod tests {
         BudgetSection::ArbitreDirectives,
         BudgetSection::WebWikiSearch,
         BudgetSection::PositionalMap,
+        BudgetSection::OpenLoops,
+        BudgetSection::DebateState,
         BudgetSection::FullDocument,
         BudgetSection::RagContext,
     ];
@@ -763,9 +817,10 @@ mod tests {
             !warnings.is_empty() || budget.positional_map_chars < 200,
             "Tight budget should produce warnings or reduced allocations"
         );
-        // High-priority sections should still get some allocation.
+        // The highest-priority sections still get their floors; the rest is starved.
         assert!(budget.current_turn_msg_chars > 0);
-        assert!(budget.contextual_summary_chars > 0);
+        assert!(budget.immediate_memory_msg_chars > 0);
+        assert_eq!(budget.open_loops_chars, 0, "rank 11 gets nothing at 4k with 4 speakers");
     }
 
     #[test]
@@ -797,7 +852,7 @@ mod tests {
 
     #[test]
     fn test_budget_with_document_rag_fallback() {
-        let mut params = make_params(4_096, 2, "fr");
+        let mut params = make_params(8_192, 2, "fr");
         params.features.document_chars = 50_000; // Large doc — won't fit.
         params.features.rag_enabled = true;
 
@@ -1048,16 +1103,16 @@ mod tests {
 
         let fixed = apply_default_bounds(&user_priorities);
 
-        // Result should have all 9 sections (7 configurable + 2 document)
+        // Result should have all 10 sections (8 configurable + 2 document)
         assert_eq!(fixed.len(), ALL_SECTIONS.len());
 
-        // Document sections should be at fixed ranks 11-12
+        // Document sections should be at fixed ranks 13-14
         let full_doc = fixed.iter().find(|p| p.section == BudgetSection::FullDocument).unwrap();
-        assert_eq!(full_doc.rank, 11);
+        assert_eq!(full_doc.rank, 13);
         let rag = fixed.iter().find(|p| p.section == BudgetSection::RagContext).unwrap();
-        assert_eq!(rag.rank, 12);
+        assert_eq!(rag.rank, 14);
 
-        // Configurable sections should have contiguous ranks 4-10
+        // Configurable sections should have contiguous ranks 4-12
         for (i, section) in BudgetSection::CONFIGURABLE.iter().enumerate() {
             let p = fixed.iter().find(|p| p.section == *section).unwrap();
             assert_eq!(p.rank, (i + 4) as u8, "Section {section:?} should have rank {}", i + 4);
@@ -1085,12 +1140,44 @@ mod tests {
 
         // Document sections should be replaced at fixed ranks from defaults
         let full_doc = fixed.iter().find(|p| p.section == BudgetSection::FullDocument).unwrap();
-        assert_eq!(full_doc.rank, 11);
+        assert_eq!(full_doc.rank, 13);
         assert_eq!(full_doc.floor, constants::BUDGET_FLOOR_FULL_DOCUMENT);
 
         let rag = fixed.iter().find(|p| p.section == BudgetSection::RagContext).unwrap();
-        assert_eq!(rag.rank, 12);
+        assert_eq!(rag.rank, 14);
         assert_eq!(rag.floor, constants::BUDGET_FLOOR_RAG_CONTEXT);
+    }
+
+    /// A v1.16 order (no OpenLoops) keeps the user's order and gains the new
+    /// section after it — both through `apply_default_bounds` and the JSON path.
+    #[test]
+    fn v116_saved_order_gains_open_loops_last() {
+        let v116: Vec<SectionPriority> = [
+            BudgetSection::PositionalMap, BudgetSection::CurrentTurnMessages, BudgetSection::ImmediateMemory,
+            BudgetSection::ContextualSummary, BudgetSection::CognitiveDirectives, BudgetSection::ArbitreDirectives,
+            BudgetSection::WebWikiSearch,
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, &section)| SectionPriority { section, rank: (i + 4) as u8, floor: 0, ceiling: 0 })
+        .collect();
+        for fixed in [apply_default_bounds(&v116), parse_priorities_or_default(&serde_json::to_string(&v116).unwrap())] {
+            assert_eq!(fixed[0].section, BudgetSection::PositionalMap, "user order kept");
+            let ol = fixed.iter().find(|p| p.section == BudgetSection::OpenLoops).unwrap();
+            assert_eq!(ol.rank, 11);
+            assert_eq!(ol.ceiling, constants::BUDGET_CEIL_OPEN_LOOPS);
+            let ds = fixed.iter().find(|p| p.section == BudgetSection::DebateState).unwrap();
+            assert_eq!(ds.rank, 12, "v1.20.3 section appended after the v1.17 one");
+            assert_eq!(fixed.iter().find(|p| p.section == BudgetSection::FullDocument).unwrap().rank, 13);
+        }
+        // The budget itself carries the new sections (the debate state only with the map on)
+        let mut params = make_params(32_768, 2, "fr");
+        params.features.argument_map_enabled = true;
+        let (budget, _) = TokenBudget::compute(&params, &default_priorities());
+        assert_eq!(budget.open_loops_chars, constants::BUDGET_CEIL_OPEN_LOOPS);
+        assert_eq!(budget.debate_state_chars, constants::BUDGET_CEIL_DEBATE_STATE);
+        let (without_map, _) = TokenBudget::compute(&make_params(32_768, 2, "fr"), &default_priorities());
+        assert_eq!(without_map.debate_state_chars, 0, "no map, no block");
     }
 
     #[test]
@@ -1110,13 +1197,13 @@ mod tests {
 
         let fixed = apply_default_bounds(&old_priorities);
 
-        // Configurable ranks should be contiguous 4-10 (no gaps or collisions)
+        // Configurable ranks should be contiguous 4-12 (no gaps or collisions)
         let configurable: Vec<_> = fixed.iter()
             .filter(|p| BudgetSection::CONFIGURABLE.contains(&p.section))
             .collect();
         let mut ranks: Vec<u8> = configurable.iter().map(|p| p.rank).collect();
         ranks.sort();
-        assert_eq!(ranks, vec![4, 5, 6, 7, 8, 9, 10], "Ranks should be contiguous 4-10");
+        assert_eq!(ranks, vec![4, 5, 6, 7, 8, 9, 10, 11, 12], "Ranks should be contiguous 4-12");
 
         // WebWikiSearch should now be rank 9 (was 11), PositionalMap rank 10 (was 12)
         let wws = fixed.iter().find(|p| p.section == BudgetSection::WebWikiSearch).unwrap();
@@ -1124,9 +1211,9 @@ mod tests {
         let pm = fixed.iter().find(|p| p.section == BudgetSection::PositionalMap).unwrap();
         assert_eq!(pm.rank, 10);
 
-        // Document sections at fixed ranks 11-12
+        // Document sections at fixed ranks 12-13
         let full_doc = fixed.iter().find(|p| p.section == BudgetSection::FullDocument).unwrap();
-        assert_eq!(full_doc.rank, 11);
+        assert_eq!(full_doc.rank, 13);
     }
 
     #[test]
@@ -1141,7 +1228,7 @@ mod tests {
         );
         // Document sections should still be at fixed ranks
         let full_doc = fixed.iter().find(|p| p.section == BudgetSection::FullDocument).unwrap();
-        assert_eq!(full_doc.rank, 11);
+        assert_eq!(full_doc.rank, 13);
     }
 
     #[test]
@@ -1160,7 +1247,7 @@ mod tests {
 
         let fixed = apply_default_bounds(&duped);
 
-        // Should have 9 sections (7 unique configurable + 2 documents), not 10
+        // Should have 10 sections (8 unique configurable + 2 documents), not 11
         assert_eq!(fixed.len(), ALL_SECTIONS.len());
         // CurrentTurnMessages should appear exactly once
         let ct_count = fixed.iter().filter(|p| p.section == BudgetSection::CurrentTurnMessages).count();

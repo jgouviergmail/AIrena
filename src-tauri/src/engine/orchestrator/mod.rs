@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,53 +7,69 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::db::repository;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Instant;
+
+use rand::Rng;
+
 use crate::engine::argument_merge;
-use crate::engine::directive_builder::{self, SpeakerTurnContext, SpeechAct};
+use crate::engine::diagnostics::{DiagnosticsCounters, TurnTimer};
+use crate::engine::directive_builder::{self, CoalitionRole, SpeakerTurnContext, SpeechAct};
+use crate::engine::dramaturgy::{self, ActKey, TurnPosition};
+use crate::engine::scene_events::{self, SceneContext, SceneEvent, SceneEventKind};
 use crate::engine::dynamics_parser::{self, ParsedDynamics};
-use crate::engine::emotion_engine::{self, EmotionContext};
+use crate::engine::emotion_engine::{self, EmotionContext, GivenReactions, PersonaGains, ReactionTally, ShiftZones};
 use crate::engine::focus::{self, Focus, FocusInputs};
-use crate::engine::json_parser;
+use crate::engine::json_parser::{self, MemoryUpdateResponse};
 use crate::engine::memory_manager;
-use crate::engine::prompt_builder;
+use crate::engine::mode_roles;
+use crate::engine::open_loops::{OpenLoop, OpenLoopKind, OpenLoopRegistry};
+use crate::engine::prompt_builder::{self, StageBlock};
+use crate::engine::reactions::{self, ReactionPropensity, ReactionScope};
+use crate::engine::relationships::RelationshipScores;
+use crate::engine::stage_directions::{self, StageCue};
+use crate::engine::tuning::Tuning;
 use crate::engine::token_budget::{BudgetFeatures, BudgetParams, SectionPriority, TokenBudget};
 use crate::engine::turn_manager;
-use crate::models::emotion::{EmotionDelta, EmotionSnapshot, EmotionalProfile};
+use crate::models::emotion::{EmotionDelta, EmotionSnapshot, EmotionalProfile, RoomMood};
 use crate::engine::mode_prompts;
-use crate::models::discussion::{DiscussionConfig, DiscussionMode, DiscussionStatus, DocumentFormat, DocumentInjectionMode, DocumentUpdateGranularity, TurnDistribution};
+use crate::models::discussion::{DiscussionConfig, DiscussionMode, DiscussionStatus, DocumentFormat, DocumentInjectionMode, DocumentUpdateGranularity, ReactionTiming, TurnDistribution};
 use crate::models::engine_command::EngineCommand;
-use crate::models::events::ArenaEvent;
+use crate::models::events::{ArenaEvent, RoleAssignment};
+use crate::models::outcome::{ModeOutcome, PartyDecision, VerdictVote, VotePhase, VOTE_AGAINST, VOTE_FOR};
+use crate::models::persona_memory::PersonaRecapRecord;
+use crate::engine::prompt_builder::RecapInput;
 use crate::models::gladiateur::GladIAteurState;
 use crate::models::iarbitre::IArbitreState;
 use crate::llm::metered::MeteredProvider;
+use crate::llm::parallel::run_bounded;
 use crate::llm::pricing;
 use crate::llm::{LlmError, LlmProvider, LlmRequest};
+use crate::models::agenda::{Agenda, AgendaReveal};
 use crate::models::argument_map::{ArgumentMap, ArgumentNode};
-use crate::models::llm::{CallKind, ReasoningLevel};
+use crate::models::intention::Intention;
+use crate::models::llm::{CallKind, ReasoningLevel, ReasoningPace};
 #[cfg(test)]
 use crate::models::llm::UsageLedger;
-use crate::models::message::{Message, Reaction, ReactionType, SpeakerRole, ThoughtKind};
+use crate::models::message::{Message, MessageKind, Reaction, ReactionType, SpeakerRole, ThoughtKind};
+use crate::models::relationship::RelationshipKind;
 use crate::models::settings::LlmParams;
+use crate::models::source::{self, SourceKind, SourceRecord, WebSourceInfo, WikiSourceInfo};
 use crate::rag::RagStore;
 use crate::tavily::client::TavilyClient;
 use crate::tavily::error::TavilyError;
 use crate::wikipedia::client::WikiClient;
 
-use super::{truncate_str, truncate_at_word_boundary};
+use super::cast;
+use super::{is_model_refusal, truncate_at_sentence_boundary, truncate_at_word_boundary, truncate_str};
 
 use crate::constants;
 
-/// Detect model safety refusals (e.g. "I'm sorry, but I can't help with that.",
-/// "Je ne peux pas…", "抱歉…") — short answers only, a long answer that merely
-/// quotes such a phrase is content.
-fn is_model_refusal(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    let trimmed = lower.trim();
-    if trimmed.len() > constants::ORCH_MAX_REFUSAL_LENGTH {
-        return false;
-    }
-    constants::REFUSAL_PREFIXES.iter().any(|p| trimmed.starts_with(p))
-        || constants::REFUSAL_SUBSTRINGS.iter().any(|s| trimmed.contains(s))
-}
+mod analysis;
+mod knowledge;
+mod staging;
+mod structured;
 
 /// Check if a query is a near-duplicate of any of the speaker's own past queries.
 /// Normalization: lowercase + trim.
@@ -78,13 +94,65 @@ fn is_duplicate_query(query: &str, past_queries: &[String]) -> bool {
     })
 }
 
-/// Response from the combined memory update LLM call
-#[derive(Debug, serde::Deserialize)]
-struct MemoryUpdateResponse {
-    #[serde(default)]
-    summary: String,
-    #[serde(default)]
-    positions: HashMap<String, String>,
+/// (title, pseudo-url) of a document chunk for the sources registry — "file#index" mirrors the frontend.
+fn rag_source_ref(c: &crate::rag::RagChunkInfo) -> (String, String) {
+    (format!("{} #{}", c.file_name, c.chunk_index + 1), format!("{}#{}", c.file_name, c.chunk_index + 1))
+}
+
+/// One end-of-turn LLM phase (v1.17): prepared from `&self`, run concurrently
+/// with the others, applied on `&mut self` in the historical order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndOfTurnPhase {
+    Document,
+    /// Fused memory + emotion analysis (sequential providers)
+    TurnAnalyst,
+    Emotion,
+    Memory,
+    ArgumentMap,
+}
+
+impl EndOfTurnPhase {
+    /// Name used in `TurnTimings`.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Document => "document",
+            Self::TurnAnalyst => "turnAnalyst",
+            Self::Emotion => "emotion",
+            Self::Memory => "memory",
+            Self::ArgumentMap => "argumentMap",
+        }
+    }
+}
+
+/// Result of one end-of-turn phase.
+struct PhaseOutcome {
+    phase: EndOfTurnPhase,
+    request: LlmRequest,
+    raw: Result<String, LlmError>,
+    /// The empty first answer was retried once with a warmer temperature
+    retried: bool,
+    ms: u64,
+}
+
+/// Run one phase: the call, an optional retry on an empty answer, and its duration.
+async fn run_phase(
+    llm: Arc<MeteredProvider>,
+    cancel: CancellationToken,
+    phase: EndOfTurnPhase,
+    request: LlmRequest,
+    retry_on_empty: bool,
+) -> PhaseOutcome {
+    let started = Instant::now();
+    let mut retried = false;
+    let mut raw = llm.chat(&request, cancel.clone()).await.map(|r| r.content);
+    if retry_on_empty && matches!(&raw, Ok(r) if r.trim().is_empty()) && !cancel.is_cancelled() {
+        tracing::info!(phase = phase.name(), "Empty answer — retrying with a higher temperature");
+        retried = true;
+        let mut retry = request.clone();
+        retry.params.temperature = (retry.params.temperature + constants::TEMP_DIFFICULTY_BOOST).min(constants::TEMP_MAX);
+        raw = llm.chat(&retry, cancel.clone()).await.map(|r| r.content);
+    }
+    PhaseOutcome { phase, request, raw, retried, ms: started.elapsed().as_millis() as u64 }
 }
 
 /// Cached RAG query result for a single speaker.
@@ -105,8 +173,16 @@ pub struct DiscussionEngine {
     gladiateurs: Vec<GladIAteurState>,
     messages_history: Vec<Message>,
     turn_messages: Vec<Message>,
-    /// Reaction counts per speaker for the current turn: speaker_id → (likes, dislikes)
-    turn_reaction_counts: HashMap<String, (u32, u32)>,
+    /// Reactions received per speaker during the current turn (drought signal, analyst
+    /// context, and the deferred emotion update)
+    turn_reaction_counts: HashMap<String, ReactionTally>,
+    /// Reactions received on each speaker's LAST message (reset when they speak again) —
+    /// feeds the reasoning heuristic in both timings
+    last_reactions_received: HashMap<String, ReactionTally>,
+    /// Audience reactions given on each message (cap per message)
+    audience_reactions_by_message: HashMap<String, u32>,
+    /// Participants (names) the audience reacted to this turn (focus bonus)
+    turn_audience_targets: HashSet<String>,
     user_intervention_pending: bool,
     user_intervention_handled: bool,
     cancel_token: CancellationToken,
@@ -118,14 +194,50 @@ pub struct DiscussionEngine {
     wiki_client: WikiClient,
     /// Database connection for Tavily usage tracking (Arc-internal, cheap clone)
     db: tokio_rusqlite::Connection,
-    /// Cumulative reactions: (speaker_id, target_speaker_id) -> (likes, dislikes)
-    cumulative_reactions: HashMap<(String, String), (u32, u32)>,
+    /// Weighted reaction graph between participants (counts + decaying scores, v1.17)
+    relationship_scores: RelationshipScores,
+    /// Former rival who just approved a speaker: consumed by their next directive (v1.17)
+    reconciliation_pending: HashMap<String, String>,
+    /// Tunable dynamics (defaults = constants)
+    tuning: Tuning,
+    /// How strongly each gladiateur feels the rule deltas (from OCEAN, v1.17)
+    persona_gains: HashMap<String, PersonaGains>,
+    /// Stage directions already shown per speaker this turn (anti-noise cap)
+    stage_directions_this_turn: HashMap<String, usize>,
+    /// Notable-zone occupancy per speaker and axis (relative threshold crossings, v1.20.5)
+    shift_zones: ShiftZones,
+    /// Latest temperature of the room (v1.17)
+    room_mood: Option<RoomMood>,
+    /// What went wrong or not, reported before the end (v1.17)
+    diagnostics: DiagnosticsCounters,
+    /// Wall-clock phases of the current turn (v1.17)
+    turn_timer: TurnTimer,
+    /// Act of the mode's script in progress (v1.18)
+    current_act: Option<ActKey>,
+    /// Turn of the last scene event (never two turns in a row)
+    last_scene_event_turn: Option<u32>,
+    /// Scene event of the current turn, if any
+    turn_scene_event: Option<SceneEvent>,
+    /// Coalition of the current turn: (leader id, follower id)
+    turn_coalition: Option<(String, String)>,
+    /// Test hook: the next eligible turn gets this scene event
+    #[cfg(test)]
+    forced_scene_event: Option<SceneEventKind>,
+    /// Test hook: coalitions form whenever an ally pair exists
+    #[cfg(test)]
+    coalitions_forced: bool,
+    /// Test hook: no random scene event or coalition (forced ones still apply)
+    #[cfg(test)]
+    random_staging_disabled: bool,
     /// Speaker's own messages for self-memory: speaker_id -> Vec<String> (last 2)
     speaker_own_messages: HashMap<String, Vec<String>>,
     /// Parsed dynamics cache: speaker_id -> ParsedDynamics
     dynamics_cache: HashMap<String, ParsedDynamics>,
     /// Recent speech acts per speaker (newest last, bounded window): speaker_id -> acts
     recent_speech_acts: HashMap<String, Vec<SpeechAct>>,
+    /// Colours of the last reactions each gladiateur gave (v1.20.5): one 💡 per
+    /// `INSIGHTFUL_CREDIT_WINDOW` reactions at most
+    recent_given_kinds: HashMap<String, VecDeque<ReactionType>>,
     /// Participants already chosen as conversational focus this turn (names)
     turn_focus_targets: HashSet<String>,
     /// Contextual summary after the previous turn (stagnation detection)
@@ -138,6 +250,8 @@ pub struct DiscussionEngine {
     socratic_questions: Vec<String>,
     /// Co-construction (per-turn granularity): contributions to integrate at end of turn
     turn_document_contributions: Vec<(String, String)>,
+    /// Every reference injected into a prompt (web, wiki, document), for the synthesis
+    sources_registry: Vec<SourceRecord>,
     /// Queries executed by all speakers THIS turn (for cross-gladiateur dedup)
     turn_search_queries: Vec<(String, String)>,
     /// Global pool counter: web searches consumed across all gladiateurs
@@ -165,6 +279,28 @@ pub struct DiscussionEngine {
     default_reasoning_level: ReasoningLevel,
     /// Forward displayable model reasoning to the frontend as thought chunks
     show_model_reasoning: bool,
+    /// Wall-clock pace of the reasoning (`Fast` caps `Auto` at `Low`, providers shrink allowances)
+    reasoning_pace: ReasoningPace,
+    /// Questions and commitments each speaker still owes an answer to (v1.17)
+    open_loops: OpenLoopRegistry,
+    /// Secret objective per gladiateur id, generated after the introduction (v1.19)
+    agendas: HashMap<String, Agenda>,
+    /// Role (trial, Oxford) or hat (six hats) per gladiateur id (v1.19)
+    roles: HashMap<String, String>,
+    /// Crisis dispatches still to deliver, one per turn (crisis cell, v1.19)
+    crisis_dispatches: std::collections::VecDeque<String>,
+    /// Audience votes on the motion before and after an Oxford debate (v1.19)
+    vote_before: Option<String>,
+    vote_after: Option<String>,
+    /// Mode-specific result, resolved before the synthesis (v1.19)
+    outcome: Option<ModeOutcome>,
+    /// Long memory (v1.20): recalled memories block per gladiateur id, and whether recaps are written
+    memory_blocks: HashMap<String, String>,
+    /// "[Les autres participants — qui ils sont]" per speaker id (v1.20.3)
+    cast_blocks: HashMap<String, String>,
+    /// The moderator's system prompt with its cast (v1.20.3)
+    arbitre_system: String,
+    persona_memory_enabled: bool,
     /// Consecutive reasoning-mode failures; reasoning is disabled past REASONING_MAX_FAILURES
     reasoning_failures: u32,
     /// Cloud spend already accumulated this period before the discussion (USD)
@@ -174,6 +310,21 @@ pub struct DiscussionEngine {
     /// Budget alert already emitted ("warning" / "exceeded") — each fires once
     budget_warning_sent: bool,
     budget_exceeded_sent: bool,
+    /// The audience's last message, awaiting an answer from the next speaker (excerpt, v1.20.2)
+    user_reply_pending: Option<String>,
+    /// The audience has spoken at least once: a participant, no longer an observer (v1.20.2)
+    user_has_spoken: bool,
+    /// Openings of the moderator's own lines (introduction, comments), oldest first (v1.20.2)
+    arbitre_recent_openings: VecDeque<String>,
+    /// Scene-event kinds already played (each kind once until all were played, v1.20.3)
+    scene_kinds_used: HashSet<SceneEventKind>,
+    /// Interventions moderated and comments issued so far (comment rate, v1.20.2)
+    moderation_checks: u32,
+    moderation_comments: u32,
+    /// Step mode (v1.20.1): wait for the audience's cue before each speaker (voice "follow")
+    step_mode: bool,
+    /// Cues received ahead of a wait — each one frees one speaker
+    cues_pending: u32,
 }
 
 impl DiscussionEngine {
@@ -204,6 +355,10 @@ impl DiscussionEngine {
         // Compute per-speaker token budgets.
         let has_rag = rag_store.as_ref().is_some_and(|r| !r.is_empty());
         let rag_total_chars = rag_store.as_ref().map_or(0, |r| r.total_char_count());
+        // The secret agenda block lives in the system prompt of every intervention (v1.19)
+        let agenda_chars = if Self::agendas_enabled_for(&config) { constants::AGENDA_MAX_CHARS + constants::AGENDA_BLOCK_OVERHEAD_CHARS } else { 0 };
+        // The role / hat block sits in the system prompt of the structured modes (v1.19)
+        let role_chars = if Self::mode_has_roles(&config.discussion_mode) { constants::ROLE_BLOCK_MAX_CHARS } else { 0 };
         let features = match config.document_injection_mode {
             DocumentInjectionMode::FullInjection => BudgetFeatures {
                 web_search_enabled: config.web_search_pool > 0
@@ -215,6 +370,8 @@ impl DiscussionEngine {
                 // token_budget.rs zeroes rag_context_chars when full_document_mode is true.
                 rag_enabled: has_rag,
                 document_chars: rag_total_chars,
+                agenda_chars,
+                argument_map_enabled: config.argument_map_enabled,
             },
             DocumentInjectionMode::Rag => BudgetFeatures {
                 web_search_enabled: config.web_search_pool > 0
@@ -223,6 +380,8 @@ impl DiscussionEngine {
                     || config.arbitre.wiki_search_intro,
                 rag_enabled: has_rag,
                 document_chars: 0,
+                agenda_chars,
+                argument_map_enabled: config.argument_map_enabled,
             },
         };
 
@@ -233,7 +392,7 @@ impl DiscussionEngine {
         let arbitre_params = BudgetParams {
             num_ctx: config.arbitre.llm_params.num_ctx,
             num_predict: config.arbitre.llm_params.num_predict,
-            system_prompt_chars: config.arbitre.system_prompt.len(),
+            system_prompt_chars: config.arbitre.system_prompt.len() + constants::CAST_BLOCK_MAX_CHARS,
             n_gladiateurs: config.gladiateurs.len(),
             language: config.discussion_language.clone(),
             features: features.clone(),
@@ -270,7 +429,7 @@ impl DiscussionEngine {
             let glad_params = BudgetParams {
                 num_ctx: g.llm_params.num_ctx,
                 num_predict: g.llm_params.num_predict,
-                system_prompt_chars: g.system_prompt.len(),
+                system_prompt_chars: g.system_prompt.len() + role_chars + constants::CAST_BLOCK_MAX_CHARS + if g.source_profile_id.is_some() { constants::PERSONA_MEMORY_MAX_CHARS } else { 0 },
                 n_gladiateurs: config.gladiateurs.len(),
                 language: config.discussion_language.clone(),
                 features: features.clone(),
@@ -316,6 +475,23 @@ impl DiscussionEngine {
             }
         }
 
+        let roles = Self::deal_fixed_roles(&config);
+        // Who is who (v1.20.3): a portrait of every gladiateur, read once from the kernels
+        let portraits: Vec<(String, cast::CastPortrait)> = config.gladiateurs.iter().map(|g| (g.id.clone(), cast::portrait_from_kernel(&g.name, &g.system_prompt))).collect();
+        let cast_blocks: HashMap<String, String> = portraits
+            .iter()
+            .map(|(id, _)| {
+                let others: Vec<cast::CastPortrait> = portraits.iter().filter(|(o, _)| o != id).map(|(_, p)| p.clone()).collect();
+                (id.clone(), cast::build_cast_block(&others, &config.discussion_language, false))
+            })
+            .collect();
+        let arbitre_system = {
+            let all: Vec<cast::CastPortrait> = portraits.iter().map(|(_, p)| p.clone()).collect();
+            let block = cast::build_cast_block(&all, &config.discussion_language, true);
+            if block.is_empty() { config.arbitre.system_prompt.clone() } else { format!("{}
+
+{block}", config.arbitre.system_prompt) }
+        };
         Self {
             discussion_id,
             config,
@@ -327,6 +503,9 @@ impl DiscussionEngine {
             messages_history: Vec::new(),
             turn_messages: Vec::new(),
             turn_reaction_counts: HashMap::new(),
+            last_reactions_received: HashMap::new(),
+            audience_reactions_by_message: HashMap::new(),
+            turn_audience_targets: HashSet::new(),
             user_intervention_pending: false,
             user_intervention_handled: false,
             cancel_token: CancellationToken::new(),
@@ -334,10 +513,29 @@ impl DiscussionEngine {
             tavily_client,
             wiki_client: WikiClient::new(),
             db,
-            cumulative_reactions: HashMap::new(),
+            relationship_scores: RelationshipScores::default(),
+            reconciliation_pending: HashMap::new(),
+            tuning: Tuning::default(),
+            persona_gains: HashMap::new(),
+            stage_directions_this_turn: HashMap::new(),
+            shift_zones: ShiftZones::default(),
+            room_mood: None,
+            diagnostics: DiagnosticsCounters::default(),
+            turn_timer: TurnTimer::default(),
+            current_act: None,
+            last_scene_event_turn: None,
+            turn_scene_event: None,
+            turn_coalition: None,
+            #[cfg(test)]
+            forced_scene_event: None,
+            #[cfg(test)]
+            coalitions_forced: false,
+            #[cfg(test)]
+            random_staging_disabled: false,
             speaker_own_messages: HashMap::new(),
             dynamics_cache: HashMap::new(),
             recent_speech_acts: HashMap::new(),
+            recent_given_kinds: HashMap::new(),
             turn_focus_targets: HashSet::new(),
             previous_summary: String::new(),
             summary_stagnating: false,
@@ -345,6 +543,7 @@ impl DiscussionEngine {
             turns_without_reactions: 0,
             socratic_questions: Vec::new(),
             turn_document_contributions: Vec::new(),
+            sources_registry: Vec::new(),
             turn_search_queries: Vec::new(),
             web_searches_used_pool: 0,
             wiki_searches_used_pool: 0,
@@ -358,11 +557,31 @@ impl DiscussionEngine {
             budgets,
             default_reasoning_level: ReasoningLevel::Auto,
             show_model_reasoning: true,
+            reasoning_pace: ReasoningPace::Normal,
+            open_loops: OpenLoopRegistry::default(),
+            agendas: HashMap::new(),
+            roles,
+            crisis_dispatches: std::collections::VecDeque::new(),
+            vote_before: None,
+            vote_after: None,
+            outcome: None,
+            memory_blocks: HashMap::new(),
+            cast_blocks,
+            arbitre_system,
+            persona_memory_enabled: false,
             reasoning_failures: 0,
             period_spent_usd: 0.0,
             monthly_budget_usd: 0.0,
             budget_warning_sent: false,
             budget_exceeded_sent: false,
+            user_reply_pending: None,
+            user_has_spoken: false,
+            arbitre_recent_openings: VecDeque::new(),
+            scene_kinds_used: HashSet::new(),
+            moderation_checks: 0,
+            moderation_comments: 0,
+            step_mode: false,
+            cues_pending: 0,
         }
     }
 
@@ -411,13 +630,13 @@ impl DiscussionEngine {
     /// Resolve a configured level against provider capabilities and runtime state.
     /// `Auto` becomes `auto_fallback`; providers without distinct levels get `High`
     /// for any active level (Ollama: "let the model think").
-    fn resolve_reasoning(&self, configured: ReasoningLevel, auto_fallback: ReasoningLevel) -> ReasoningLevel {
-        let caps = self.llm.capabilities();
+    fn resolve_reasoning(&self, speaker_id: &str, configured: ReasoningLevel, auto_fallback: ReasoningLevel) -> ReasoningLevel {
+        let caps = self.llm.capabilities_for(Some(speaker_id));
         if !caps.supports_reasoning || self.reasoning_failures >= constants::REASONING_MAX_FAILURES {
             return ReasoningLevel::Off;
         }
         let level = match configured {
-            ReasoningLevel::Auto => auto_fallback,
+            ReasoningLevel::Auto => self.reasoning_pace.cap_auto(auto_fallback),
             other => other,
         };
         match level {
@@ -435,13 +654,13 @@ impl DiscussionEngine {
             .llm_params
             .reasoning_level
             .unwrap_or(self.default_reasoning_level);
-        self.resolve_reasoning(configured, ReasoningLevel::Low)
+        self.resolve_reasoning(&self.arbitre.config.id, configured, ReasoningLevel::Low)
     }
 
     /// Synthesis is long-form and benefits from deep reasoning where levels exist.
     fn synthesis_reasoning_level(&self) -> ReasoningLevel {
-        if self.llm.capabilities().reasoning_levels {
-            self.resolve_reasoning(ReasoningLevel::High, ReasoningLevel::High)
+        if self.llm.capabilities_for(Some(&self.arbitre.config.id)).reasoning_levels {
+            self.resolve_reasoning(&self.arbitre.config.id, ReasoningLevel::High, ReasoningLevel::High)
         } else {
             ReasoningLevel::Off
         }
@@ -464,7 +683,7 @@ impl DiscussionEngine {
         } else {
             ReasoningLevel::Off
         };
-        self.resolve_reasoning(configured, auto)
+        self.resolve_reasoning(&self.gladiateurs[glad_idx].config.id, configured, auto)
     }
 
     fn auto_reasoning_heuristic(&self, glad_idx: usize) -> ReasoningLevel {
@@ -489,18 +708,22 @@ impl DiscussionEngine {
                 strong_trigger = true;
             }
         }
-        let (_, dislikes) = self
-            .turn_reaction_counts
+        let dislikes = self
+            .last_reactions_received
             .get(&self.gladiateurs[glad_idx].config.id)
-            .copied()
-            .unwrap_or((0, 0));
+            .map(|t| t.dislikes)
+            .unwrap_or(0);
         if dislikes >= constants::EMOTION_CONTRADICTION_THRESHOLD {
             probability += constants::THINK_CONTRADICTED_BOOST;
             strong_trigger = true;
         }
+        // v1.20.4 — shaken since the start: think harder
+        if matches!(emotion_engine::dominant_shift(emo, &self.gladiateurs[glad_idx].initial_emotions), Some(("confiance", shift)) if shift < 0) {
+            probability += constants::THINK_SHAKEN_BOOST;
+            strong_trigger = true;
+        }
         probability = probability.min(constants::THINK_MAX_PROBABILITY);
 
-        use rand::Rng;
         if !rand::thread_rng().gen_bool(probability) {
             return ReasoningLevel::Off;
         }
@@ -522,9 +745,10 @@ impl DiscussionEngine {
         self.cancel_token = token;
     }
 
-    pub fn set_reasoning_options(&mut self, default_level: ReasoningLevel, show_model_reasoning: bool) {
+    pub fn set_reasoning_options(&mut self, default_level: ReasoningLevel, show_model_reasoning: bool, pace: ReasoningPace) {
         self.default_reasoning_level = default_level;
         self.show_model_reasoning = show_model_reasoning;
+        self.reasoning_pace = pace;
     }
 
     /// Configure the monthly spend guard (cloud providers only).
@@ -608,6 +832,27 @@ impl DiscussionEngine {
 
     pub fn set_emotion_driven(&mut self, enabled: bool) {
         self.emotion_driven = enabled;
+    }
+
+    /// Advanced tuning (v1.20): validated values from the settings (defaults = constants).
+    pub fn set_tuning(&mut self, tuning: Tuning) {
+        if tuning != Tuning::default() {
+            tracing::info!(?tuning, "Advanced tuning applied");
+        }
+        self.tuning = tuning;
+    }
+
+    /// Long memory (v1.20): recall past recaps at the start and write new ones at the end.
+    /// Step mode (v1.20.1): leaving it drops the cues received ahead.
+    pub fn set_step_mode(&mut self, enabled: bool) {
+        self.step_mode = enabled;
+        if !enabled {
+            self.cues_pending = 0;
+        }
+    }
+
+    pub fn set_persona_memory(&mut self, enabled: bool) {
+        self.persona_memory_enabled = enabled;
     }
 
     pub fn set_argument_map_enabled(&mut self, enabled: bool) {
@@ -707,6 +952,14 @@ impl DiscussionEngine {
         if let Some(dynamics) = dynamics_parser::parse_dynamics(&self.arbitre.config.system_prompt) {
             self.dynamics_cache.insert(self.arbitre.config.id.clone(), dynamics);
         }
+        // How strongly each persona feels the rule deltas (OCEAN gains, v1.17)
+        for g in &self.gladiateurs {
+            let gains = emotion_engine::gains_from_ocean(prompt_builder::parse_ocean_values(&g.config.system_prompt), &self.tuning);
+            if gains != PersonaGains::default() {
+                tracing::debug!(speaker = %g.config.name, ?gains, "Persona gains from OCEAN");
+            }
+            self.persona_gains.insert(g.config.id.clone(), gains);
+        }
 
         tracing::info!(
             provider = self.llm.kind().as_str(),
@@ -714,6 +967,9 @@ impl DiscussionEngine {
             supports_reasoning = self.llm.capabilities().supports_reasoning,
             "LLM provider ready"
         );
+
+        // Long memory (v1.20): what each persona remembers of its past discussions
+        self.recall_memories().await;
 
         // --- INTRODUCTION ---
         // Optional web + wiki search for IArbitre (forced on topic)
@@ -749,17 +1005,18 @@ impl DiscussionEngine {
                 0
             });
             let web_ctx = if global_usage < constants::TAVILY_FREE_MONTHLY_QUOTA {
-                let (ctx, _, _) = self.process_web_search(
+                let (ctx, _, _, sources) = self.process_web_search(
                     &self.arbitre.config.system_prompt,
                     &self.arbitre.config.id, &self.arbitre.config.name,
                     1, "", "", Some(vec![topic_query.clone()]),
                     &self.arbitre.config.llm_params, &channel, &[], &[],
                 ).await;
+                let arb_name = self.arbitre.config.name.clone();
+                self.register_sources(&arb_name, SourceKind::Web, sources.into_iter().map(|s| (s.title, s.url)));
                 ctx
             } else { None };
-            let wiki_ctx = self.process_wiki_search_intro(
-                &wiki_intro_query, &self.arbitre.config.id, &self.arbitre.config.name, &channel,
-            ).await;
+            let (arb_id, arb_name) = (self.arbitre.config.id.clone(), self.arbitre.config.name.clone());
+            let (wiki_ctx, _) = self.process_wiki_search_intro(&wiki_intro_query, &arb_id, &arb_name, &channel).await;
             (web_ctx, wiki_ctx)
         } else if want_web_intro {
             let global_usage = repository::get_tavily_usage(&self.db).await.unwrap_or_else(|e| {
@@ -767,19 +1024,20 @@ impl DiscussionEngine {
                 0
             });
             let web_ctx = if global_usage < constants::TAVILY_FREE_MONTHLY_QUOTA {
-                let (ctx, _, _) = self.process_web_search(
+                let (ctx, _, _, sources) = self.process_web_search(
                     &self.arbitre.config.system_prompt,
                     &self.arbitre.config.id, &self.arbitre.config.name,
                     1, "", "", Some(vec![topic_query.clone()]),
                     &self.arbitre.config.llm_params, &channel, &[], &[],
                 ).await;
+                let arb_name = self.arbitre.config.name.clone();
+                self.register_sources(&arb_name, SourceKind::Web, sources.into_iter().map(|s| (s.title, s.url)));
                 ctx
             } else { None };
             (web_ctx, None)
         } else if want_wiki_intro {
-            let wiki_ctx = self.process_wiki_search_intro(
-                &wiki_intro_query, &self.arbitre.config.id, &self.arbitre.config.name, &channel,
-            ).await;
+            let (arb_id, arb_name) = (self.arbitre.config.id.clone(), self.arbitre.config.name.clone());
+            let (wiki_ctx, _) = self.process_wiki_search_intro(&wiki_intro_query, &arb_id, &arb_name, &channel).await;
             (None, wiki_ctx)
         } else {
             (None, None)
@@ -797,21 +1055,11 @@ impl DiscussionEngine {
         // Skip RAG search when full document injection is active — the full text
         // is injected directly by the prompt builder.
         if !self.budget_for(&self.arbitre.config.id).full_document_mode {
-            // Ensure embeddings are computed (no-op if already done).
-            // Skip query entirely on failure — embed_one() inside query() would also fail.
-            let embeddings_ok = if let Some(ref mut store) = self.rag_store {
-                match store.ensure_embeddings().await {
-                    Ok(()) => true,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to compute deferred embeddings for introduction");
-                        false
-                    }
-                }
-            } else {
-                false
-            };
-
-            if embeddings_ok {
+            // Deferred embeddings (no-op if ready); without them the store answers lexically (BM25)
+            if let Some(ref mut store) = self.rag_store {
+                store.ensure_embeddings().await;
+            }
+            {
                 if let Some(ref rag_store) = self.rag_store {
                     if !rag_store.is_empty() {
                         let lang = &self.config.discussion_language;
@@ -830,12 +1078,15 @@ impl DiscussionEngine {
                                     chunk_count = chunks.len(),
                                     "RAG context injected for introduction"
                                 );
+                                let arb_name = self.arbitre.config.name.clone();
+                                let refs: Vec<(String, String)> = chunks.iter().map(rag_source_ref).collect();
                                 let _ = channel.send(ArenaEvent::RagContextInjected {
                                     speaker_id: self.arbitre.config.id.clone(),
                                     speaker_name: self.arbitre.config.name.clone(),
                                     chunks,
                                     cached: false,
                                 });
+                                self.register_sources(&arb_name, SourceKind::Rag, refs);
                                 intro_search_context = Some(match intro_search_context {
                                     Some(existing) => format!("{existing}\n\n{ctx_text}"),
                                     None => ctx_text,
@@ -867,12 +1118,13 @@ impl DiscussionEngine {
             self.budget_for(&self.arbitre.config.id),
         );
         let intro_request = LlmRequest::new(
-            &self.config.arbitre.system_prompt,
+            &self.arbitre_system,
             &intro_prompt,
             &self.config.arbitre.llm_params,
             CallKind::Introduction,
         )
         .reasoning(self.arbitre_reasoning_level())
+        .pace(self.reasoning_pace)
         .speaker(&self.arbitre.config.id);
         let ch = channel.clone();
         let arb_id = self.arbitre.config.id.clone();
@@ -895,6 +1147,7 @@ impl DiscussionEngine {
                 let _ = channel.send(ArenaEvent::MessageComplete {
                     message: msg.clone(),
                 });
+                self.remember_arbitre_opening(&content);
                 self.messages_history.push(msg);
             }
             Err(LlmError::Cancelled) => {
@@ -912,11 +1165,22 @@ impl DiscussionEngine {
         if self.llm.has_fatal_error() {
             self.record_period_usage().await;
             let _ = channel.send(ArenaEvent::Error { message: self.provider_fatal_msg() });
+            let _ = channel.send(ArenaEvent::DiagnosticsReady { diagnostics: self.diagnostics.report() });
             let _ = channel.send(ArenaEvent::DiscussionEnded);
             return;
         }
         if self.emit_usage_and_check_budget(&channel) {
             self.status = DiscussionStatus::StopRequested;
+        }
+
+        // --- HIDDEN AGENDAS (v1.19): one secret objective per gladiateur ---
+        if !self.should_stop() {
+            self.generate_agendas().await;
+        }
+        // --- STRUCTURED MODES (v1.19): the crisis dispatches, the audience's first vote ---
+        if !self.should_stop() {
+            self.generate_crisis_dispatches().await;
+            self.collect_audience_vote(VotePhase::Before, &mut cmd_rx, &channel).await;
         }
 
         // --- MAIN LOOP ---
@@ -932,6 +1196,10 @@ impl DiscussionEngine {
             self.current_turn += 1;
             self.turn_messages.clear();
             self.turn_reaction_counts.clear();
+            self.turn_audience_targets.clear();
+            self.stage_directions_this_turn.clear();
+            self.turn_timer.reset();
+            self.turn_timer.start("speakers");
 
             // UserDriven mode: force user intervention first, then gladiateurs decide to respond
             let order = if self.config.discussion_mode == DiscussionMode::UserDriven {
@@ -1066,6 +1334,9 @@ impl DiscussionEngine {
                 continue;
             }
 
+            // Dramaturgy (v1.18): act of the turn, scene event, coalition — may reorder or shorten the turn
+            let order = self.stage_turn(order, &channel).await;
+
             let speaker_names: Vec<String> = order
                 .iter()
                 .map(|idx| self.gladiateurs[*idx].config.name.clone())
@@ -1121,16 +1392,19 @@ impl DiscussionEngine {
             let mut broke_early = false;
             let total_speakers = order.len();
             for (speaker_pos, &glad_idx) in order.iter().enumerate() {
-                if self.process_commands(&mut cmd_rx, &channel).await {
+                self.process_commands(&mut cmd_rx, &channel).await;
+                // A forced stop ends the turn at once. A soft stop (v1.18) lets the
+                // remaining speakers of the turn deliver their closing statements,
+                // then the end of turn runs and the discussion moves to the synthesis.
+                // (max_turns is checked at the top of the outer loop, before incrementing)
+                if self.status == DiscussionStatus::ForceStopRequested {
                     broke_early = true;
                     break;
                 }
-                // Only check user-initiated stops mid-turn, NOT max_turns
-                // (max_turns is checked at the top of the outer loop, before incrementing)
-                if matches!(
-                    self.status,
-                    DiscussionStatus::StopRequested | DiscussionStatus::ForceStopRequested
-                ) {
+
+                // Step mode (v1.20.1): the voice may still be reading — wait for the audience's cue
+                self.await_cue(glad_idx, &mut cmd_rx, &channel).await;
+                if self.status == DiscussionStatus::ForceStopRequested || self.cancel_token.is_cancelled() {
                     broke_early = true;
                     break;
                 }
@@ -1142,20 +1416,9 @@ impl DiscussionEngine {
                     speaker_id: speaker_id.clone(),
                 });
 
-                // C.2 REACTIONS (turn > 1)
-                let mut net_reactions_given = 0i32;
-                if self.current_turn > 1 {
-                    // Snapshot reaction counts before this speaker's reactions
-                    let reaction_snapshot: HashMap<String, (u32, u32)> =
-                        self.turn_reaction_counts.clone();
+                // C.2 DEFERRED REACTIONS (turn > 1): react to the previous turn before speaking
+                if self.current_turn > 1 && self.config.features.reaction_timing == ReactionTiming::Deferred {
                     self.process_reactions(glad_idx, &channel).await;
-                    // Update cumulative reactions using only the DELTA (this speaker's reactions)
-                    net_reactions_given = self.update_cumulative_reactions(&speaker_id, &reaction_snapshot);
-                    if net_reactions_given != 0 || self.turn_reaction_counts != reaction_snapshot {
-                        let _ = channel.send(ArenaEvent::RelationshipsUpdated {
-                            edges: directive_builder::relationship_edges(&self.cumulative_reactions),
-                        });
-                    }
                 }
 
                 // C.2.5 SEARCH (web + wiki, if enabled + quotas OK)
@@ -1230,13 +1493,14 @@ impl DiscussionEngine {
                         ).await;
                         tracing::info!(speaker = %speaker_name, query = %query, "Forced first-turn web query");
                         self.gladiateurs[glad_idx].search_queries_history.push(query.clone());
-                        let (ctx, count, _) = self.process_web_search(
+                        let (ctx, count, _, sources) = self.process_web_search(
                             &search_sys, &speaker_id, &speaker_name, web_max, "", "",
                             Some(vec![query.clone()]),
                             &self.gladiateurs[glad_idx].config.llm_params, &channel,
                             &self.gladiateurs[glad_idx].search_queries_history,
                             &self.turn_search_queries,
                         ).await;
+                        self.register_sources(&speaker_name, SourceKind::Web, sources.into_iter().map(|s| (s.title, s.url)));
                         self.web_searches_used_pool += count;
                         self.forced_web_done.insert(glad_idx);
                         self.turn_search_queries.push((speaker_name.clone(), query));
@@ -1244,12 +1508,13 @@ impl DiscussionEngine {
                     } else if web_can {
                         // Phase 2: LLM decides whether to search
                         let directive = prompt_builder::default_search_directive(&lang);
-                        let (ctx, count, executed) = self.process_web_search(
+                        let (ctx, count, executed, sources) = self.process_web_search(
                             &search_sys, &speaker_id, &speaker_name, web_max, directive, &recent,
                             None, &self.gladiateurs[glad_idx].config.llm_params, &channel,
                             &self.gladiateurs[glad_idx].search_queries_history,
                             &self.turn_search_queries,
                         ).await;
+                        self.register_sources(&speaker_name, SourceKind::Web, sources.into_iter().map(|s| (s.title, s.url)));
                         self.web_searches_used_pool += count;
                         self.gladiateurs[glad_idx].search_queries_history.extend(executed.iter().cloned());
                         for q in &executed {
@@ -1386,8 +1651,22 @@ impl DiscussionEngine {
                 // directly into the prompt instead of using chunk-based search.
                 let full_doc_text = self.full_document_for(&speaker_id);
 
-                // With an active reasoning level the model reasons internally
-                // (replaces the separate in-character thought phase).
+                // Staging of the turn for this speaker (act + scene event, v1.18)
+                self.refresh_act_on_stop(&channel).await;
+                let stage = self.stage_block_for(&speaker_name);
+                let stage_ref = stage.as_ref();
+
+                // C.3 INTENTION (v1.17): the pre-speech contract, decided in character
+                // before any reasoning; its thought is the persona's private reflection.
+                let (intention, thought, intention_broken) = self.process_intention(glad_idx, search_context.as_deref(), focus.as_ref(), &channel).await;
+                if intention_broken {
+                    self.diagnostics.note_parse_failure(CallKind::Intention);
+                }
+                let loops: Vec<OpenLoop> = self.open_loops.for_speaker(&speaker_id).into_iter().cloned().collect();
+                let loop_refs: Vec<&OpenLoop> = loops.iter().collect();
+
+                // With an active reasoning level the model reasons internally on top
+                // of the intention (the native reasoning keeps the display priority).
                 let (thought, content, thought_kind) = if reasoning.is_active() {
                     tracing::info!(
                         speaker = %speaker_name,
@@ -1396,26 +1675,31 @@ impl DiscussionEngine {
                         "Using model reasoning for intervention"
                     );
                     let (shown_reasoning, c) = self
-                        .process_intervention(glad_idx, None, search_context.as_deref(), dynamic_directive.as_deref(), full_doc_text.as_deref(), reasoning, focus.as_ref(), &channel)
+                        .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), full_doc_text.as_deref(), reasoning, focus.as_ref(), intention.as_ref(), &loop_refs, stage_ref, &channel)
                         .await;
                     if c.is_none() {
-                        // Reasoning produced nothing usable — fall back to the classic path
+                        // Reasoning produced nothing usable — plain intervention with the same contract
                         self.note_reasoning_failure(&speaker_name);
-                        let thought = self.process_thought(glad_idx, search_context.as_deref(), &channel).await;
                         let (_, content) = self
-                            .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), full_doc_text.as_deref(), ReasoningLevel::Off, focus.as_ref(), &channel)
+                            .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), full_doc_text.as_deref(), ReasoningLevel::Off, focus.as_ref(), intention.as_ref(), &loop_refs, stage_ref, &channel)
                             .await;
                         (thought, content, ThoughtKind::Persona)
                     } else {
-                        (shown_reasoning, c, ThoughtKind::Reasoning)
+                        (shown_reasoning.or(thought), c, ThoughtKind::Reasoning)
                     }
                 } else {
-                    let thought = self.process_thought(glad_idx, search_context.as_deref(), &channel).await;
                     let (_, content) = self
-                        .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), full_doc_text.as_deref(), ReasoningLevel::Off, focus.as_ref(), &channel)
+                        .process_intervention(glad_idx, thought.as_deref(), search_context.as_deref(), dynamic_directive.as_deref(), full_doc_text.as_deref(), ReasoningLevel::Off, focus.as_ref(), intention.as_ref(), &loop_refs, stage_ref, &channel)
                         .await;
                     (thought, content, ThoughtKind::Persona)
                 };
+                if let Some(text) = &content {
+                    self.settle_open_loops(glad_idx, intention.as_ref());
+                    // Intention compliance: the declared target must be named in the spoken text (case-insensitive)
+                    if let Some(target) = intention.as_ref().and_then(|i| i.target.as_deref()) {
+                        self.diagnostics.note_intention(crate::engine::json_parser::mentions_name(text, target));
+                    }
+                }
 
                 if let Some(text) = &content {
                     // Defense in depth: strip any <document> tags the LLM may have generated
@@ -1450,7 +1734,7 @@ impl DiscussionEngine {
                         .entry(speaker_id.clone())
                         .or_default();
                     own_msgs.push(discussion_text.clone());
-                    if own_msgs.len() > 2 {
+                    if own_msgs.len() > constants::SELF_MEMORY_MESSAGES {
                         own_msgs.remove(0);
                     }
 
@@ -1469,7 +1753,7 @@ impl DiscussionEngine {
                 }
 
                 // C.5 EMOTION UPDATE (rule-based, instant)
-                self.update_emotions(glad_idx, net_reactions_given, &channel);
+                self.update_emotions(glad_idx, &channel);
 
                 // C.6 MODERATION
                 if let Some(text) = &content {
@@ -1477,6 +1761,17 @@ impl DiscussionEngine {
                     // Update arbitre emotions based on moderation outcome
                     let ban_issued = self.gladiateurs[glad_idx].ban_issued_this_turn;
                     self.update_arbitre_emotions(ban_issued, &channel);
+                    // The audience's message has had its answer (the moderator saw whether it was ignored)
+                    if self.user_reply_pending.take().is_some() {
+                        tracing::info!(speaker = %speaker_name, turn = self.current_turn, "Audience message answered (or at least addressed)");
+                    }
+                }
+
+                // C.6.5 IMMEDIATE REACTIONS: everyone else reacts to what was just said
+                if content.is_some() {
+                    if let Some(last) = self.turn_messages.iter().rev().find(|m| m.speaker_id == speaker_id && m.kind == MessageKind::Normal).cloned() {
+                        self.process_reaction_round(&last, &channel).await;
+                    }
                 }
 
                 // C.7 MID-TURN OPPORTUNISTIC USER INTERVENTION
@@ -1519,25 +1814,17 @@ impl DiscussionEngine {
             // E. END OF TURN — document + emotion analysis + contagion + history + memory update
             // All sequential because they mutate &mut self
 
-            // E.0 Co-construction document: one integration call for the whole turn
-            self.update_document_for_turn(&channel).await;
-
-            // E.1 LLM emotion analysis (1 call for ALL participants)
-            self.analyze_emotions_llm(&channel).await;
-
-            // E.2 Emotional contagion (order-independent)
-            self.apply_emotional_contagion(&channel);
-
-            // E.3 Snapshot history + emit EmotionHistoryUpdate
-            self.record_emotion_history(&channel);
-
-            // E.4 Memory update (existing) — also refreshes the summary-based stagnation signal
-            self.update_memory_all().await;
+            // E.0/E.1/E.4/E.5 — document, emotions, memory and argument map: the LLM
+            // calls run together (bounded by the provider), the results are applied
+            // in the historical order (v1.17). Contagion, room mood, decay and the
+            // history snapshot slot in between exactly as before.
+            self.turn_timer.start("endOfTurn");
+            self.run_end_of_turn_calls(&channel).await;
 
             // Reaction drought (turn ≥ 2 without a single like/dislike). Only a
             // signal when reactions are possible at all: a lone active gladiateur
             // has nobody to react to.
-            let any_reaction = self.turn_reaction_counts.values().any(|(l, d)| *l + *d > 0);
+            let any_reaction = self.turn_reaction_counts.values().any(|t| !t.is_empty());
             let reactions_possible = turn_manager::active_count(&self.gladiateurs) >= 2;
             self.turns_without_reactions = if self.current_turn > 1 && reactions_possible && !any_reaction {
                 self.turns_without_reactions + 1
@@ -1545,23 +1832,22 @@ impl DiscussionEngine {
                 0
             };
 
-            // E.5 Argument map extraction (if enabled)
-            if self.argument_map_enabled {
-                self.extract_and_merge_arguments(&channel).await;
-            }
-
             // Decrement bans
             let unbanned = turn_manager::decrement_bans(&mut self.gladiateurs);
             for (id, name) in unbanned {
                 let _ = channel.send(ArenaEvent::BanLifted {
-                    speaker_id: id,
+                    speaker_id: id.clone(),
                     speaker_name: name.clone(),
                 });
                 let lifted_text = self.ban_lifted_msg(&name);
                 self.emit_ban_notification(&lifted_text, &channel);
+                self.emit_stage_direction(&id, StageCue::Returned, &channel);
             }
 
             self.user_intervention_handled = false;
+            let timings = self.turn_timer.finish(self.current_turn);
+            tracing::info!(turn = timings.turn, phases = ?timings.phases, "Turn timings");
+            let _ = channel.send(ArenaEvent::TurnTimings { timings });
             if self.emit_usage_and_check_budget(&channel) {
                 self.status = DiscussionStatus::StopRequested;
             }
@@ -1573,22 +1859,45 @@ impl DiscussionEngine {
         if self.cancel_token.is_cancelled() {
             self.cancel_token = CancellationToken::new();
         }
+        // --- MODE OUTCOME (v1.19): the audience's last vote, the verdict or the agreement ---
+        if self.status != DiscussionStatus::ForceStopRequested {
+            self.collect_audience_vote(VotePhase::After, &mut cmd_rx, &channel).await;
+        }
+        if !self.llm.has_fatal_error() {
+            self.outcome = self.resolve_outcome().await;
+            if let Some(outcome) = &self.outcome {
+                tracing::info!(?outcome, "Mode outcome");
+                let _ = channel.send(ArenaEvent::OutcomeReady { outcome: outcome.clone() });
+            }
+        }
         tracing::info!(
             discussion_id = %self.discussion_id,
             status = ?self.status,
             turns_completed = self.current_turn,
             "Starting synthesis generation"
         );
-        if self.llm.has_fatal_error() {
+        let summary = if self.llm.has_fatal_error() {
             tracing::warn!(discussion_id = %self.discussion_id, "Skipping synthesis after a fatal provider error");
             let _ = channel.send(ArenaEvent::SynthesisComplete { summary: String::new() });
+            String::new()
         } else {
-            self.generate_synthesis(None, &channel).await;
+            let summary = self.generate_synthesis(&channel).await;
             tracing::info!(discussion_id = %self.discussion_id, "Synthesis generation complete");
+            summary
+        };
+        // The secret agendas come to light once the moderator has judged them (v1.19)
+        let agendas = self.agenda_reveals(&summary);
+        if !agendas.is_empty() {
+            let _ = channel.send(ArenaEvent::AgendaRevealed { agendas });
         }
+        // Long memory (v1.20): what each persona keeps of this discussion
+        self.write_recaps(&channel).await;
         self.emit_usage_and_check_budget(&channel);
         self.record_period_usage().await;
 
+        let diagnostics = self.diagnostics.report();
+        tracing::info!(?diagnostics, "Discussion diagnostics");
+        let _ = channel.send(ArenaEvent::DiagnosticsReady { diagnostics });
         let _ = channel.send(ArenaEvent::DiscussionEnded);
         tracing::info!("Discussion engine ended: {}", self.discussion_id);
     }
@@ -1637,6 +1946,14 @@ impl DiscussionEngine {
                 EngineCommand::AdjustEmotion { speaker_id, axis, value } => {
                     self.handle_adjust_emotion(&speaker_id, &axis, value, channel);
                 }
+                EngineCommand::AudienceReaction { message_id, reaction_type } => {
+                    self.handle_audience_reaction(&message_id, reaction_type, channel);
+                }
+                EngineCommand::AudienceVote { choice } => {
+                    tracing::info!(choice, turn = self.current_turn, "Audience vote outside a voting window — ignored");
+                }
+                EngineCommand::SetStepMode { enabled } => self.set_step_mode(enabled),
+                EngineCommand::NextSpeaker => self.cues_pending += 1,
                 _ => {} // SubmitUserMessage/SkipUserTurn handled elsewhere
             }
         }
@@ -1658,6 +1975,11 @@ impl DiscussionEngine {
                         self.status = DiscussionStatus::ForceStopRequested;
                         return true;
                     }
+                    Some(EngineCommand::AudienceReaction { message_id, reaction_type }) => {
+                        self.handle_audience_reaction(&message_id, reaction_type, channel);
+                    }
+                    Some(EngineCommand::SetStepMode { enabled }) => self.set_step_mode(enabled),
+                    Some(EngineCommand::NextSpeaker) => self.cues_pending += 1,
                     Some(_) => {}
                     None => return true,
                 }
@@ -1666,194 +1988,362 @@ impl DiscussionEngine {
         false
     }
 
+    /// Deferred timing (v1.16): the speaker reacts to the previous turn just before speaking.
     async fn process_reactions(&mut self, glad_idx: usize, channel: &Channel<ArenaEvent>) {
         let speaker_name = self.gladiateurs[glad_idx].config.name.clone();
         let speaker_id = self.gladiateurs[glad_idx].config.id.clone();
-        let prev_msgs: Vec<&Message> = self
+        let prev_msgs: Vec<Message> = self
             .messages_history
             .iter()
             .filter(|m| {
                 m.turn_number == self.current_turn - 1
                     && m.speaker_id != speaker_id
                     && m.role != SpeakerRole::Arbitre
+                    && m.kind == MessageKind::Normal
             })
+            .cloned()
             .collect();
 
         if prev_msgs.is_empty() {
-            tracing::info!(
-                speaker = %speaker_name,
-                turn = self.current_turn,
-                "No previous turn messages found for reactions"
-            );
+            tracing::info!(speaker = %speaker_name, turn = self.current_turn, "No previous turn messages found for reactions");
             return;
         }
 
-        let known: Vec<String> = self.gladiateurs.iter().map(|g| g.config.name.clone()).collect();
-        let prev_interventions: Vec<(String, String)> = prev_msgs
-            .iter()
-            .map(|m| (m.speaker_name.clone(), m.content.clone()))
+        let request = self.reaction_request(glad_idx, &prev_msgs, ReactionScope::PreviousTurn);
+        let raw = match self.chat_text(&request).await {
+            Ok(raw) => raw,
+            Err(e) => {
+                tracing::warn!(speaker = %speaker_name, error = %e, "Reaction LLM call failed");
+                return;
+            }
+        };
+        let applied = self.apply_parsed_reactions(glad_idx, &raw, &prev_msgs, channel);
+        if applied > 0 {
+            self.emit_relationships(channel);
+        }
+    }
+
+    /// Immediate timing: every other active gladiateur reacts to the message that
+    /// just ended (parallel when the provider allows it), then the target feels it.
+    async fn process_reaction_round(&mut self, message: &Message, channel: &Channel<ArenaEvent>) {
+        if self.config.features.reaction_timing != ReactionTiming::Immediate || self.cancel_token.is_cancelled() {
+            return;
+        }
+        let reactors: Vec<usize> = (0..self.gladiateurs.len())
+            .filter(|&i| !self.gladiateurs[i].is_banned() && self.gladiateurs[i].config.id != message.speaker_id)
             .collect();
-        let prompt =
-            prompt_builder::build_reaction_prompt(&prev_interventions, &self.config.discussion_language, &self.config.discussion_mode);
-        let request = LlmRequest::new(
+        if reactors.is_empty() {
+            return;
+        }
+        let targets = vec![message.clone()];
+        let requests: Vec<(usize, LlmRequest)> = reactors
+            .iter()
+            .map(|&i| (i, self.reaction_request(i, &targets, ReactionScope::LastIntervention)))
+            .collect();
+        let llm: Arc<dyn LlmProvider> = self.llm.clone();
+        let cancel = self.cancel_token.clone();
+        let futures = requests.into_iter().map(|(i, req)| {
+            let llm = Arc::clone(&llm);
+            let cancel = cancel.clone();
+            async move { (i, llm.chat(&req, cancel).await.map(|r| r.content)) }
+        });
+        let limit = self.llm.capabilities().max_parallel_calls;
+        let results = run_bounded(futures.collect(), limit).await;
+
+        let before = self.turn_reaction_counts.get(&message.speaker_id).copied().unwrap_or_default();
+        let mut applied = 0usize;
+        for (i, result) in results {
+            match result {
+                Ok(raw) => applied += self.apply_parsed_reactions(i, &raw, &targets, channel),
+                Err(LlmError::Cancelled) => return,
+                Err(e) => tracing::warn!(speaker = %self.gladiateurs[i].config.name, error = %e, "Reaction LLM call failed"),
+            }
+        }
+        if applied == 0 {
+            return;
+        }
+        // The target feels the round right away (rule effects on what was just received)
+        let after = self.turn_reaction_counts.get(&message.speaker_id).copied().unwrap_or_default();
+        let round = after.since(&before);
+        self.apply_received_to_speaker(&message.speaker_id, &round, channel);
+        self.emit_relationships(channel);
+    }
+
+    /// Current reaction graph (kinds, scores, trends) for the UI.
+    fn emit_relationships(&mut self, channel: &Channel<ArenaEvent>) {
+        let edges = self.relationship_scores.edges(&self.tuning);
+        let _ = channel.send(ArenaEvent::RelationshipsUpdated { edges });
+    }
+
+    /// One theatre line about `subject_id` (gladiateur or moderator), emotion-driven
+    /// only, at most `STAGE_DIRECTIONS_PER_SPEAKER_PER_TURN` per speaker and turn.
+    /// Shown in the feed and persisted by the frontend; never part of the prompts.
+    fn emit_stage_direction(&mut self, subject_id: &str, cue: StageCue<'_>, channel: &Channel<ArenaEvent>) {
+        if !self.emotion_driven {
+            return;
+        }
+        let shown = self.stage_directions_this_turn.entry(subject_id.to_string()).or_insert(0);
+        if *shown >= constants::STAGE_DIRECTIONS_PER_SPEAKER_PER_TURN {
+            return;
+        }
+        let (name, role) = if subject_id == self.arbitre.config.id {
+            (self.arbitre.config.name.clone(), SpeakerRole::Arbitre)
+        } else if let Some(g) = self.gladiateurs.iter().find(|g| g.config.id == subject_id) {
+            (g.config.name.clone(), SpeakerRole::Gladiateur)
+        } else {
+            return;
+        };
+        *shown += 1;
+        let line = stage_directions::describe(&name, cue, self.dynamics_cache.get(subject_id), &self.config.discussion_language);
+        let mut msg = self.create_message(subject_id, &name, role, &line);
+        msg.kind = MessageKind::StageDirection;
+        tracing::info!(subject = %name, line = %line, "Stage direction");
+        let _ = channel.send(ArenaEvent::MessageComplete { message: msg });
+    }
+
+    /// Temperature of the room from the active gladiateurs (none below two):
+    /// remembered for the moderator and emitted for the UI.
+    fn emit_room_mood(&mut self, channel: &Channel<ArenaEvent>) {
+        let profiles: Vec<&EmotionalProfile> = self.gladiateurs.iter().filter(|g| !g.is_banned()).map(|g| &g.emotions).collect();
+        let Some((avg, label)) = emotion_engine::room_mood(&profiles) else {
+            self.room_mood = None;
+            return;
+        };
+        self.room_mood = Some(label);
+        let _ = channel.send(ArenaEvent::RoomMoodUpdated { avg, label });
+    }
+
+    /// JSON reaction request of a gladiateur about `targets` (persona-aware, with their propensity).
+    fn reaction_request(&self, glad_idx: usize, targets: &[Message], scope: ReactionScope) -> LlmRequest {
+        let interventions: Vec<(String, String)> = targets.iter().map(|m| (m.speaker_name.clone(), m.content.clone())).collect();
+        let propensity = ReactionPropensity::from_ocean(prompt_builder::parse_ocean_values(&self.gladiateurs[glad_idx].config.system_prompt));
+        let prompt = prompt_builder::build_reaction_prompt(
+            &interventions,
+            &self.config.discussion_language,
+            &self.config.discussion_mode,
+            scope,
+            propensity.as_ref(),
+            self.insightful_credit(&self.gladiateurs[glad_idx].config.id),
+        );
+        LlmRequest::new(
             &self.gladiateurs[glad_idx].config.system_prompt,
             &prompt,
             &self.gladiateurs[glad_idx].config.llm_params,
             CallKind::Reaction,
         )
         .json()
-        .speaker(&speaker_id);
+        .speaker(&self.gladiateurs[glad_idx].config.id)
+    }
 
-        match self.chat_text(&request).await {
-            Ok(raw) => {
-                let end = raw.floor_char_boundary(300);
-                tracing::info!(
-                    speaker = %speaker_name,
-                    raw_len = raw.len(),
-                    raw_preview = %&raw[..end],
-                    "Reaction LLM response"
-                );
-                let reactions = json_parser::parse_reactions(&raw, &known);
-                if reactions.is_empty() {
-                    tracing::warn!(
-                        speaker = %speaker_name,
-                        "No valid reactions parsed from response"
-                    );
-                }
-                for parsed in reactions {
-                    // Skip self-reactions (by name — handles duplicate gladiateur names)
-                    if parsed.speaker_name.to_lowercase().trim() == speaker_name.to_lowercase().trim() {
-                        tracing::debug!(
-                            speaker = %speaker_name,
-                            "Skipped self-reaction"
-                        );
-                        continue;
-                    }
-                    if let Some(target) = prev_msgs
-                        .iter()
-                        .find(|m| m.speaker_name.to_lowercase().trim() == parsed.speaker_name.to_lowercase().trim())
-                    {
-                        tracing::info!(
-                            from = %speaker_name,
-                            to = %target.speaker_name,
-                            reaction = ?parsed.reaction_type,
-                            "Reaction emitted"
-                        );
-                        // Track reaction counts for the emotion system
-                        let target_speaker_id = target.speaker_id.clone();
-                        let entry = self.turn_reaction_counts
-                            .entry(target_speaker_id)
-                            .or_insert((0, 0));
-                        match &parsed.reaction_type {
-                            ReactionType::Like => entry.0 += 1,
-                            ReactionType::Dislike => entry.1 += 1,
-                        }
+    /// Whether `reactor_id` may still single out a strong point: none of its last
+    /// `INSIGHTFUL_CREDIT_WINDOW` reactions was a 💡 (v1.20.5).
+    fn insightful_credit(&self, reactor_id: &str) -> bool {
+        self.recent_given_kinds.get(reactor_id).is_none_or(|kinds| !kinds.contains(&ReactionType::Insightful))
+    }
 
-                        let reaction_event = ArenaEvent::ReactionEmitted {
-                            message_id: target.id.clone(),
-                            reaction: Reaction {
-                                from_speaker_id: self.gladiateurs[glad_idx].config.id.clone(),
-                                from_speaker_name: self.gladiateurs[glad_idx].config.name.clone(),
-                                reaction_type: parsed.reaction_type,
-                                target_message_id: target.id.clone(),
-                                justification: parsed.justification.clone(),
-                            },
-                        };
-                        // DEBUG: log exact JSON to verify serialization matches frontend expectations
-                        if let Ok(json) = serde_json::to_string(&reaction_event) {
-                            tracing::info!(json = %json, "ReactionEmitted JSON payload");
-                        }
-                        if let Err(e) = channel.send(reaction_event) {
-                            tracing::error!(
-                                from = %speaker_name,
-                                to = %target.speaker_name,
-                                target_msg_id = %target.id,
-                                error = %e,
-                                "Failed to send ReactionEmitted event via channel"
-                            );
-                        }
-                    } else {
-                        tracing::warn!(
-                            from = %speaker_name,
-                            parsed_name = %parsed.speaker_name,
-                            "Reaction target not found in previous messages"
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    speaker = %speaker_name,
-                    error = %e,
-                    "Reaction LLM call failed"
-                );
-            }
+    /// Remember a colour a gladiateur gave, within the credit window.
+    fn note_given_kind(&mut self, reactor_id: &str, kind: ReactionType) {
+        let kinds = self.recent_given_kinds.entry(reactor_id.to_string()).or_default();
+        kinds.push_back(kind);
+        while kinds.len() > constants::INSIGHTFUL_CREDIT_WINDOW {
+            kinds.pop_front();
         }
     }
 
-    /// Update cumulative reactions from only the DELTA added by the current speaker.
-    /// `before` is a snapshot of `turn_reaction_counts` taken before `process_reactions()`.
-    /// Returns the net reactions given (likes − dislikes) — drives the speaker's `accord`.
-    fn update_cumulative_reactions(
-        &mut self,
-        speaker_id: &str,
-        before: &HashMap<String, (u32, u32)>,
-    ) -> i32 {
-        let mut net = 0i32;
-        for (target_id, &(total_likes, total_dislikes)) in &self.turn_reaction_counts {
-            let (prev_likes, prev_dislikes) =
-                before.get(target_id).copied().unwrap_or((0, 0));
-            let new_likes = total_likes.saturating_sub(prev_likes);
-            let new_dislikes = total_dislikes.saturating_sub(prev_dislikes);
-            if new_likes > 0 || new_dislikes > 0 {
-                let entry = self
-                    .cumulative_reactions
-                    .entry((speaker_id.to_string(), target_id.clone()))
-                    .or_insert((0, 0));
-                entry.0 += new_likes;
-                entry.1 += new_dislikes;
-                net += new_likes as i32 - new_dislikes as i32;
-            }
+    /// Parse a reactor's JSON and apply every valid reaction to the matching target
+    /// message. Returns how many were applied.
+    fn apply_parsed_reactions(&mut self, glad_idx: usize, raw: &str, targets: &[Message], channel: &Channel<ArenaEvent>) -> usize {
+        let reactor_name = self.gladiateurs[glad_idx].config.name.clone();
+        let reactor_id = self.gladiateurs[glad_idx].config.id.clone();
+        let known: Vec<String> = targets.iter().map(|m| m.speaker_name.clone()).collect();
+        tracing::info!(speaker = %reactor_name, raw_len = raw.len(), raw_preview = %truncate_str(raw, 300), "Reaction LLM response");
+        let parsed = json_parser::parse_reactions(raw, &known);
+        if parsed.is_empty() {
+            tracing::info!(speaker = %reactor_name, "No reaction parsed (silence or invalid JSON)");
+            return 0;
         }
-        net
+        let allowed = reactions::allowed_reaction_types(&self.config.discussion_mode);
+        let mut applied = 0;
+        for p in parsed {
+            // Skip self-reactions (by name — handles duplicate gladiateur names)
+            if p.speaker_name.eq_ignore_ascii_case(reactor_name.trim()) {
+                continue;
+            }
+            if !allowed.contains(&p.reaction_type) {
+                tracing::debug!(speaker = %reactor_name, kind = p.reaction_type.as_str(), "Reaction colour not allowed in this mode — skipped");
+                continue;
+            }
+            let Some(target) = targets.iter().find(|m| m.speaker_name.eq_ignore_ascii_case(p.speaker_name.trim())) else {
+                tracing::warn!(from = %reactor_name, parsed_name = %p.speaker_name, "Reaction target not found");
+                continue;
+            };
+            // v1.20.5 — a 💡 beyond the credit is recorded as the approval it also is
+            let kind = if p.reaction_type == ReactionType::Insightful && !self.insightful_credit(&reactor_id) {
+                tracing::info!(from = %reactor_name, to = %target.speaker_name, "Insightful credit spent — recorded as a like");
+                ReactionType::Like
+            } else {
+                p.reaction_type
+            };
+            self.note_given_kind(&reactor_id, kind);
+            let reaction = Reaction {
+                from_speaker_id: reactor_id.clone(),
+                from_speaker_name: reactor_name.clone(),
+                reaction_type: kind,
+                target_message_id: target.id.clone(),
+                justification: p.justification.clone(),
+                quote: super::validated_quote(&target.content, p.quote.as_deref()),
+            };
+            self.apply_reaction(Some(glad_idx), target, reaction, channel);
+            applied += 1;
+        }
+        applied
     }
 
-    /// Relationship hints (ally / rival / tense) of a speaker, from cumulative reactions.
+    /// Record one reaction on `target`: engine-side message copies, per-turn and
+    /// last-message tallies, the reaction graph (gladiateurs only), the reactor's
+    /// own emotions, and the frontend event. The target's emotions are applied by
+    /// the caller (deferred: at their next intervention; immediate: after the round).
+    fn apply_reaction(&mut self, reactor_idx: Option<usize>, target: &Message, reaction: Reaction, channel: &Channel<ArenaEvent>) {
+        tracing::info!(from = %reaction.from_speaker_name, to = %target.speaker_name, reaction = reaction.reaction_type.as_str(), "Reaction emitted");
+        for list in [&mut self.turn_messages, &mut self.messages_history] {
+            if let Some(m) = list.iter_mut().find(|m| m.id == target.id) {
+                m.reactions.push(reaction.clone());
+            }
+        }
+        self.turn_reaction_counts.entry(target.speaker_id.clone()).or_default().add(reaction.reaction_type);
+        self.last_reactions_received.entry(target.speaker_id.clone()).or_default().add(reaction.reaction_type);
+        if reaction.reaction_type == ReactionType::Question && target.role == SpeakerRole::Gladiateur {
+            if let Some(text) = reaction.justification.as_deref().or(reaction.quote.as_deref()) {
+                self.open_loops.push(&target.speaker_id, OpenLoop::new(OpenLoopKind::Question, text, &reaction.from_speaker_name, self.current_turn));
+            }
+        }
+        if let Some(i) = reactor_idx {
+            let kind = reaction.reaction_type;
+            if !kind.is_neutral() {
+                let (from, to) = (reaction.from_speaker_id.as_str(), target.speaker_id.as_str());
+                let before = self.relationship_scores.classify_pair(from, to, &self.tuning);
+                self.relationship_scores.record(from, to, kind.is_positive());
+                let after = self.relationship_scores.classify_pair(from, to, &self.tuning);
+                if before != after {
+                    let _ = channel.send(ArenaEvent::RelationshipShift {
+                        a: from.to_string(),
+                        b: to.to_string(),
+                        from: before.map_or("none", |k| k.as_str()).to_string(),
+                        to: after.map_or("none", |k| k.as_str()).to_string(),
+                    });
+                    // A rival who approves: reconciliation — the receiver may acknowledge it once
+                    if before == Some(RelationshipKind::Rival) && kind.is_positive() {
+                        let (reactor_name, target_name, target_id) = (reaction.from_speaker_name.clone(), target.speaker_name.clone(), target.speaker_id.clone());
+                        let reactor_id = reaction.from_speaker_id.clone();
+                        self.reconciliation_pending.insert(target_id, reactor_name.clone());
+                        self.emit_stage_direction(&reactor_id, StageCue::Reconciled { with: &target_name }, channel);
+                    }
+                }
+            }
+            let mut given = GivenReactions::default();
+            given.add(kind);
+            let prev = self.gladiateurs[i].emotions.clone();
+            emotion_engine::apply_given_reactions(&mut self.gladiateurs[i].emotions, &given);
+            if self.gladiateurs[i].emotions != prev {
+                let sid = self.gladiateurs[i].config.id.clone();
+                let current = self.gladiateurs[i].emotions.clone();
+                self.emit_threshold_events(channel, &sid, &prev, &current);
+                Self::emit_emotion_updated(channel, &sid, &current, &self.config.discussion_language);
+            }
+        }
+        let _ = channel.send(ArenaEvent::ReactionEmitted { message_id: target.id.clone(), reaction });
+    }
+
+    /// Rule effects of reactions RECEIVED on a participant (gladiateur or moderator; no-op for the user).
+    fn apply_received_to_speaker(&mut self, speaker_id: &str, tally: &ReactionTally, channel: &Channel<ArenaEvent>) {
+        if tally.is_empty() {
+            return;
+        }
+        let gains = self.persona_gains.get(speaker_id).copied().unwrap_or_default();
+        let emotions = if speaker_id == self.arbitre.config.id {
+            &mut self.arbitre.emotions
+        } else if let Some(g) = self.gladiateurs.iter_mut().find(|g| g.config.id == speaker_id) {
+            &mut g.emotions
+        } else {
+            return;
+        };
+        let prev = emotions.clone();
+        emotion_engine::apply_received_reactions(emotions, tally, &gains);
+        let current = emotions.clone();
+        self.emit_threshold_events(channel, speaker_id, &prev, &current);
+        Self::emit_emotion_updated(channel, speaker_id, &current, &self.config.discussion_language);
+    }
+
+    /// The audience (the user) reacts to a message: capped per message, felt by the
+    /// target right away, and the room's interest nudges the next speakers' focus.
+    fn handle_audience_reaction(&mut self, message_id: &str, kind: ReactionType, channel: &Channel<ArenaEvent>) {
+        if !self.config.features.audience_reactions {
+            tracing::info!("Audience reaction ignored: feature disabled for this discussion");
+            return;
+        }
+        let Some(target) = self.messages_history.iter().find(|m| m.id == message_id && m.kind == MessageKind::Normal && m.role != SpeakerRole::User).cloned() else {
+            tracing::warn!(message_id, "Audience reaction on an unknown or non-reactable message — ignored");
+            return;
+        };
+        let given = self.audience_reactions_by_message.entry(target.id.clone()).or_insert(0);
+        if *given >= constants::AUDIENCE_REACTIONS_PER_MESSAGE_MAX {
+            tracing::info!(message_id, "Audience reaction cap reached for this message — ignored");
+            return;
+        }
+        *given += 1;
+        let reaction = Reaction {
+            from_speaker_id: constants::USER_SPEAKER_ID.to_string(),
+            from_speaker_name: self.config.user_name.clone(),
+            reaction_type: kind,
+            target_message_id: target.id.clone(),
+            justification: None,
+            quote: None,
+        };
+        self.apply_reaction(None, &target, reaction, channel);
+        let mut tally = ReactionTally::default();
+        tally.add(kind);
+        self.apply_received_to_speaker(&target.speaker_id, &tally, channel);
+        self.turn_audience_targets.insert(target.speaker_name.clone());
+    }
+
+    /// Relationship hints (ally / rival / tense) of a speaker, from the weighted reaction graph.
     fn relationships_for(&self, glad_idx: usize) -> Vec<directive_builder::RelationshipHint> {
         let speaker_id = &self.gladiateurs[glad_idx].config.id;
-        let pairs = |from_me: bool| -> Vec<(String, String, u32, u32)> {
-            self.gladiateurs
-                .iter()
-                .filter(|g| g.config.id != *speaker_id)
-                .filter_map(|g| {
-                    let key = if from_me {
-                        (speaker_id.clone(), g.config.id.clone())
-                    } else {
-                        (g.config.id.clone(), speaker_id.clone())
-                    };
-                    self.cumulative_reactions
-                        .get(&key)
-                        .map(|(l, d)| (g.config.id.clone(), g.config.name.clone(), *l, *d))
-                })
-                .collect()
-        };
-        directive_builder::build_relationships(&pairs(true), &pairs(false))
+        self.gladiateurs
+            .iter()
+            .filter(|g| g.config.id != *speaker_id)
+            .filter_map(|g| {
+                self.relationship_scores
+                    .classify_pair(speaker_id, &g.config.id, &self.tuning)
+                    .map(|kind| directive_builder::RelationshipHint { other_name: g.config.name.clone(), kind, lean: self.relationship_scores.lean_of(speaker_id, &g.config.id) })
+            })
+            .collect()
     }
 
     /// Draw who this speaker should address (turns ≥ 2, non-fiction) and record
     /// the target so the next speakers of the turn favour someone else.
     fn pick_focus(&mut self, glad_idx: usize) -> Option<Focus> {
         // Fiction is a relay (no addressee); UserDriven answers the user's direction.
-        if self.current_turn < 2
-            || matches!(self.config.discussion_mode, DiscussionMode::CollaborativeFiction | DiscussionMode::UserDriven)
-        {
+        if matches!(self.config.discussion_mode, DiscussionMode::CollaborativeFiction | DiscussionMode::UserDriven) {
+            return None;
+        }
+        // The audience member who just spoke is answered first, whatever the turn (v1.20.2)
+        if self.user_reply_pending.is_some() {
+            let user = self.config.user_name.clone();
+            self.turn_focus_targets.insert(user.clone());
+            return Some(Focus::Speaker(user));
+        }
+        if self.current_turn < 2 {
             return None;
         }
         let speaker_id = &self.gladiateurs[glad_idx].config.id;
+        let user_spoke_this_turn = self.turn_messages.iter().any(|m| m.role == SpeakerRole::User);
         let candidates: Vec<String> = self.gladiateurs
             .iter()
             .filter(|g| g.config.id != *speaker_id && !g.is_banned())
             .map(|g| g.config.name.clone())
+            // Once they spoke this turn, the audience member is a candidate like the others
+            .chain(user_spoke_this_turn.then(|| self.config.user_name.clone()))
             .collect();
         let prev_turn = self.current_turn - 1;
         let spoke_previous_turn: HashSet<String> = self.messages_history
@@ -1876,6 +2366,7 @@ impl DiscussionEngine {
             spoke_this_turn: &spoke_this_turn,
             targeted_this_turn: &self.turn_focus_targets,
             related: &related,
+            audience_favoured: &self.turn_audience_targets,
         });
         let drawn = focus::draw_focus(&weights, &mut rand::thread_rng());
         if let Some(name) = drawn.speaker_name() {
@@ -1929,6 +2420,7 @@ impl DiscussionEngine {
         let is_first_speaker_this_turn = speakers_this_turn.is_empty();
         let ctx = SpeakerTurnContext {
             emotions: self.gladiateurs[glad_idx].emotions.clone(),
+            baseline: self.gladiateurs[glad_idx].initial_emotions.clone(),
             relationships,
             own_previous_messages: self.speaker_own_messages
                 .get(speaker_id)
@@ -1953,6 +2445,11 @@ impl DiscussionEngine {
             focus,
             recent_speech_acts: self.recent_speech_acts.get(speaker_id).cloned().unwrap_or_default(),
             opening_author,
+            reconciliation_with: self.reconciliation_pending.remove(speaker_id),
+            coalition: self.coalition_role_for(speaker_id),
+            unanswered_objection: self.unanswered_objection_for(speaker_id),
+            audience_message: self.user_reply_pending.clone(),
+            user_has_spoken: self.user_has_spoken,
         };
 
         let output = directive_builder::build_dynamic_directive(&ctx);
@@ -2031,16 +2528,59 @@ impl DiscussionEngine {
         recent
     }
 
-    async fn process_thought(
+    /// Other participants a speaker may address: active gladiateurs, plus the
+    /// user when they spoke this turn. Nobody in fiction (a relay has no addressee).
+    fn addressable_names(&self, glad_idx: usize) -> Vec<String> {
+        if self.config.discussion_mode == DiscussionMode::CollaborativeFiction {
+            return Vec::new();
+        }
+        let mut names: Vec<String> = self.gladiateurs
+            .iter()
+            .enumerate()
+            .filter(|(i, g)| *i != glad_idx && !g.is_banned())
+            .map(|(_, g)| g.config.name.clone())
+            .collect();
+        if self.user_reply_pending.is_some() || self.turn_messages.iter().any(|m| m.role == SpeakerRole::User) {
+            names.push(self.config.user_name.clone());
+        }
+        names
+    }
+
+    /// Names a position may be recorded for (gladiateurs and the user — never the
+    /// moderator, never an invented participant). Fuzzy keys are normalised so a
+    /// participant's trajectory is one entry across turns.
+    fn normalise_position_names(&self, positions: HashMap<String, json_parser::PositionInput>) -> HashMap<String, json_parser::PositionInput> {
+        let mut known: Vec<String> = self.gladiateurs.iter().map(|g| g.config.name.clone()).collect();
+        known.push(self.config.user_name.clone());
+        positions
+            .into_iter()
+            .filter_map(|(name, input)| json_parser::match_speaker_name(&name, &known).map(|n| (n.clone(), input)))
+            .collect()
+    }
+
+    /// Pre-speech contract (v1.17): one JSON call replacing the free-text thought.
+    /// Returns `(intention, thought)`: a prose answer (no JSON) becomes the thought
+    /// alone (v1.16 behaviour); a JSON answer yields both, its `thought` field
+    /// being the persona's private reflection. An unknown or banned target is
+    /// replaced by the current focus (or the topic). Emits `IntentionGenerated`
+    /// and `ThoughtComplete` (when there is a thought).
+    async fn process_intention(
         &self,
         glad_idx: usize,
         search_results: Option<&str>,
+        focus: Option<&Focus>,
         channel: &Channel<ArenaEvent>,
-    ) -> Option<String> {
-        let has_prior_context = !self.turn_messages.is_empty()
+    ) -> (Option<Intention>, Option<String>, bool) {
+        let has_prior_context = self.turn_messages.iter().any(|m| m.kind == MessageKind::Normal)
             || !self.gladiateurs[glad_idx].memory.immediate.is_empty();
         let recent_exchanges = self.build_recent_exchanges(glad_idx);
-        let prompt = prompt_builder::build_thought_prompt(
+        let speaker_id = self.gladiateurs[glad_idx].config.id.clone();
+        let speaker_name = self.gladiateurs[glad_idx].config.name.clone();
+        // Nobody has spoken yet (first speaker of the discussion): no one to address —
+        // a target declared here could only be invented and would never be honoured
+        let names = if has_prior_context { self.addressable_names(glad_idx) } else { Vec::new() };
+        let loops = self.open_loops.for_speaker(&speaker_id);
+        let prompt = prompt_builder::build_intention_prompt(
             &recent_exchanges,
             &self.gladiateurs[glad_idx].emotions,
             &self.config.discussion_language,
@@ -2050,38 +2590,89 @@ impl DiscussionEngine {
             self.config.max_turns,
             search_results,
             &self.config.discussion_mode,
-            self.budget_for(&self.gladiateurs[glad_idx].config.id),
+            self.budget_for(&speaker_id),
+            &names,
+            focus,
+            &loops,
+            self.agendas.get(&speaker_id),
         );
-        let speaker_id = self.gladiateurs[glad_idx].config.id.clone();
         let request = LlmRequest::new(
-            &self.gladiateurs[glad_idx].config.system_prompt,
+            &self.system_prompt_for(glad_idx),
             &prompt,
             &self.gladiateurs[glad_idx].config.llm_params,
-            CallKind::Thought,
+            CallKind::Intention,
         )
+        .json()
         .speaker(&speaker_id);
 
-        let ch = channel.clone();
-        let sid = speaker_id.clone();
-        let on_token = move |token: &str| {
-            let _ = ch.send(ArenaEvent::ThoughtChunk {
-                speaker_id: sid.clone(),
-                chunk: token.to_string(),
-            });
+        let raw = match self.chat_text(&request).await {
+            Ok(r) => r,
+            Err(_) => return (None, None, false),
         };
-        match self
-            .llm
-            .chat_stream(&request, &on_token, &|_| {}, self.cancel_token.clone())
-            .await
-        {
-            Ok(resp) if !resp.content.is_empty() => {
-                let _ = channel.send(ArenaEvent::ThoughtComplete {
-                    speaker_id,
-                    thought: resp.content.clone(),
-                });
-                Some(resp.content)
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return (None, None, false);
+        }
+        let mut broken = false;
+        let (intention, thought) = match json_parser::parse_intention(raw, &names) {
+            Some(mut intention) => {
+                // Unknown or banned target → the focus of the turn, else the topic
+                if intention.target.as_deref().is_some_and(|t| !names.iter().any(|n| n == t)) {
+                    let replacement = focus.and_then(Focus::speaker_name).map(str::to_string);
+                    tracing::info!(speaker = %speaker_name, target = ?intention.target, replacement = ?replacement, "Intention target unknown or absent — replaced");
+                    intention.target = replacement;
+                }
+                let thought = if intention.thought.is_empty() { None } else { Some(intention.thought.clone()) };
+                (Some(intention), thought)
             }
-            _ => None,
+            None if raw.starts_with('{') || raw.starts_with('[') => {
+                tracing::warn!(speaker = %speaker_name, preview = %truncate_str(raw, 120), "Intention answer looks like broken JSON — ignored");
+                broken = true;
+                (None, None)
+            }
+            None => {
+                tracing::info!(speaker = %speaker_name, "Intention answered in prose — used as the persona thought");
+                (None, Some(raw.to_string()))
+            }
+        };
+        if let Some(i) = &intention {
+            tracing::info!(speaker = %speaker_name, target = ?i.target, goal = i.goal.as_str(), answers = ?i.answers, "Intention generated");
+            let _ = channel.send(ArenaEvent::IntentionGenerated {
+                speaker_id: speaker_id.clone(),
+                speaker_name: speaker_name.clone(),
+                target: i.target.clone(),
+                goal: i.goal.as_str().to_string(),
+                angle: i.angle.clone(),
+                concession: i.concession.clone(),
+                question: i.question.clone(),
+            });
+        }
+        if let Some(t) = &thought {
+            let _ = channel.send(ArenaEvent::ThoughtComplete { speaker_id, thought: t.clone() });
+        }
+        (intention, thought, broken)
+    }
+
+    /// After a spoken intervention: the loop the speaker declared answered is
+    /// closed, the others lose a life; the intention's question opens a loop on
+    /// its target and its concession becomes a commitment of the speaker.
+    fn settle_open_loops(&mut self, glad_idx: usize, intention: Option<&Intention>) {
+        let speaker_id = self.gladiateurs[glad_idx].config.id.clone();
+        let speaker_name = self.gladiateurs[glad_idx].config.name.clone();
+        if let Some(i) = intention {
+            if let Some(index) = i.answers {
+                self.open_loops.resolve(&speaker_id, index);
+            }
+        }
+        self.open_loops.tick(&speaker_id);
+        let Some(i) = intention else { return };
+        if let (Some(question), Some(target)) = (&i.question, &i.target) {
+            if let Some(target_id) = self.gladiateurs.iter().find(|g| g.config.name == *target).map(|g| g.config.id.clone()) {
+                self.open_loops.push(&target_id, OpenLoop::new(OpenLoopKind::Question, question, &speaker_name, self.current_turn));
+            }
+        }
+        if let Some(concession) = &i.concession {
+            self.open_loops.push(&speaker_id, OpenLoop::new(OpenLoopKind::Commitment, concession, &speaker_name, self.current_turn));
         }
     }
 
@@ -2097,7 +2688,7 @@ impl DiscussionEngine {
     /// retried once without reasoning and with a higher temperature.
     #[allow(clippy::too_many_arguments)]
     async fn process_intervention(
-        &self,
+        &mut self,
         glad_idx: usize,
         thought: Option<&str>,
         search_results: Option<&str>,
@@ -2105,6 +2696,9 @@ impl DiscussionEngine {
         full_document: Option<&str>,
         reasoning: ReasoningLevel,
         focus: Option<&Focus>,
+        intention: Option<&Intention>,
+        open_loops: &[&OpenLoop],
+        stage: Option<&StageBlock>,
         channel: &Channel<ArenaEvent>,
     ) -> (Option<String>, Option<String>) {
         // Exclude current speaker from participant names to prevent self-addressing
@@ -2114,7 +2708,7 @@ impl DiscussionEngine {
             .map(|(_, g)| g.config.name.clone())
             .collect();
         let (sys, usr) = prompt_builder::build_intervention_prompt(
-            &self.gladiateurs[glad_idx].config.system_prompt,
+            &self.system_prompt_for(glad_idx),
             &self.config.topic,
             &self.gladiateurs[glad_idx].memory,
             &self.turn_messages,
@@ -2132,22 +2726,34 @@ impl DiscussionEngine {
             full_document,
             self.budget_for(&self.gladiateurs[glad_idx].config.id),
             focus,
+            intention,
+            open_loops,
+            stage,
+            self.agendas.get(&self.gladiateurs[glad_idx].config.id),
+            self.debate_state_block().as_deref(),
         );
 
         let speaker_id = self.gladiateurs[glad_idx].config.id.clone();
         let speaker_name = self.gladiateurs[glad_idx].config.name.clone();
+        // Emotion-driven sampling (v1.17): enthusiasm → temperature, engagement → length
+        let params = if self.emotion_driven {
+            emotion_engine::modulate_sampling(&self.gladiateurs[glad_idx].config.llm_params, &self.gladiateurs[glad_idx].emotions, &self.tuning)
+        } else {
+            self.gladiateurs[glad_idx].config.llm_params.clone()
+        };
         let request = LlmRequest::new(
             &sys,
             &usr,
-            &self.gladiateurs[glad_idx].config.llm_params,
+            &params,
             CallKind::Intervention,
         )
         .reasoning(reasoning)
+        .pace(self.reasoning_pace)
         .speaker(&speaker_id);
 
         let display_reasoning = reasoning.is_active()
             && self.show_model_reasoning
-            && self.llm.capabilities().reasoning_displayable;
+            && self.llm.capabilities_for(Some(&speaker_id)).reasoning_displayable;
 
         let ch = channel.clone();
         let sid = speaker_id.clone();
@@ -2185,7 +2791,7 @@ impl DiscussionEngine {
                 );
                 // The reasoning is kept with the message whenever the provider's
                 // reasoning is displayable; the setting only controls live streaming.
-                let stored = if self.llm.capabilities().reasoning_displayable { resp.reasoning } else { None };
+                let stored = if self.llm.capabilities_for(Some(&speaker_id)).reasoning_displayable { resp.reasoning } else { None };
                 if display_reasoning {
                     if let Some(r) = &stored {
                         let _ = channel.send(ArenaEvent::ThoughtComplete {
@@ -2198,6 +2804,10 @@ impl DiscussionEngine {
             }
             Ok(resp) if reasoning.is_active() => {
                 // The caller owns the fallback (thought + plain intervention).
+                if is_model_refusal(&resp.content) {
+                    self.diagnostics.note_refusal();
+                }
+                self.diagnostics.note_retry();
                 tracing::warn!(
                     speaker = %speaker_name,
                     empty = resp.content.is_empty(),
@@ -2208,6 +2818,10 @@ impl DiscussionEngine {
             }
             Ok(resp) => {
                 let refusal = is_model_refusal(&resp.content);
+                if refusal {
+                    self.diagnostics.note_refusal();
+                }
+                self.diagnostics.note_retry();
                 tracing::warn!(
                     discussion_id = %self.discussion_id,
                     turn = self.current_turn,
@@ -2222,7 +2836,7 @@ impl DiscussionEngine {
                     content = %resp.content,
                     "Response that triggered the retry"
                 );
-                let boost = if refusal { constants::TEMP_DIFFICULTY_BOOST } else { constants::TEMP_REFUSAL_BOOST };
+                let boost = if refusal { constants::TEMP_REFUSAL_BOOST } else { constants::TEMP_DIFFICULTY_BOOST };
                 let content = self.retry_intervention(&request, boost).await;
                 if content.is_none() {
                     let _ = channel.send(ArenaEvent::Error {
@@ -2270,33 +2884,46 @@ impl DiscussionEngine {
         }
     }
 
-    fn update_emotions(&mut self, glad_idx: usize, net_reactions_given: i32, channel: &Channel<ArenaEvent>) {
+    /// Per-intervention rule update of the speaker who just spoke. Deferred timing:
+    /// the reactions received this turn on their previous message apply now (the
+    /// ones they gave were applied as they reacted); immediate timing: received
+    /// reactions were applied after each round, only the turn drift remains.
+    fn update_emotions(&mut self, glad_idx: usize, channel: &Channel<ArenaEvent>) {
         let sid = self.gladiateurs[glad_idx].config.id.clone();
-
-        // Get reaction counts from the turn_reaction_counts map
-        // Reactions are about PREVIOUS turn's messages, tracked during process_reactions
-        let (likes, dislikes) = self.turn_reaction_counts
-            .get(&sid)
-            .copied()
-            .unwrap_or((0, 0));
-
-        let ctx = EmotionContext {
-            likes_received: likes,
-            dislikes_received: dislikes,
-            net_reactions_given,
-            is_discussion_stagnating: self.is_stagnating(),
+        let received = match self.config.features.reaction_timing {
+            ReactionTiming::Deferred => self.turn_reaction_counts.get(&sid).copied().unwrap_or_default(),
+            ReactionTiming::Immediate => ReactionTally::default(),
         };
+        let ctx = EmotionContext { received, given: GivenReactions::default(), is_discussion_stagnating: self.is_stagnating() };
 
-        // Clone before update for threshold detection
         let prev = self.gladiateurs[glad_idx].emotions.clone();
-        let new_emo = emotion_engine::update_emotions(&prev, &self.gladiateurs[glad_idx].initial_emotions, &ctx);
+        let gains = self.persona_gains.get(&sid).copied().unwrap_or_default();
+        let new_emo = emotion_engine::update_emotions(&prev, &self.gladiateurs[glad_idx].initial_emotions, &ctx, &gains);
         self.gladiateurs[glad_idx].emotions = new_emo.clone();
+        // The speaker just spoke: reactions to this new message start from zero
+        self.last_reactions_received.remove(&sid);
 
-        Self::emit_threshold_events(channel, &sid, &prev, &new_emo);
+        self.emit_threshold_events(channel, &sid, &prev, &new_emo);
         Self::emit_emotion_updated(channel, &sid, &new_emo, &self.config.discussion_language);
+        self.emit_room_mood(channel);
     }
 
-    /// Rule-based emotion update for IArbitre (limited: bans + stagnation only)
+    /// Once per turn (v1.20.5): the moderator feels a stagnating discussion and
+    /// returns toward its neutral baseline like everyone else — once, not at every
+    /// moderation, so a turn with six speakers does not damp it six times.
+    fn settle_arbitre_emotions(&mut self, channel: &Channel<ArenaEvent>) {
+        let prev = self.arbitre.emotions.clone();
+        let stagnating = self.is_stagnating();
+        emotion_engine::apply_turn_effects(&mut self.arbitre.emotions, &EmotionalProfile::default(), stagnating);
+        if self.arbitre.emotions != prev {
+            let (arb_id, current) = (self.arbitre.config.id.clone(), self.arbitre.emotions.clone());
+            self.emit_threshold_events(channel, &arb_id, &prev, &current);
+            Self::emit_emotion_updated(channel, &arb_id, &current, &self.config.discussion_language);
+        }
+    }
+
+    /// Rule-based emotion update for IArbitre right after a moderation (bans only —
+    /// stagnation and drift are settled once per turn by `settle_arbitre_emotions`)
     fn update_arbitre_emotions(&mut self, ban_issued: bool, channel: &Channel<ArenaEvent>) {
         let prev = self.arbitre.emotions.clone();
 
@@ -2304,12 +2931,10 @@ impl DiscussionEngine {
             self.arbitre.emotions.frustration = emotion_engine::add_clamped(self.arbitre.emotions.frustration, constants::EMOTION_ARBITRE_BAN_DELTA);
             self.arbitre.emotions.confiance = emotion_engine::add_clamped(self.arbitre.emotions.confiance, constants::EMOTION_ARBITRE_BAN_DELTA);
         }
-        if self.is_stagnating() {
-            self.arbitre.emotions.engagement = emotion_engine::sub_clamped(self.arbitre.emotions.engagement, constants::EMOTION_ARBITRE_STAGNATION_ENG);
-        }
 
-        Self::emit_threshold_events(channel, &self.arbitre.config.id, &prev, &self.arbitre.emotions);
-        Self::emit_emotion_updated(channel, &self.arbitre.config.id, &self.arbitre.emotions, &self.config.discussion_language);
+        let (arb_id, current) = (self.arbitre.config.id.clone(), self.arbitre.emotions.clone());
+        self.emit_threshold_events(channel, &arb_id, &prev, &current);
+        Self::emit_emotion_updated(channel, &arb_id, &current, &self.config.discussion_language);
     }
 
     async fn process_moderation(
@@ -2319,15 +2944,31 @@ impl DiscussionEngine {
         channel: &Channel<ArenaEvent>,
     ) {
         let speaker_name = self.gladiateurs[glad_idx].config.name.clone();
+        // The act's hint, the objection the speaker still owes (v1.20.1) and the audience's
+        // message they were expected to answer (v1.20.2)
+        let hint: Option<String> = {
+            let parts: Vec<String> = self
+                .current_act
+                .map(|a| a.moderation_hint(&self.config.discussion_language).to_string())
+                .into_iter()
+                .chain(self.depth_hint_for(&self.gladiateurs[glad_idx].config.id))
+                .chain(self.audience_hint_for(intervention))
+                .collect();
+            (!parts.is_empty()).then(|| parts.join("\n"))
+        };
+        let openings: Vec<String> = self.arbitre_recent_openings.iter().cloned().collect();
+        let style = prompt_builder::ModerationStyle { recent_openings: &openings, comments: self.moderation_comments, moderated: self.moderation_checks };
         let prompt = prompt_builder::build_moderation_prompt(
             &speaker_name,
             intervention,
             &self.config.topic,
             &self.config.discussion_language,
             &self.config.discussion_mode,
+            &prompt_builder::ModerationSituation { room_mood: self.room_mood, hint: hint.as_deref(), style: Some(&style) },
         );
+        self.moderation_checks += 1;
         let request = LlmRequest::new(
-            &self.arbitre.config.system_prompt,
+            &self.arbitre_system,
             &prompt,
             &self.arbitre.config.llm_params,
             CallKind::Moderation,
@@ -2336,11 +2977,16 @@ impl DiscussionEngine {
         .speaker(&self.arbitre.config.id);
 
         let moderation = match self.chat_text(&request).await {
-            Ok(raw) => json_parser::parse_moderation(&raw),
+            Ok(raw) => json_parser::parse_moderation(&raw).unwrap_or_else(|e| {
+                self.diagnostics.note_parse_failure(CallKind::Moderation);
+                tracing::warn!(speaker = %speaker_name, error = %e, "Moderation answer unusable — no action");
+                Default::default()
+            }),
             Err(_) => return,
         };
 
         use crate::models::moderation::ModerationAction;
+        tracing::info!(speaker = %speaker_name, turn = self.current_turn, action = ?moderation.action, comment = %truncate_str(&moderation.comment, 120), "Moderation decided");
         match moderation.action {
             ModerationAction::Ban => {
                 // Guard: don't ban last active
@@ -2358,8 +3004,11 @@ impl DiscussionEngine {
                 let banned_id = self.gladiateurs[glad_idx].config.id.clone();
                 let prev = self.gladiateurs[glad_idx].emotions.clone();
                 emotion_engine::apply_ban_penalty(&mut self.gladiateurs[glad_idx].emotions);
-                Self::emit_threshold_events(channel, &banned_id, &prev, &self.gladiateurs[glad_idx].emotions);
-                Self::emit_emotion_updated(channel, &banned_id, &self.gladiateurs[glad_idx].emotions, &self.config.discussion_language);
+                let current = self.gladiateurs[glad_idx].emotions.clone();
+                // The sanction itself is the stage cue of the turn (thresholds it crosses stay silent)
+                self.stage_directions_this_turn.insert(banned_id.clone(), constants::STAGE_DIRECTIONS_PER_SPEAKER_PER_TURN);
+                self.emit_threshold_events(channel, &banned_id, &prev, &current);
+                Self::emit_emotion_updated(channel, &banned_id, &current, &self.config.discussion_language);
 
                 let _ = channel.send(ArenaEvent::BanIssued {
                     banned_id: self.gladiateurs[glad_idx].config.id.clone(),
@@ -2370,1339 +3019,90 @@ impl DiscussionEngine {
 
                 let ban_text = self.ban_notification_msg(&speaker_name, duration, &moderation.ban_reason);
                 self.emit_ban_notification(&ban_text, channel);
+                self.stage_directions_this_turn.remove(&banned_id);
+                self.emit_stage_direction(&banned_id, StageCue::Banned, channel);
             }
             ModerationAction::Comment if !moderation.comment.is_empty() => {
+                self.moderation_comments += 1;
+                self.remember_arbitre_opening(&moderation.comment);
                 self.emit_arbitre_message(&moderation.comment, channel);
             }
             _ => {}
         }
     }
 
-    fn emit_arbitre_message(&mut self, content: &str, channel: &Channel<ArenaEvent>) {
-        let arb_id = self.arbitre.config.id.clone();
-        let arb_name = self.arbitre.config.name.clone();
-        let msg = self.create_message(&arb_id, &arb_name, SpeakerRole::Arbitre, content);
-        let _ = channel.send(ArenaEvent::MessageComplete {
-            message: msg.clone(),
-        });
-        self.turn_messages.push(msg.clone());
-        self.messages_history.push(msg);
-    }
-
-    fn emit_ban_notification(&mut self, content: &str, channel: &Channel<ArenaEvent>) {
-        let arb_id = self.arbitre.config.id.clone();
-        let arb_name = self.arbitre.config.name.clone();
-        let mut msg = self.create_message(&arb_id, &arb_name, SpeakerRole::Arbitre, content);
-        msg.is_ban_notification = true;
-        let _ = channel.send(ArenaEvent::MessageComplete {
-            message: msg.clone(),
-        });
-        self.turn_messages.push(msg.clone());
-        self.messages_history.push(msg);
-    }
-
-    async fn handle_user_intervention(
-        &mut self,
-        cmd_rx: &mut mpsc::Receiver<EngineCommand>,
-        channel: &Channel<ArenaEvent>,
-    ) {
-        tracing::info!(
-            discussion_id = %self.discussion_id,
-            turn = self.current_turn,
-            "User intervention: waiting for user input"
-        );
-        let _ = channel.send(ArenaEvent::UserTurnReady);
-
-        let timeout = tokio::time::sleep(Duration::from_secs(
-            self.config.user_intervention_timeout_secs,
-        ));
-        tokio::pin!(timeout);
-
-        loop {
-            tokio::select! {
-                cmd = cmd_rx.recv() => {
-                    match cmd {
-                        Some(EngineCommand::SubmitUserMessage { content }) => {
-                            tracing::info!(
-                                discussion_id = %self.discussion_id,
-                                turn = self.current_turn,
-                                content_len = content.len(),
-                                "User intervention: message received"
-                            );
-                            let msg = self.create_message(
-                                "user",
-                                &self.config.user_name,
-                                SpeakerRole::User,
-                                &content,
-                            );
-                            let _ = channel.send(ArenaEvent::MessageComplete { message: msg.clone() });
-                            self.turn_messages.push(msg.clone());
-                            self.messages_history.push(msg);
-                            self.user_intervention_pending = false;
-                            self.user_intervention_handled = true;
-                            return;
-                        }
-                        Some(EngineCommand::SkipUserTurn) => {
-                            tracing::info!(
-                                discussion_id = %self.discussion_id,
-                                turn = self.current_turn,
-                                "User intervention: skipped"
-                            );
-                            self.user_intervention_pending = false;
-                            self.user_intervention_handled = true;
-                            return;
-                        }
-                        Some(EngineCommand::ForceStop) => {
-                            self.status = DiscussionStatus::ForceStopRequested;
-                            return;
-                        }
-                        Some(EngineCommand::Stop) => {
-                            self.status = DiscussionStatus::StopRequested;
-                            return;
-                        }
-                        Some(EngineCommand::AdjustEmotion { speaker_id, axis, value }) => {
-                            self.handle_adjust_emotion(&speaker_id, &axis, value, channel);
-                        }
-                        Some(_) => {}
-                        None => return,
-                    }
-                }
-                _ = &mut timeout => {
-                    let _ = channel.send(ArenaEvent::UserTurnTimeout);
-                    self.user_intervention_pending = false;
-                    self.user_intervention_handled = true;
-                    return;
-                }
-            }
-        }
-    }
-
-    async fn update_memory_all(&mut self) {
-        if self.turn_messages.is_empty() {
-            return;
-        }
-
-        let turn = self.current_turn;
-        let is_fiction = self.config.discussion_mode == DiscussionMode::CollaborativeFiction;
-        for g in &mut self.gladiateurs {
-            memory_manager::add_turn_to_memory(&mut g.memory, turn, &self.turn_messages, is_fiction);
-        }
-        memory_manager::add_turn_to_memory(&mut self.arbitre.memory, turn, &self.turn_messages, is_fiction);
-
-        // LLM-based contextual + positional update
-        let contextual_summary = &self.arbitre.memory.contextual_summary;
-        let positional_json = memory_manager::positional_map_to_json(&self.arbitre.memory);
-        let turn_text = memory_manager::format_turn_messages(&self.turn_messages, is_fiction);
-        let prompt = prompt_builder::build_memory_update_prompt(
-            contextual_summary,
-            &positional_json,
-            turn,
-            &turn_text,
-            &self.config.discussion_language,
-            &self.config.discussion_mode,
-            self.budget_for(&self.arbitre.config.id),
-        );
-        let mem_sys = self.memory_summarizer_prompt();
-        let request = LlmRequest::new(
-            &mem_sys,
-            &prompt,
-            &self.arbitre.config.llm_params,
-            CallKind::Memory,
-        )
-        .json();
-        let raw = match self.chat_text(&request).await {
-            Ok(r) if !r.is_empty() => r,
-            Ok(_) => {
-                // Empty response — retry once with higher temperature
-                tracing::warn!(turn = self.current_turn, "Memory update returned empty — retrying");
-                let mut retry = request.clone();
-                retry.params.temperature = (retry.params.temperature + constants::TEMP_DIFFICULTY_BOOST).min(constants::TEMP_MAX);
-                match self.chat_text(&retry).await {
-                    Ok(r) if !r.is_empty() => r,
-                    _ => return,
-                }
-            }
-            Err(_) => return,
-        };
-
-        // Parse the combined JSON: { "summary": "...", "positions": { ... } }
-        if let Ok(parsed) = json_parser::parse_json_response::<MemoryUpdateResponse>(&raw) {
-            // Stagnation signal: the new summary barely differs from the previous one
-            if !self.previous_summary.is_empty() && !parsed.summary.is_empty() {
-                let similarity = emotion_engine::text_similarity(&self.previous_summary, &parsed.summary);
-                self.summary_stagnating = similarity >= constants::EMOTION_STAGNATION_SIMILARITY;
-                if self.summary_stagnating {
-                    tracing::info!(turn = self.current_turn, similarity, "Discussion summary is stagnating");
-                }
-            }
-            if !parsed.summary.is_empty() {
-                self.previous_summary = parsed.summary.clone();
-            }
-            let summary_max = self.budget_for(&self.arbitre.config.id).contextual_summary_chars;
-            memory_manager::update_from_llm_response(&mut self.arbitre.memory, parsed.summary.clone(), parsed.positions.clone(), summary_max);
-            for g in &mut self.gladiateurs {
-                memory_manager::update_from_llm_response(&mut g.memory, parsed.summary.clone(), parsed.positions.clone(), summary_max);
-            }
+    /// The moderator says an announcement in its own voice (v1.20.3): one short call
+    /// briefed by the template; the brief itself is the fallback (failure, refusal,
+    /// empty answer, cancellation). Remembered as one of its openings.
+    pub(super) async fn voice_announcement(&mut self, brief: &str) -> String {
+        let voiced = if self.cancel_token.is_cancelled() || self.llm.has_fatal_error() {
+            None
         } else {
-            let end = raw.floor_char_boundary(500);
-            tracing::warn!(
-                turn = self.current_turn,
-                raw_len = raw.len(),
-                raw_preview = %&raw[..end],
-                "Failed to parse memory update response"
-            );
-        }
-    }
-
-    async fn generate_synthesis(&self, search_results: Option<&str>, channel: &Channel<ArenaEvent>) {
-        let document_context = self.build_document_context_for_synthesis();
-        let full_doc_text = self.full_document_for(&self.arbitre.config.id);
-        let prompt = prompt_builder::build_synthesis_prompt(
-            &self.config.topic,
-            &self.arbitre.memory,
-            &self.config.discussion_language,
-            search_results,
-            &self.config.discussion_mode,
-            document_context.as_deref(),
-            full_doc_text.as_deref(),
-            self.budget_for(&self.arbitre.config.id),
-        );
-        // Synthesis is a comprehensive summary — use a dedicated, higher token budget.
-        let mut synth_params = self.arbitre.config.llm_params.clone();
-        synth_params.num_predict = synth_params.num_predict.max(constants::SYNTHESIS_NUM_PREDICT);
-        let request = LlmRequest::new(
-            &self.arbitre.config.system_prompt,
-            &prompt,
-            &synth_params,
-            CallKind::Synthesis,
-        )
-        .reasoning(self.synthesis_reasoning_level())
-        .speaker(&self.arbitre.config.id);
-
-        let ch = channel.clone();
-        let on_token = move |token: &str| {
-            let _ = ch.send(ArenaEvent::SynthesisChunk {
-                chunk: token.to_string(),
-            });
-        };
-        let summary = match self
-            .llm
-            .chat_stream(&request, &on_token, &|_| {}, self.cancel_token.clone())
-            .await
-        {
-            Ok(resp) => resp.content,
-            Err(e) => {
-                tracing::warn!("Synthesis streaming failed: {}", e);
-                String::new()
-            }
-        };
-
-        // If synthesis is empty (e.g. thinking model exhausted tokens on reasoning),
-        // retry once without reasoning, with higher temperature and doubled num_predict.
-        if summary.trim().is_empty() && !self.cancel_token.is_cancelled() {
-            tracing::warn!("Synthesis was empty — retrying with higher temperature and doubled budget");
-            let mut retry_request = request.clone().reasoning(ReasoningLevel::Off);
-            retry_request.params.temperature = (retry_request.params.temperature + constants::TEMP_DIFFICULTY_BOOST).min(constants::TEMP_MAX);
-            retry_request.params.num_predict = retry_request.params.num_predict.saturating_mul(2);
-            match self.chat_text(&retry_request).await {
-                Ok(retry_summary) if !retry_summary.trim().is_empty() => {
-                    tracing::info!(len = retry_summary.len(), "Synthesis retry succeeded");
-                    // Emit all at once since we can't stream the retry
-                    let _ = channel.send(ArenaEvent::SynthesisChunk { chunk: retry_summary.clone() });
-                    let _ = channel.send(ArenaEvent::SynthesisComplete { summary: retry_summary });
-                    return;
+            let openings: Vec<String> = self.arbitre_recent_openings.iter().cloned().collect();
+            let prompt = prompt_builder::build_announcement_prompt(brief, &openings, &self.config.discussion_language);
+            let mut params = self.arbitre.config.llm_params.clone();
+            params.num_predict = constants::ANNOUNCEMENT_NUM_PREDICT;
+            let request = LlmRequest::new(&self.arbitre_system, &prompt, &params, CallKind::Announcement).speaker(&self.arbitre.config.id);
+            match self.chat_text(&request).await {
+                Ok(raw) => {
+                    let text = raw.trim().trim_matches('"').trim();
+                    (!text.is_empty() && !is_model_refusal(text)).then(|| truncate_at_sentence_boundary(text, constants::ANNOUNCEMENT_MAX_CHARS))
                 }
-                Ok(_) => tracing::error!("Synthesis retry also returned empty"),
-                Err(e) => tracing::error!(error = %e, "Synthesis retry failed"),
-            }
-        }
-
-        let _ = channel.send(ArenaEvent::SynthesisComplete { summary });
-    }
-
-    // ===== Web Search =====
-
-    /// Check if the web search pool has remaining credits.
-    /// Returns (can_search, max_queries_this_turn).
-    /// Pool is shared between all gladiateurs, max 1 per gladiateur per turn.
-    fn can_search_web(&self, global_usage: u32) -> (bool, u32) {
-        let pool = self.config.web_search_pool;
-        if pool == 0 || self.tavily_client.is_none() {
-            return (false, 0);
-        }
-        let pool_remaining = pool.saturating_sub(self.web_searches_used_pool);
-        let max_queries = pool_remaining.min(1);
-        let global_remaining = constants::TAVILY_FREE_MONTHLY_QUOTA.saturating_sub(global_usage);
-        let max_queries = max_queries.min(global_remaining);
-        (max_queries > 0, max_queries)
-    }
-
-    /// Execute web search for a speaker. Returns (formatted_context, queries_executed_count).
-    /// Uses `&self` — no fields mutated; counter increment happens at call site.
-    #[allow(clippy::too_many_arguments)]
-    async fn process_web_search(
-        &self,
-        system_prompt: &str,
-        speaker_id: &str,
-        speaker_name: &str,
-        max_queries: u32,
-        search_directive: &str,
-        recent_context: &str,
-        forced_queries: Option<Vec<String>>,
-        llm_params: &LlmParams,
-        channel: &Channel<ArenaEvent>,
-        past_queries: &[String],
-        other_queries: &[(String, String)],
-    ) -> (Option<String>, u32, Vec<String>) {
-        // 1. Determine queries
-        let queries: Vec<String> = if let Some(forced) = forced_queries {
-            forced.into_iter().take(max_queries as usize).collect()
-        } else {
-            // LLM decision (non-streaming, JSON)
-            let prompt = prompt_builder::build_web_search_decision_prompt(
-                &self.config.topic,
-                recent_context,
-                search_directive,
-                max_queries,
-                &self.config.discussion_language,
-                past_queries,
-                other_queries,
-            );
-            let request = LlmRequest::new(system_prompt, &prompt, llm_params, CallKind::SearchDecision)
-                .json()
-                .speaker(speaker_id);
-            let raw = match self.chat_text(&request).await {
-                Ok(r) => r,
+                Err(LlmError::Cancelled) => None,
                 Err(e) => {
-                    tracing::warn!(error = %e, "Web search decision LLM call failed — skipping search");
-                    return (None, 0, Vec::new());
-                }
-            };
-            let decision = json_parser::parse_json_response::<json_parser::SearchDecisionResponse>(&raw)
-                .unwrap_or_default();
-
-            if !decision.needs_search || decision.queries.is_empty() {
-                return (None, 0, Vec::new());
-            }
-            // Hard dedup: filter out near-duplicates of speaker's own past queries
-            let deduped: Vec<String> = decision.queries
-                .into_iter()
-                .take(max_queries as usize)
-                .filter(|q| {
-                    if is_duplicate_query(q, past_queries) {
-                        tracing::info!(speaker = %speaker_name, query = %q, "Web query is near-duplicate of own past — skipping");
-                        false
-                    } else {
-                        true
-                    }
-                })
-                .collect();
-            if deduped.is_empty() {
-                tracing::info!(speaker = %speaker_name, "All web queries are near-duplicates — skipping web search");
-                return (None, 0, Vec::new());
-            }
-            deduped
-        };
-
-        if queries.is_empty() {
-            return (None, 0, Vec::new());
-        }
-
-        // 2. Execute each search
-        let tavily = match self.tavily_client.as_ref() {
-            Some(c) => c,
-            None => return (None, 0, Vec::new()),
-        };
-        let mut all_results: Vec<(String, crate::tavily::TavilySearchResponse)> = Vec::new();
-        let mut executed_count = 0u32;
-
-        for query in &queries {
-            if self.cancel_token.is_cancelled() {
-                break;
-            }
-
-            match tavily.search(query, self.cancel_token.clone()).await {
-                Ok(response) => {
-                    all_results.push((query.clone(), response));
-                    executed_count += 1;
-                    if let Err(e) = repository::increment_tavily_usage(&self.db).await {
-                        tracing::warn!(error = %e, "Failed to increment Tavily usage counter");
-                    }
-                }
-                Err(TavilyError::QuotaExceeded) => {
-                    tracing::warn!("Tavily quota exceeded — stopping all searches");
-                    break;
-                }
-                Err(TavilyError::InvalidKey) => {
-                    tracing::error!("Tavily API key invalid — stopping all searches");
-                    break;
-                }
-                Err(TavilyError::Cancelled) => break,
-                Err(e) => {
-                    tracing::warn!(query = %query, error = %e, "Tavily search failed — skipping");
-                    continue;
-                }
-            }
-        }
-
-        if executed_count == 0 {
-            return (None, 0, Vec::new());
-        }
-
-        // 3. Emit batched event
-        let executed_queries: Vec<String> = all_results.iter().map(|(q, _)| q.clone()).collect();
-        let total_results: u32 = all_results.iter().map(|(_, r)| r.results.len() as u32).sum();
-        let _ = channel.send(ArenaEvent::WebSearchPerformed {
-            speaker_id: speaker_id.to_string(),
-            speaker_name: speaker_name.to_string(),
-            queries: executed_queries.clone(),
-            results_count: total_results,
-            pool_used: self.web_searches_used_pool + executed_count,
-        });
-
-        // 4. Format for prompt injection
-        let lang = &self.config.discussion_language;
-        let ctx = prompt_builder::build_search_results_context(&all_results, lang);
-        tracing::info!(
-            speaker = %speaker_name,
-            ctx_len = ctx.len(),
-            ctx_preview = %truncate_str(&ctx, 300),
-            "Web search context injected into prompt"
-        );
-        (
-            Some(ctx),
-            executed_count,
-            executed_queries,
-        )
-    }
-
-    // ===== Search helpers =====
-
-    /// Ask the LLM to pick a search query for forced first-turn search.
-    /// Returns the LLM-chosen query, or `fallback` if LLM fails/returns empty.
-    #[allow(clippy::too_many_arguments)]
-    async fn pick_forced_query(
-        &self,
-        system_prompt: &str,
-        prompt: &str,
-        llm_params: &LlmParams,
-        fallback: String,
-        speaker_id: &str,
-        speaker_name: &str,
-        search_type: &str,
-    ) -> String {
-        let request = LlmRequest::new(system_prompt, prompt, llm_params, CallKind::SearchDecision)
-            .json()
-            .speaker(speaker_id);
-        let decision = match self.chat_text(&request).await {
-            Ok(raw) => {
-                tracing::info!(speaker = %speaker_name, search_type, raw = %raw, "Forced search query LLM response");
-                json_parser::parse_json_response::<json_parser::SearchDecisionResponse>(&raw)
-                    .unwrap_or_default()
-            }
-            Err(e) => {
-                tracing::warn!(speaker = %speaker_name, search_type, error = %e, "Forced search query LLM call failed");
-                json_parser::SearchDecisionResponse::default()
-            }
-        };
-        if !decision.queries.is_empty() {
-            decision.queries.into_iter().next().unwrap()
-        } else {
-            fallback
-        }
-    }
-
-    // ===== Wikipedia Search =====
-
-    /// Build clickable Wikipedia article URLs from a search response.
-    fn build_article_urls(response: &crate::wikipedia::WikiSearchResponse, wiki_lang: &str) -> Vec<String> {
-        response.query.as_ref()
-            .map(|q| q.pages.iter().map(|p| {
-                format!("https://{}.wikipedia.org/wiki/{}", wiki_lang, p.title.replace(' ', "_"))
-            }).collect())
-            .unwrap_or_default()
-    }
-
-    /// Check if the wiki search pool has remaining credits.
-    /// Returns (can_search, max_queries_this_turn).
-    /// Pool is shared between all gladiateurs, max 1 per gladiateur per turn.
-    fn can_search_wiki(&self) -> (bool, u32) {
-        let pool = self.config.wiki_search_pool;
-        if pool == 0 {
-            return (false, 0);
-        }
-        let remaining = pool.saturating_sub(self.wiki_searches_used_pool);
-        let max_queries = remaining.min(1);
-        (max_queries > 0, max_queries)
-    }
-
-    /// Raw Wikipedia search for intro (returns formatted context, emits WikiSearchPerformed).
-    async fn process_wiki_search_intro(
-        &self,
-        query: &str,
-        speaker_id: &str,
-        speaker_name: &str,
-        channel: &Channel<ArenaEvent>,
-    ) -> Option<String> {
-        let lang = &self.config.discussion_language;
-        tracing::info!(query = %query, lang = %lang, speaker = %speaker_name, "Wikipedia intro search");
-        match self.wiki_client.search(query, lang, self.cancel_token.clone()).await {
-            Ok((response, actual_lang)) => {
-                let has_results = response.query.as_ref().is_some_and(|q| !q.pages.is_empty());
-                if has_results {
-                    let article_urls = Self::build_article_urls(&response, &actual_lang);
-                    let results_count = response.query.as_ref().map(|q| q.pages.len() as u32).unwrap_or(0);
-
-                    tracing::info!(speaker = %speaker_name, urls = ?article_urls, "Wikipedia intro results found");
-
-                    // Emit event so the UI shows the wiki badge on the intro message
-                    let _ = channel.send(ArenaEvent::WikiSearchPerformed {
-                        speaker_id: speaker_id.to_string(),
-                        speaker_name: speaker_name.to_string(),
-                        queries: vec![query.to_string()],
-                        results_count,
-                        pool_used: 0, // IArbitre intro does not consume pool
-                        article_urls,
-                    });
-
-                    let results = vec![(query.to_string(), response)];
-                    let ctx = prompt_builder::build_wiki_results_context(&results, lang);
-                    tracing::info!(
-                        speaker = %speaker_name,
-                        ctx_len = ctx.len(),
-                        ctx_preview = %truncate_str(&ctx, 300),
-                        "Wikipedia intro context injected into prompt"
-                    );
-                    Some(ctx)
-                } else {
-                    tracing::info!("Wikipedia intro search returned no results");
+                    tracing::warn!(error = %e, "Announcement call failed — templated line used");
                     None
                 }
             }
-            Err(crate::wikipedia::error::WikiError::Cancelled) => None,
-            Err(e) => {
-                tracing::warn!(error = %e, "Wikipedia intro search failed");
-                None
-            }
-        }
-    }
-
-    /// Execute Wikipedia search for a gladiateur. Returns (formatted_context, queries_executed_count).
-    async fn process_wiki_search(
-        &self,
-        glad_idx: usize,
-        query: String,
-        channel: &Channel<ArenaEvent>,
-    ) -> (Option<String>, u32) {
-        let lang = &self.config.discussion_language;
-        let speaker_id = &self.gladiateurs[glad_idx].config.id;
-        let speaker_name = &self.gladiateurs[glad_idx].config.name;
-
-        tracing::info!(speaker = %speaker_name, query = %query, lang = %lang, "Wikipedia search for gladiateur");
-
-        let (response, actual_lang) = match self.wiki_client.search(&query, lang, self.cancel_token.clone()).await {
-            Ok(r) => r,
-            Err(crate::wikipedia::error::WikiError::Cancelled) => return (None, 0),
-            Err(e) => {
-                tracing::warn!(query = %query, error = %e, "Wikipedia search failed");
-                return (None, 0);
-            }
         };
-
-        let has_results = response.query.as_ref().is_some_and(|q| !q.pages.is_empty());
-        if !has_results {
-            tracing::info!(speaker = %speaker_name, query = %query, "Wikipedia returned no results");
-            return (None, 0);
-        }
-
-        let article_urls = Self::build_article_urls(&response, &actual_lang);
-
-        tracing::info!(speaker = %speaker_name, urls = ?article_urls, "Wikipedia results found");
-
-        let results_count = response.query.as_ref().map(|q| q.pages.len() as u32).unwrap_or(0);
-
-        // Emit event
-        let _ = channel.send(ArenaEvent::WikiSearchPerformed {
-            speaker_id: speaker_id.to_string(),
-            speaker_name: speaker_name.to_string(),
-            queries: vec![query.clone()],
-            results_count,
-            pool_used: self.wiki_searches_used_pool + 1,
-            article_urls,
-        });
-
-        // Format for prompt injection
-        let all_results = vec![(query, response)];
-        let ctx = prompt_builder::build_wiki_results_context(&all_results, lang);
-        tracing::info!(
-            speaker = %speaker_name,
-            ctx_len = ctx.len(),
-            ctx_preview = %truncate_str(&ctx, 300),
-            "Wikipedia context injected into prompt"
-        );
-        (Some(ctx), 1)
+        let text = voiced.unwrap_or_else(|| brief.to_string());
+        self.remember_arbitre_opening(&text);
+        text
     }
 
-    // ── RAG knowledge base query ──────────────────────────────────────
+    /// Remember how the moderator opened a line it wrote itself (v1.20.2), so the
+    /// next moderation prompt can forbid the same attack.
+    fn remember_arbitre_opening(&mut self, content: &str) {
+        self.arbitre_recent_openings.push_back(directive_builder::opening_of(content));
+        while self.arbitre_recent_openings.len() > constants::ARBITRE_RECENT_OPENINGS {
+            self.arbitre_recent_openings.pop_front();
+        }
+    }
 
-    /// Query the RAG store for relevant chunks and emit event.
-    /// Returns formatted context string for prompt injection, or None.
-    /// Uses per-speaker cache with TTL to avoid redundant queries.
-    async fn process_rag_query(
-        &mut self,
-        speaker_id: &str,
-        speaker_name: &str,
-        glad_idx: usize,
-        channel: &Channel<ArenaEvent>,
-    ) -> Option<String> {
-        if self.rag_store.as_ref().is_none_or(|s| s.is_empty()) {
+    /// Moderator hint (v1.20.2): the audience member spoke and this intervention was
+    /// expected to answer them — when it does not even name them, the moderator says so.
+    fn audience_hint_for(&self, intervention: &str) -> Option<String> {
+        let message = self.user_reply_pending.as_deref()?;
+        let user = self.config.user_name.as_str();
+        if intervention.to_lowercase().contains(&user.to_lowercase()) {
             return None;
         }
-
-        // 1. Cache hit check
-        if let Some(entry) = self.rag_cache.get(speaker_id) {
-            if self.current_turn.saturating_sub(entry.cached_at_turn) < constants::RAG_CACHE_TTL_TURNS {
-                tracing::info!(
-                    speaker = %speaker_name,
-                    turn = self.current_turn,
-                    cached_at = entry.cached_at_turn,
-                    "RAG cache hit"
-                );
-                let _ = channel.send(ArenaEvent::RagContextInjected {
-                    speaker_id: speaker_id.to_string(),
-                    speaker_name: speaker_name.to_string(),
-                    chunks: entry.chunks.clone(),
-                    cached: true,
-                });
-                return Some(entry.context_text.clone());
-            }
-        }
-
-        // 2. Ensure embeddings are computed (no-op if already done)
-        if let Some(ref mut store) = self.rag_store {
-            if let Err(e) = store.ensure_embeddings().await {
-                tracing::warn!(error = %e, "Failed to compute deferred embeddings");
-                return None;
-            }
-        }
-
-        // 3. Build query context
-        let topic = truncate_str(&self.config.topic, constants::ORCH_TOPIC_FOR_SEARCH);
-        let recent_raw = self.build_recent_exchanges(glad_idx);
-        let recent = truncate_str(&recent_raw, constants::ORCH_RECENT_FOR_SEARCH);
-        let context = format!("{topic}\n\n{recent}");
-
-        // 4. Query RAG store — bind result to release borrow before cache insert
-        let result = {
-            let rag_store = self.rag_store.as_ref()?;
-            let lang = &self.config.discussion_language;
-            rag_store
-                .query(
-                    &context,
-                    lang,
-                    self.llm.as_ref(),
-                    &self.gladiateurs[glad_idx].config.llm_params,
-                    self.cancel_token.clone(),
-                )
-                .await
-        };
-
-        // 5. Process result + cache insert
-        match result {
-            Ok((ctx_text, chunks)) if !chunks.is_empty() => {
-                tracing::info!(
-                    speaker = %speaker_name,
-                    turn = self.current_turn,
-                    chunk_count = chunks.len(),
-                    ctx_len = ctx_text.len(),
-                    "RAG context injected"
-                );
-                let _ = channel.send(ArenaEvent::RagContextInjected {
-                    speaker_id: speaker_id.to_string(),
-                    speaker_name: speaker_name.to_string(),
-                    chunks: chunks.clone(),
-                    cached: false,
-                });
-                self.rag_cache.insert(speaker_id.to_string(), RagCacheEntry {
-                    cached_at_turn: self.current_turn,
-                    context_text: ctx_text.clone(),
-                    chunks,
-                });
-                Some(ctx_text)
-            }
-            Ok(_) => None, // Empty results — not cached, will retry next turn
-            Err(LlmError::Cancelled) => None,
-            Err(e) => {
-                tracing::warn!(
-                    speaker = %speaker_name,
-                    error = %e,
-                    "RAG query failed — continuing without knowledge base"
-                );
-                None
-            }
-        }
+        Some(match self.config.discussion_language.as_str() {
+            "en" => format!("{user}, from the audience, spoke just before: \"{message}\". This intervention ignores them: remind everyone in one sentence that an answer is owed to {user}."),
+            "zh" => format!("现场观众{user}刚才发言：\"{message}\"。这次发言忽视了他：用一句话提醒大家应该回应{user}。"),
+            _ => format!("{user}, dans le public, a pris la parole juste avant : « {message} ». Cette intervention l'ignore : rappelle en une phrase qu'on lui doit une réponse."),
+        })
     }
 
-    // ── Emotion analysis, contagion, history ──────────────────────────
-
-    /// LLM-based emotion analysis: 1 call for ALL participants.
-    /// Graceful fallback: if LLM fails, log warning and keep rule-based values.
-    async fn analyze_emotions_llm(&mut self, channel: &Channel<ArenaEvent>) {
-        if self.turn_messages.is_empty() || self.cancel_token.is_cancelled() {
-            return;
-        }
-
-        // Build participants JSON for the prompt
-        let mut participants_info = Vec::new();
-        participants_info.push(format!(
-            "  \"{}\": {{\"role\": \"IArbitre\", \"engagement\": {}, \"accord\": {}, \"confiance\": {}, \"frustration\": {}, \"curiosite\": {}, \"enthousiasme\": {}}}",
-            self.arbitre.config.name,
-            self.arbitre.emotions.engagement, self.arbitre.emotions.accord,
-            self.arbitre.emotions.confiance, self.arbitre.emotions.frustration,
-            self.arbitre.emotions.curiosite, self.arbitre.emotions.enthousiasme,
-        ));
-        for g in &self.gladiateurs {
-            participants_info.push(format!(
-                "  \"{}\": {{\"role\": \"GladIAteur\", \"engagement\": {}, \"accord\": {}, \"confiance\": {}, \"frustration\": {}, \"curiosite\": {}, \"enthousiasme\": {}}}",
-                g.config.name,
-                g.emotions.engagement, g.emotions.accord,
-                g.emotions.confiance, g.emotions.frustration,
-                g.emotions.curiosite, g.emotions.enthousiasme,
-            ));
-        }
-        let participants_json = format!("{{\n{}\n}}", participants_info.join(",\n"));
-
-        // Build recent context from turn messages
-        let recent_context = self.turn_messages.iter()
-            .map(|m| format!("[{}] {}", m.speaker_name, truncate_str(&m.content, constants::ORCH_EMOTION_CONTEXT)))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Build events summary (reactions, bans)
-        let mut events = Vec::new();
-        for (sid, (likes, dislikes)) in &self.turn_reaction_counts {
-            let name = self.gladiateurs.iter()
-                .find(|g| g.config.id == *sid)
-                .map(|g| g.config.name.as_str())
-                .unwrap_or(sid);
-            if *likes > 0 { events.push(format!("{} received {} like(s)", name, likes)); }
-            if *dislikes > 0 { events.push(format!("{} received {} dislike(s)", name, dislikes)); }
-        }
-        for g in &self.gladiateurs {
-            if g.ban_issued_this_turn {
-                events.push(format!("{} was banned this turn", g.config.name));
-            }
-        }
-        let events_summary = if events.is_empty() {
-            "No notable events".to_string()
-        } else {
-            events.join(", ")
-        };
-
-        let prompt = prompt_builder::build_emotion_analysis_prompt(
-            &participants_json,
-            &recent_context,
-            &events_summary,
-            &self.config.discussion_language,
-        );
-
-        let sys_prompt = match self.config.discussion_language.as_str() {
-            "en" => "You are an emotion analyst. Base your analysis strictly on the exchanges and reactions provided. Do not invent events. Respond only with JSON.",
-            "zh" => "你是情绪分析师。严格根据提供的交流和反应进行分析。不要捏造事件。仅用JSON回复。",
-            _ => "Tu es un analyste émotionnel. Base ton analyse strictement sur les échanges et réactions fournis. N'invente pas d'événements. Réponds uniquement en JSON.",
-        };
-
-        let request = LlmRequest::new(
-            sys_prompt,
-            &prompt,
-            &self.arbitre.config.llm_params,
-            CallKind::Emotion,
-        )
-        .json();
-
-        let raw = match self.chat_text(&request).await {
-            Ok(raw) => raw,
-            Err(LlmError::Cancelled) => return,
-            Err(e) => {
-                tracing::warn!(error = %e, "LLM emotion analysis failed — keeping rule-based values");
-                return;
-            }
-        };
-
-        // Parse deltas (bounded — reactions and bans were already rule-applied) and apply
-        let known_names: Vec<String> = std::iter::once(self.arbitre.config.name.clone())
-            .chain(self.gladiateurs.iter().map(|g| g.config.name.clone()))
-            .collect();
-
-        let analysis = json_parser::parse_emotion_analysis(&raw, &known_names);
-        self.llm_stagnation_flag = analysis.stagnating.unwrap_or(false);
-        let deltas: HashMap<String, EmotionDelta> = analysis
-            .deltas
-            .iter()
-            .map(|(name, d)| (name.clone(), emotion_engine::clamp_delta(d, constants::EMOTION_LLM_DELTA_CAP)))
-            .collect();
-
-        // Apply to arbitre
-        if let Some(delta) = deltas.get(&self.arbitre.config.name) {
-            let prev = self.arbitre.emotions.clone();
-            self.arbitre.emotions.apply_delta(delta);
-            Self::emit_threshold_events(channel, &self.arbitre.config.id, &prev, &self.arbitre.emotions);
-            Self::emit_emotion_updated(channel, &self.arbitre.config.id, &self.arbitre.emotions, &self.config.discussion_language);
-        }
-
-        // Apply to gladiateurs
-        for g in &mut self.gladiateurs {
-            if let Some(delta) = deltas.get(&g.config.name) {
-                let prev = g.emotions.clone();
-                g.emotions.apply_delta(delta);
-                Self::emit_threshold_events(channel, &g.config.id, &prev, &g.emotions);
-                Self::emit_emotion_updated(channel, &g.config.id, &g.emotions, &self.config.discussion_language);
-            }
-        }
-    }
-
-    /// Apply emotional contagion: compute average, move everyone toward it (order-independent).
-    fn apply_emotional_contagion(&mut self, channel: &Channel<ArenaEvent>) {
-        // Group average: the active gladiateurs (the moderator does not take part
-        // in the exchange, so it only receives the mood — it does not shape it)
-        let mut profiles: Vec<&EmotionalProfile> = Vec::new();
-        if constants::EMOTION_CONTAGION_INCLUDE_ARBITRE {
-            profiles.push(&self.arbitre.emotions);
-        }
-        for g in &self.gladiateurs {
-            if !g.is_banned() {
-                profiles.push(&g.emotions);
-            }
-        }
-        if profiles.len() < 2 {
-            return; // No contagion with < 2 participants
-        }
-
-        let avg = emotion_engine::compute_average(&profiles);
-
-        // Apply to arbitre
-        emotion_engine::apply_contagion(&avg, &mut self.arbitre.emotions);
-        Self::emit_emotion_updated(channel, &self.arbitre.config.id, &self.arbitre.emotions, &self.config.discussion_language);
-
-        // Apply to non-banned gladiateurs
-        for g in &mut self.gladiateurs {
-            if !g.is_banned() {
-                emotion_engine::apply_contagion(&avg, &mut g.emotions);
-                Self::emit_emotion_updated(channel, &g.config.id, &g.emotions, &self.config.discussion_language);
-            }
-        }
-    }
-
-    /// Record emotion history snapshots and emit EmotionHistoryUpdate events.
-    fn record_emotion_history(&mut self, channel: &Channel<ArenaEvent>) {
-        let turn = self.current_turn;
-
-        // Arbitre
-        self.arbitre.emotion_history.push(EmotionSnapshot {
-            turn,
-            emotions: self.arbitre.emotions.clone(),
-        });
-        if self.arbitre.emotion_history.len() > constants::ORCH_MAX_EMOTION_HISTORY {
-            self.arbitre.emotion_history.remove(0);
-        }
-        let _ = channel.send(ArenaEvent::EmotionHistoryUpdate {
-            speaker_id: self.arbitre.config.id.clone(),
-            history: self.arbitre.emotion_history.clone(),
-        });
-
-        // Gladiateurs
-        for g in &mut self.gladiateurs {
-            g.emotion_history.push(EmotionSnapshot {
-                turn,
-                emotions: g.emotions.clone(),
-            });
-            if g.emotion_history.len() > constants::ORCH_MAX_EMOTION_HISTORY {
-                g.emotion_history.remove(0);
-            }
-            let _ = channel.send(ArenaEvent::EmotionHistoryUpdate {
-                speaker_id: g.config.id.clone(),
-                history: g.emotion_history.clone(),
-            });
-        }
-    }
-
-    /// Handle manual emotion adjustment from the frontend
-    fn handle_adjust_emotion(
-        &mut self,
-        speaker_id: &str,
-        axis: &str,
-        value: u8,
-        channel: &Channel<ArenaEvent>,
-    ) {
-        let value = value.min(100);
-
-        // Try matching arbitre
-        if speaker_id == self.arbitre.config.id {
-            Self::set_emotion_axis(&mut self.arbitre.emotions, axis, value);
-            Self::emit_emotion_updated(channel, &self.arbitre.config.id, &self.arbitre.emotions, &self.config.discussion_language);
-            return;
-        }
-
-        // Try matching gladiateurs
-        for g in &mut self.gladiateurs {
-            if g.config.id == speaker_id {
-                Self::set_emotion_axis(&mut g.emotions, axis, value);
-                Self::emit_emotion_updated(channel, &g.config.id, &g.emotions, &self.config.discussion_language);
-                return;
-            }
-        }
-    }
-
-    /// Emit threshold-crossing events for axes that newly crossed HIGH or LOW boundaries.
-    fn emit_threshold_events(
-        channel: &Channel<ArenaEvent>,
-        speaker_id: &str,
-        prev: &EmotionalProfile,
-        current: &EmotionalProfile,
-    ) {
-        for (axis, direction, value) in emotion_engine::detect_thresholds(prev, current) {
-            let _ = channel.send(ArenaEvent::EmotionalThresholdCrossed {
-                speaker_id: speaker_id.to_string(),
-                axis,
-                direction,
-                value,
-            });
-        }
-    }
-
-    fn emit_emotion_updated(
-        channel: &Channel<ArenaEvent>,
-        speaker_id: &str,
-        emotions: &EmotionalProfile,
-        lang: &str,
-    ) {
-        let mood = prompt_builder::summarize_emotional_state(emotions, lang);
-        let _ = channel.send(ArenaEvent::EmotionUpdated {
-            speaker_id: speaker_id.to_string(),
-            emotions: emotions.clone(),
-            mood_summary: Some(mood),
-        });
-    }
-
-    fn set_emotion_axis(emotions: &mut EmotionalProfile, axis: &str, value: u8) {
-        match axis {
-            "engagement" => emotions.engagement = value,
-            "accord" => emotions.accord = value,
-            "confiance" => emotions.confiance = value,
-            "frustration" => emotions.frustration = value,
-            "curiosite" => emotions.curiosite = value,
-            "enthousiasme" => emotions.enthousiasme = value,
-            _ => {}
-        }
-    }
-
-    fn create_message(
-        &self,
-        speaker_id: &str,
-        speaker_name: &str,
-        role: SpeakerRole,
-        content: &str,
-    ) -> Message {
-        Message {
-            id: uuid::Uuid::new_v4().to_string(),
-            discussion_id: self.discussion_id.clone(),
-            turn_number: self.current_turn,
-            speaker_id: speaker_id.to_string(),
-            speaker_name: speaker_name.to_string(),
-            role,
-            content: content.to_string(),
-            inner_thought: None,
-            thought_kind: ThoughtKind::Persona,
-            reactions: Vec::new(),
-            is_ban_notification: false,
-            timestamp: chrono::Utc::now(),
-        }
-    }
-
-    /// Build read-only document context for synthesis, or None if document format is disabled.
-    fn build_document_context_for_synthesis(&self) -> Option<String> {
-        if self.config.document_format == DocumentFormat::None {
-            return None;
-        }
-        Some(prompt_builder::build_document_context_readonly(
-            &self.document_content,
-            self.config.document_format.as_extension(),
-            &self.config.discussion_language,
-            &self.config.discussion_mode,
-        ))
-    }
-
-    /// Pass 2: Generate document update via separate non-streaming LLM call.
-    /// The LLM receives only the discussion text + current document, and outputs the updated document.
-    /// Returns the updated document content, or None if document mode is disabled or an error occurs.
-    async fn generate_document_update(
-        &self,
-        speaker_name: &str,
-        discussion_text: &str,
-        llm_params: &LlmParams,
-        _channel: &Channel<ArenaEvent>,
-    ) -> Option<String> {
-        if self.config.document_format == DocumentFormat::None {
-            return None;
-        }
-        if self.cancel_token.is_cancelled() {
-            return None;
-        }
-
-        tracing::info!(speaker = %speaker_name, "Pass 2: generating document update");
-
-        let (sys, usr) = prompt_builder::build_document_update_prompt(
-            &self.document_content,
-            self.config.document_format.as_extension(),
-            discussion_text,
-            &self.config.discussion_mode,
-            &self.config.discussion_language,
-            &self.config.topic,
-        );
-
-        // Use speaker's LLM params with enough tokens for the full document.
-        // The document grows over turns — estimate current tokens (≈ chars/CHARS_PER_TOKEN_ESTIMATE for multilingual)
-        // and set num_predict to 2× current size + padding, so the LLM can reproduce + extend.
-        let mut params = llm_params.clone();
-        let estimated_doc_tokens = (self.document_content.len() / constants::CHARS_PER_TOKEN_ESTIMATE) as i32;
-        params.num_predict = params.num_predict.max(estimated_doc_tokens * 2 + constants::ORCH_DOC_TOKEN_PADDING).max(constants::ORCH_DOC_MIN_NUM_PREDICT);
-
-        let request = LlmRequest::new(&sys, &usr, &params, CallKind::DocumentUpdate);
-
-        match self.chat_text(&request).await {
-            Ok(raw) if !raw.trim().is_empty() => {
-                // If the LLM wrapped in <document> tags, extract; otherwise use as-is
-                let doc = if let (_, Some(extracted)) = json_parser::extract_and_strip_document(&raw) {
-                    extracted
-                } else {
-                    raw.trim().to_string()
-                };
-                tracing::info!(
-                    speaker = %speaker_name,
-                    len = doc.len(),
-                    preview = %truncate_str(&doc, 200),
-                    "Document update generated"
-                );
-                Some(doc)
-            }
-            Ok(_) => {
-                tracing::warn!(speaker = %speaker_name, "Pass 2 returned empty — document unchanged");
-                None
-            }
-            Err(LlmError::Cancelled) => None,
-            Err(e) => {
-                tracing::warn!(speaker = %speaker_name, error = %e, "Pass 2 document update failed — document unchanged");
-                None
-            }
-        }
-    }
-
-    /// Regenerate the document from one contribution and broadcast it.
-    async fn apply_document_update(
-        &mut self,
-        speaker_id: &str,
-        speaker_name: &str,
-        contribution: &str,
-        llm_params: &LlmParams,
-        channel: &Channel<ArenaEvent>,
-    ) {
-        if let Some(updated_doc) = self.generate_document_update(speaker_name, contribution, llm_params, channel).await {
-            self.document_content = updated_doc.clone();
-            let _ = channel.send(ArenaEvent::DocumentUpdated {
-                speaker_id: speaker_id.to_string(),
-                speaker_name: speaker_name.to_string(),
-                content: updated_doc,
-                format: self.config.document_format.as_extension().to_string(),
-            });
-        }
-    }
-
-    /// Per-turn granularity: integrate every contribution of the turn in ONE call,
-    /// attributed to the moderator (who consolidates the group's work).
-    async fn update_document_for_turn(&mut self, channel: &Channel<ArenaEvent>) {
-        if self.config.document_update_granularity != DocumentUpdateGranularity::Turn
-            || self.turn_document_contributions.is_empty()
-        {
-            return;
-        }
-        let contributions = std::mem::take(&mut self.turn_document_contributions);
-        let combined = contributions
-            .iter()
-            .map(|(name, text)| format!("--- {name} ---\n{text}"))
-            .collect::<Vec<_>>()
-            .join("\n\n");
+    /// A templated line of the moderator (act announcement, scene event…), shown
+    /// in the feed and remembered by the engine so the speakers see it.
+    fn emit_arbitre_line(&mut self, kind: MessageKind, content: &str, channel: &Channel<ArenaEvent>) {
         let arb_id = self.arbitre.config.id.clone();
         let arb_name = self.arbitre.config.name.clone();
-        let params = self.arbitre.config.llm_params.clone();
-        self.apply_document_update(&arb_id, &arb_name, &combined, &params, channel).await;
+        let mut msg = self.create_message(&arb_id, &arb_name, SpeakerRole::Arbitre, content);
+        msg.kind = kind;
+        let _ = channel.send(ArenaEvent::MessageComplete { message: msg.clone() });
+        self.turn_messages.push(msg.clone());
+        self.messages_history.push(msg);
     }
 
-    /// Ask a gladiateur whether they want to respond in UserDriven mode.
-    /// Returns true if the speaker wants to respond, false if they pass.
-    async fn ask_respond_or_pass(&self, glad_idx: usize) -> bool {
-        let recent = self.build_recent_exchanges(glad_idx);
-        let prompt = mode_prompts::build_respond_or_pass_prompt(
-            &self.config.topic,
-            &recent,
-            &self.gladiateurs[glad_idx].config.name,
-            &self.config.discussion_language,
-        );
-        let mut params = self.gladiateurs[glad_idx].config.llm_params.clone();
-        params.num_predict = constants::ORCH_NUM_PREDICT_RESPOND_PASS; // Short response only
-        let request = LlmRequest::new(
-            &self.gladiateurs[glad_idx].config.system_prompt,
-            &prompt,
-            &params,
-            CallKind::RespondOrPass,
-        )
-        .json()
-        .speaker(&self.gladiateurs[glad_idx].config.id);
-        match self.chat_text(&request).await {
-            Ok(raw) => {
-                // Parse {"respond": true/false}
-                if let Ok(val) = json_parser::parse_json_response::<serde_json::Value>(&raw) {
-                    val.get("respond").and_then(|v| v.as_bool()).unwrap_or(true)
-                } else {
-                    true // Default to responding if parsing fails
-                }
-            }
-            Err(e) => {
-                tracing::warn!("respond-or-pass LLM failed for {}: {e}", self.gladiateurs[glad_idx].config.name);
-                true // Default to responding on error
-            }
-        }
-    }
-
-    /// Generate a Socratic question from IArbitre.
-    async fn generate_socratic_question(&self) -> Option<String> {
-        let recent = self.turn_messages.iter()
-            .chain(self.messages_history.iter().rev().take(constants::ORCH_RECENT_MESSAGES_TAKE))
-            .map(|m| format!("{}: {}", m.speaker_name, truncate_str(&m.content, constants::ORCH_SOCRATIC_CONTEXT)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let prompt = mode_prompts::build_socratic_question_prompt(
-            &self.config.topic,
-            &recent,
-            &self.config.discussion_language,
-            &self.socratic_questions,
-        );
-        let mut params = self.arbitre.config.llm_params.clone();
-        params.num_predict = constants::ORCH_NUM_PREDICT_SOCRATIC; // Short question
-        let request = LlmRequest::new(
-            &self.arbitre.config.system_prompt,
-            &prompt,
-            &params,
-            CallKind::Socratic,
-        )
-        .speaker(&self.arbitre.config.id);
-        // The full question is emitted as MessageComplete at the call site
-        match self.chat_text(&request).await {
-            Ok(text) => {
-                if text.is_empty() { None } else { Some(text) }
-            }
-            Err(e) => {
-                tracing::warn!("Socratic question generation failed: {e}");
-                None
-            }
-        }
-    }
-
-    // ── Argument map extraction ────────────────────────────────────────
-
-    /// Extract arguments from the current turn's messages and merge into the accumulated map.
-    async fn extract_and_merge_arguments(&mut self, channel: &Channel<ArenaEvent>) {
-        tracing::info!(
-            turn = self.current_turn,
-            turn_messages = self.turn_messages.len(),
-            "Argument map extraction starting"
-        );
-        let substantive = self.turn_messages.iter().filter(|m| m.role != SpeakerRole::Arbitre).count();
-        if substantive < constants::ARGMAP_MIN_TURN_MESSAGES || self.cancel_token.is_cancelled() {
-            tracing::info!(substantive, "Argument map extraction skipped (too few messages or cancelled)");
-            return;
-        }
-
-        // Build recent context from turn messages
-        let recent_context: String = self
-            .turn_messages
-            .iter()
-            .map(|m| {
-                format!(
-                    "[{}] {}",
-                    m.speaker_name,
-                    truncate_str(&m.content, constants::ARGMAP_CONTEXT_CHARS)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Build existing theses + arguments context for the extraction prompt
-        let existing_context = self.build_existing_arguments_context();
-
-        let prompt = prompt_builder::build_argument_extraction_prompt(
-            &recent_context,
-            &existing_context,
-            &self.config.topic,
-            &self.config.discussion_language,
-        );
-
-        let sys_prompt = match self.config.discussion_language.as_str() {
-            "en" => "You are an argument analyst. Extract theses, supporting arguments, counter-arguments and evidence from the exchanges. Respond only with JSON.",
-            "zh" => "你是论证分析师。从对话中提取论点、支持论据、反驳和证据。仅用JSON回复。",
-            _ => "Tu es un analyste d'argumentation. Extrais les thèses, arguments de soutien, contre-arguments et preuves des échanges. Réponds uniquement en JSON.",
-        };
-
-        // Use dedicated params: generous context + num_predict for the long extraction prompt
-        let mut params = self.arbitre.config.llm_params.clone();
-        params.num_predict = params.num_predict.max(constants::ARGMAP_NUM_PREDICT);
-        params.num_ctx = params.num_ctx.max(constants::ARGMAP_NUM_CTX);
-
-        // .json() pins the structured-output temperature
-        let request = LlmRequest::new(sys_prompt, &prompt, &params, CallKind::ArgumentMap).json();
-        let mut raw = match self.chat_text(&request).await {
-            Ok(raw) => raw,
-            Err(LlmError::Cancelled) => return,
-            Err(e) => {
-                tracing::warn!(error = %e, "Argument map extraction failed — skipping this turn");
-                return;
-            }
-        };
-        let mut retry_req = request.clone();
-        retry_req.params.temperature = (retry_req.params.temperature + constants::TEMP_DIFFICULTY_BOOST).min(constants::TEMP_MAX);
-        // Retry once if empty (thinking models sometimes return empty content intermittently)
-        if raw.is_empty() && !self.cancel_token.is_cancelled() {
-            tracing::info!(turn = self.current_turn, "Argument map response empty — retrying with higher temperature");
-            match self.chat_text(&retry_req).await {
-                Ok(r) => raw = r,
-                Err(LlmError::Cancelled) => return,
-                Err(_) => {} // keep empty raw, will be handled below
-            }
-        }
-        tracing::info!(
-            turn = self.current_turn,
-            raw_len = raw.len(),
-            raw_preview = %truncate_str(&raw, 300),
-            "Argument map LLM response received"
-        );
-
-        let known_names: Vec<String> = std::iter::once(self.arbitre.config.name.clone())
-            .chain(self.gladiateurs.iter().map(|g| g.config.name.clone()))
-            .collect();
-
-        let mut extractions = json_parser::parse_argument_extraction(&raw, &known_names);
-        // Retry once if parse failed on non-empty response (malformed JSON from LLM)
-        if extractions.is_empty() && !raw.is_empty() && !self.cancel_token.is_cancelled() {
-            tracing::info!(turn = self.current_turn, raw_len = raw.len(), "Argument map parse failed on non-empty response — retrying");
-            match self.chat_text(&retry_req).await {
-                Ok(retry_raw) => {
-                    if !retry_raw.is_empty() {
-                        tracing::info!(turn = self.current_turn, raw_len = retry_raw.len(), "Argument map retry response received");
-                        extractions = json_parser::parse_argument_extraction(&retry_raw, &known_names);
-                    }
-                }
-                Err(LlmError::Cancelled) => return,
-                Err(e) => {
-                    tracing::warn!(error = %e, "Argument map retry failed");
-                }
-            }
-        }
-        if extractions.is_empty() {
-            tracing::info!(turn = self.current_turn, "No arguments extracted this turn (parse returned empty)");
-            return;
-        }
-
-        tracing::info!(
-            turn = self.current_turn,
-            extractions_count = extractions.len(),
-            "Argument map extractions parsed, merging"
-        );
-        let speakers: HashMap<String, String> = std::iter::once((self.arbitre.config.name.clone(), self.arbitre.config.id.clone()))
-            .chain(self.gladiateurs.iter().map(|g| (g.config.name.clone(), g.config.id.clone())))
-            .collect();
-        let report = argument_merge::merge_extractions(
-            &mut self.argument_map,
-            extractions,
-            &speakers,
-            &self.config.discussion_language,
-        );
-        if report.new_node_ids.is_empty() && report.dropped == 0 {
-            tracing::info!(turn = self.current_turn, "Argument map unchanged this turn");
-            return;
-        }
-
-        let new_ids: HashSet<String> = report.new_node_ids.iter().cloned().collect();
-        let md = self.argument_map.to_markdown(&self.config.topic, &new_ids);
-        let md_speaker = self.argument_map.to_markdown_by_speaker(&self.config.topic, &new_ids, &self.config.discussion_language);
-        tracing::info!(
-            turn = self.current_turn,
-            theses = self.argument_map.theses_count(),
-            arguments = self.argument_map.arguments_count(),
-            new_nodes = report.new_node_ids.len(),
-            deduplicated = report.deduplicated_theses,
-            unattached = report.unattached,
-            dropped = report.dropped,
-            "Argument map updated, emitting event"
-        );
-        let _ = channel.send(ArenaEvent::ArgumentMapUpdated {
-            markdown: md,
-            markdown_by_speaker: md_speaker,
-            theses_count: self.argument_map.theses_count() as u32,
-            arguments_count: self.argument_map.arguments_count() as u32,
-            map: self.argument_map.clone(),
-            new_node_ids: report.new_node_ids,
-            dropped_count: report.dropped,
-        });
-    }
-
-    /// Format existing theses and their arguments (all depths) for the extraction prompt.
-    /// Arguments are rendered recursively with indentation, truncated for prompt compactness,
-    /// and capped at `ARGMAP_PROMPT_MAX_EXISTING_ARGUMENTS` total argument lines.
-    fn build_existing_arguments_context(&self) -> String {
-        if self.argument_map.theses.is_empty() {
-            return String::new();
-        }
-        let mut lines = Vec::new();
-        let mut arg_count = 0;
-
-        for thesis in &self.argument_map.theses {
-            lines.push(format!("  - {}", thesis.label));
-            Self::collect_argument_lines(
-                &thesis.arguments,
-                &mut lines,
-                &mut arg_count,
-                2, // starting indent level (2 = "    - ")
-            );
-        }
-
-        lines.join("\n")
-    }
-
-    /// Recursively collect argument lines with indentation for the extraction prompt.
-    fn collect_argument_lines(
-        arguments: &[ArgumentNode],
-        lines: &mut Vec<String>,
-        arg_count: &mut usize,
-        indent_level: usize,
-    ) {
-        for arg in arguments {
-            if *arg_count >= constants::ARGMAP_PROMPT_MAX_EXISTING_ARGUMENTS {
-                return;
-            }
-            let indent = "  ".repeat(indent_level);
-            let icon = ArgumentMap::arg_icon(&arg.arg_type);
-            let label = truncate_at_word_boundary(&arg.label, constants::ARGMAP_PROMPT_LABEL_CHARS);
-            lines.push(format!("{indent}- {icon} {}: {label}", arg.speaker_name));
-            *arg_count += 1;
-
-            Self::collect_argument_lines(&arg.children, lines, arg_count, indent_level + 1);
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_duplicate_query, is_model_refusal};
+    use super::is_duplicate_query;
     use crate::constants;
+    use crate::engine::is_model_refusal;
 
     /// Test the web pool quota logic directly (same as can_search_web body)
     fn check_web_pool(pool: u32, pool_used: u32, global_usage: u32, has_tavily: bool) -> (bool, u32) {

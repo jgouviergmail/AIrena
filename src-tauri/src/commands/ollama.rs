@@ -5,10 +5,31 @@ use tauri::State;
 use crate::constants;
 use crate::engine::token_budget::{self, BudgetParams, SectionPriority, TokenBudget, TokenBudgetPreview};
 use crate::error::CommandError;
+use crate::models::llm::ProviderKind;
+use crate::models::settings::AppSettings;
 use crate::ollama::client::OllamaClient;
 use crate::ollama::model_info::{self, ModelBudgetInfo};
 use crate::ollama::types::ModelInfo;
 use crate::state::AppState;
+
+/// What the startup loads into Ollama (v1.20.2): the chat model only when Ollama
+/// serves the discussion — a cloud provider must not evict other Ollama consumers
+/// nor wait 15 s for 17 GB of weights it will never use — and the embedding model
+/// whenever one is configured (RAG).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartupPreloadPlan {
+    pub chat_model: Option<String>,
+    pub embedding_model: Option<String>,
+}
+
+pub fn startup_preload_plan(settings: &AppSettings) -> StartupPreloadPlan {
+    let chat = settings.ollama_model.trim();
+    let embedding = settings.embedding_model.trim();
+    StartupPreloadPlan {
+        chat_model: (settings.llm_provider == ProviderKind::Ollama && !chat.is_empty()).then(|| chat.to_string()),
+        embedding_model: (!embedding.is_empty() && (settings.llm_provider != ProviderKind::Ollama || embedding != chat)).then(|| embedding.to_string()),
+    }
+}
 
 #[tauri::command]
 pub async fn check_ollama_connection(state: State<'_, AppState>) -> Result<bool, CommandError> {
@@ -86,13 +107,25 @@ pub async fn initialize_ollama(
     state: State<'_, AppState>,
 ) -> Result<ModelBudgetInfo, CommandError> {
     let settings = state.get_settings().await?;
-    let llm_model = settings.ollama_model.clone();
-    let embedding_model = settings.embedding_model.clone();
+    let plan = startup_preload_plan(&settings);
+    let embedding_model = plan.embedding_model.clone().unwrap_or_default();
     let ollama_url = settings.ollama_url.clone();
 
-    if llm_model.is_empty() {
-        return Err(CommandError::Ollama("No LLM model configured".to_string()));
-    }
+    // Embeddings only (a cloud provider serves the chat): no VRAM sweep, no chat model, no num_ctx advice
+    let Some(llm_model) = plan.chat_model.clone() else {
+        let Some(embedding) = plan.embedding_model.clone() else {
+            return Err(CommandError::Ollama("No Ollama model configured".to_string()));
+        };
+        let emb_client = OllamaClient::new(&ollama_url, &embedding);
+        if !emb_client.check_connection().await {
+            return Err(CommandError::Ollama("Ollama is not reachable".to_string()));
+        }
+        tracing::info!(embedding = %embedding, provider = settings.llm_provider.as_str(), "Preloading the embedding model only (the chat is served elsewhere)");
+        if let Err(e) = emb_client.preload_model(None).await {
+            tracing::warn!("Failed to preload embedding model during init: {e}");
+        }
+        return Ok(ModelBudgetInfo { arch: None, vram: None, recommended_num_ctx: None, current_num_ctx: None, ollama_vram_mb: None, supports_think: false, warnings: Vec::new() });
+    };
 
     let client = OllamaClient::new(&ollama_url, &llm_model);
 
@@ -153,7 +186,7 @@ pub async fn initialize_ollama(
     }
 
     // 9. Preload embedding model if different from LLM (no num_ctx needed — embeddings don't use KV cache)
-    if !embedding_model.is_empty() && embedding_model != llm_model {
+    if !embedding_model.is_empty() {
         let emb_client = OllamaClient::new(&ollama_url, &embedding_model);
         if let Err(e) = emb_client.preload_model(None).await {
             tracing::warn!("Failed to preload embedding model during init: {e}");
@@ -175,4 +208,26 @@ pub async fn compute_token_budget(
         token_budget::apply_default_bounds(&priorities)
     };
     Ok(TokenBudget::to_preview(&params, &resolved))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// v1.20.2 — the startup loads the chat model only when Ollama serves the
+    /// discussion; the embedding model whenever one is set (and not already loaded as the chat model).
+    #[test]
+    fn startup_preloads_the_chat_model_only_when_ollama_serves_the_discussion() {
+        let ollama = AppSettings { llm_provider: ProviderKind::Ollama, ollama_model: "qwen3:27b".into(), embedding_model: "nomic-embed-text".into(), ..Default::default() };
+        assert_eq!(startup_preload_plan(&ollama), StartupPreloadPlan { chat_model: Some("qwen3:27b".into()), embedding_model: Some("nomic-embed-text".into()) });
+        // Same model for both: loaded once
+        let same = AppSettings { embedding_model: "qwen3:27b".into(), ..ollama.clone() };
+        assert_eq!(startup_preload_plan(&same).embedding_model, None);
+        // DeepSeek serves the chat: the 27B chat model stays out of VRAM, the embeddings still load
+        let cloud = AppSettings { llm_provider: ProviderKind::DeepSeek, ..ollama.clone() };
+        assert_eq!(startup_preload_plan(&cloud), StartupPreloadPlan { chat_model: None, embedding_model: Some("nomic-embed-text".into()) });
+        // Nothing configured for a cloud provider
+        let none = AppSettings { llm_provider: ProviderKind::OpenAiCompat, embedding_model: " ".into(), ..ollama };
+        assert_eq!(startup_preload_plan(&none), StartupPreloadPlan { chat_model: None, embedding_model: None });
+    }
 }

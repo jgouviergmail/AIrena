@@ -1,0 +1,136 @@
+{
+  "date": "2026-09-17",
+  "provider": "2026-09-17-ollama-mistral-small3_1_latest (replay)",
+  "runs": 1,
+  "scenarios": [
+    {
+      "metrics": {
+        "argmapDeepShare": 0.05000000074505806,
+        "argmapMaxDepth": 2,
+        "argmapUnanswered": 0,
+        "avgLengthChars": 2429.083251953125,
+        "avgSpeakerGapMs": null,
+        "emotionPeak": 84,
+        "emotionSaturatedShare": 0.0,
+        "errorEvents": 0,
+        "intentionCompliance": 0.8999999761581421,
+        "interventions": 12,
+        "markdownLeaks": 0,
+        "nameUsageRate": 0.8333333134651184,
+        "reactionCriticalShare": 0.5789473652839661,
+        "reactionInsightfulShare": 0.10526315867900848,
+        "reactionsPerIntervention": 1.5833333730697632,
+        "refusals": 0,
+        "repetition": 0.1828019767999649
+      },
+      "name": "debat",
+      "runs": [
+        {
+          "argmapDeepShare": 0.05000000074505806,
+          "argmapMaxDepth": 2,
+          "argmapUnanswered": 0,
+          "avgLengthChars": 2429.083251953125,
+          "avgSpeakerGapMs": null,
+          "emotionPeak": 84,
+          "emotionSaturatedShare": 0.0,
+          "errorEvents": 0,
+          "intentionCompliance": 0.8999999761581421,
+          "interventions": 12,
+          "markdownLeaks": 0,
+          "nameUsageRate": 0.8333333134651184,
+          "reactionCriticalShare": 0.5789473652839661,
+          "reactionInsightfulShare": 0.10526315867900848,
+          "reactionsPerIntervention": 1.5833333730697632,
+          "refusals": 0,
+          "repetition": 0.1828019767999649
+        }
+      ]
+    },
+    {
+      "metrics": {
+        "argmapDeepShare": null,
+        "argmapMaxDepth": null,
+        "argmapUnanswered": null,
+        "avgLengthChars": 2077.111083984375,
+        "avgSpeakerGapMs": null,
+        "emotionPeak": 87,
+        "emotionSaturatedShare": 0.0,
+        "errorEvents": 0,
+        "intentionCompliance": 0.7142857313156128,
+        "interventions": 9,
+        "markdownLeaks": 0,
+        "nameUsageRate": 0.6666666865348816,
+        "reactionCriticalShare": 0.2666666805744171,
+        "reactionInsightfulShare": 0.20000000298023224,
+        "reactionsPerIntervention": 1.6666666269302368,
+        "refusals": 0,
+        "repetition": 0.179777130484581
+      },
+      "name": "ideation",
+      "runs": [
+        {
+          "argmapDeepShare": null,
+          "argmapMaxDepth": null,
+          "argmapUnanswered": null,
+          "avgLengthChars": 2077.111083984375,
+          "avgSpeakerGapMs": null,
+          "emotionPeak": 87,
+          "emotionSaturatedShare": 0.0,
+          "errorEvents": 0,
+          "intentionCompliance": 0.7142857313156128,
+          "interventions": 9,
+          "markdownLeaks": 0,
+          "nameUsageRate": 0.6666666865348816,
+          "reactionCriticalShare": 0.2666666805744171,
+          "reactionInsightfulShare": 0.20000000298023224,
+          "reactionsPerIntervention": 1.6666666269302368,
+          "refusals": 0,
+          "repetition": 0.179777130484581
+        }
+      ]
+    },
+    {
+      "metrics": {
+        "argmapDeepShare": null,
+        "argmapMaxDepth": null,
+        "argmapUnanswered": null,
+        "avgLengthChars": 1697.5,
+        "avgSpeakerGapMs": null,
+        "emotionPeak": 79,
+        "emotionSaturatedShare": 0.0,
+        "errorEvents": 0,
+        "intentionCompliance": 0.800000011920929,
+        "interventions": 6,
+        "markdownLeaks": 0,
+        "nameUsageRate": 0.6666666865348816,
+        "reactionCriticalShare": 0.75,
+        "reactionInsightfulShare": 0.0,
+        "reactionsPerIntervention": 0.6666666865348816,
+        "refusals": 0,
+        "repetition": 0.17867185175418854
+      },
+      "name": "socratique",
+      "runs": [
+        {
+          "argmapDeepShare": null,
+          "argmapMaxDepth": null,
+          "argmapUnanswered": null,
+          "avgLengthChars": 1697.5,
+          "avgSpeakerGapMs": null,
+          "emotionPeak": 79,
+          "emotionSaturatedShare": 0.0,
+          "errorEvents": 0,
+          "intentionCompliance": 0.800000011920929,
+          "interventions": 6,
+          "markdownLeaks": 0,
+          "nameUsageRate": 0.6666666865348816,
+          "reactionCriticalShare": 0.75,
+          "reactionInsightfulShare": 0.0,
+          "reactionsPerIntervention": 0.6666666865348816,
+          "refusals": 0,
+          "repetition": 0.17867185175418854
+        }
+      ]
+    }
+  ]
+}

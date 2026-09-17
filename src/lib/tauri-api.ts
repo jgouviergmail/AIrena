@@ -1,18 +1,25 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { TuningInfo } from "./tuning";
 import type {
   AppSettings,
   ArenaEvent,
   BudgetParams,
+  CastingSuggestion,
   DeepSeekBalance,
   DeepSeekModels,
+  EngineConstants,
+  ReactionType,
   DiscussionConfig,
   DiscussionDetail,
+  DiscussionMode,
   DiscussionSummary,
+  DiscussionTemplate,
   LicenseStatus,
   LlmConstants,
   LlmUsagePeriod,
   ModelBudgetInfo,
   ModelInfo,
+  OpenAiCompatModels,
   PredefinedProfile,
   RagDocumentInfo,
   SaveDiscussionRequest,
@@ -62,12 +69,41 @@ export async function skipUserTurn(): Promise<void> {
   return await invoke("skip_user_turn");
 }
 
+/** Step mode (v1.20.1): the engine waits for the audience's cue before each speaker. */
+export async function setStepMode(enabled: boolean): Promise<void> {
+  return await invoke("set_step_mode", { enabled });
+}
+
+/** The audience's cue: the next speaker may talk. */
+export async function nextSpeaker(): Promise<void> {
+  return await invoke("next_speaker");
+}
+
 export async function adjustEmotion(
   speakerId: string,
   axis: string,
   value: number,
 ): Promise<void> {
   return await invoke("adjust_emotion", { speakerId, axis, value });
+}
+
+/** Audience reaction to a message of the running discussion. */
+export async function reactToMessage(messageId: string, reactionType: ReactionType): Promise<void> {
+  return await invoke("react_to_message", { messageId, reactionType });
+}
+
+export async function getEngineConstants(): Promise<EngineConstants> {
+  return await invoke<EngineConstants>("get_engine_constants");
+}
+
+/** The audience votes on the motion of an Oxford debate. */
+export async function audienceVote(choice: "for" | "against"): Promise<void> {
+  await invoke("audience_vote", { choice });
+}
+
+/** Ask the configured model for a cast suited to the topic (one JSON call). */
+export async function suggestCasting(topic: string, mode: DiscussionMode, lang: string, count: number): Promise<CastingSuggestion> {
+  return await invoke<CastingSuggestion>("suggest_casting", { topic, mode, lang, count });
 }
 
 // -- Ollama commands --
@@ -117,6 +153,16 @@ export async function listDeepSeekModels(apiKey?: string): Promise<DeepSeekModel
 
 export async function validateDeepSeekKey(apiKey: string): Promise<DeepSeekBalance> {
   return await invoke<DeepSeekBalance>("validate_deepseek_key", { apiKey });
+}
+
+/** `GET /models` of an OpenAI-compatible server (empty list without catalogue). */
+export async function listOpenAiCompatModels(baseUrl?: string, apiKey?: string): Promise<OpenAiCompatModels> {
+  return await invoke<OpenAiCompatModels>("list_openai_compat_models", { baseUrl: baseUrl ?? null, apiKey: apiKey ?? null });
+}
+
+/** Validate an OpenAI-compatible server + key + model the way a discussion start will. */
+export async function validateOpenAiCompat(baseUrl: string, apiKey: string, model: string): Promise<void> {
+  await invoke("validate_openai_compat", { baseUrl, apiKey, model });
 }
 
 export async function getLlmUsagePeriod(): Promise<LlmUsagePeriod> {
@@ -191,6 +237,58 @@ export async function deleteDiscussionHistory(id: string): Promise<void> {
   return await invoke("delete_discussion_history", { id });
 }
 
+/** Full-text search over topics, syntheses and messages (empty query = everything). */
+export async function searchDiscussionHistory(query: string): Promise<DiscussionSummary[]> {
+  return await invoke<DiscussionSummary[]>("search_discussion_history", { query });
+}
+
+export async function setDiscussionTags(id: string, tags: string[]): Promise<void> {
+  await invoke("set_discussion_tags", { id, tags });
+}
+
+export async function setDiscussionFavorite(id: string, favorite: boolean): Promise<void> {
+  await invoke("set_discussion_favorite", { id, favorite });
+}
+
+// -- Discussion templates (v1.20) --
+
+export async function listDiscussionTemplates(): Promise<DiscussionTemplate[]> {
+  return await invoke<DiscussionTemplate[]>("list_discussion_templates");
+}
+
+export async function saveDiscussionTemplate(template: DiscussionTemplate): Promise<void> {
+  await invoke("save_discussion_template", { template });
+}
+
+export async function deleteDiscussionTemplate(id: string): Promise<void> {
+  await invoke("delete_discussion_template", { id });
+}
+
+// -- Advanced tuning and long memory (v1.20) --
+
+export async function getTuningInfo(): Promise<TuningInfo> {
+  return await invoke<TuningInfo>("get_tuning_info");
+}
+
+export async function countPersonaMemories(): Promise<number> {
+  return await invoke<number>("count_persona_memories");
+}
+
+export async function forgetPersonaMemories(): Promise<void> {
+  await invoke("forget_persona_memories");
+}
+
+// -- Operations (v1.20) --
+
+/** Tail of today's backend log (empty when none exists yet). */
+export async function readBackendLog(): Promise<string> {
+  return await invoke<string>("read_backend_log");
+}
+
+export async function getAppVersion(): Promise<string> {
+  return await invoke<string>("get_app_version");
+}
+
 export async function deleteAllDiscussionHistory(): Promise<void> {
   return await invoke("delete_all_discussion_history");
 }
@@ -217,6 +315,15 @@ export async function getRagStatus(): Promise<RagDocumentInfo[]> {
 
 export async function clearRagStore(): Promise<void> {
   return await invoke("clear_rag_store");
+}
+
+// -- External links --
+
+/** Open an http(s) link in the system browser (anything else is refused). */
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!/^https?:\/\//i.test(url)) return;
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
+  await openUrl(url);
 }
 
 // -- File utilities --

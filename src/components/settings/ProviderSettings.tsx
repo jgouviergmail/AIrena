@@ -1,15 +1,16 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Brain, Cloud, Cpu, Eye } from "lucide-react";
+import { Brain, Cloud, Cpu, Eye, Server, Timer } from "lucide-react";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { cn } from "@/lib/utils";
-import { REASONING_LEVELS } from "@/lib/types";
+import { REASONING_LEVELS, REASONING_PACES } from "@/lib/types";
 import type { ProviderKind } from "@/lib/types";
 import { ChoiceRow, Explainer, Field, Section } from "./SettingsPrimitives";
 
 const PROVIDERS: { value: ProviderKind; icon: typeof Cpu }[] = [
   { value: "ollama", icon: Cpu },
   { value: "deepseek", icon: Cloud },
+  { value: "openaiCompat", icon: Server },
 ];
 
 /** Which backend serves discussions + the global reasoning policy. */
@@ -29,7 +30,7 @@ export function ProviderSettings() {
     <Section title={t("settings.provider")} icon={Cloud}>
       <Field label={t("settings.providerChoice")}>
         <Explainer>{t("settings.providerDesc")}</Explainer>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           {PROVIDERS.map(({ value, icon: Icon }) => (
             <button
               key={value}
@@ -66,6 +67,20 @@ export function ProviderSettings() {
               }))}
             />
             <p className="text-xs text-muted-foreground">{t(`settings.reasoning_${settings.reasoningLevel}Desc`)}</p>
+          </Field>
+
+          <Field label={<><Timer className="mr-1 inline h-3.5 w-3.5 text-primary" />{t("settings.reasoningPace")}</>}>
+            <Explainer>{t("settings.reasoningPaceDesc")}</Explainer>
+            <ChoiceRow
+              value={settings.reasoningPace}
+              onChange={(reasoningPace) => updateSettings({ reasoningPace })}
+              options={REASONING_PACES.map((pace) => ({
+                value: pace,
+                label: t(`settings.pace_${pace}`),
+                title: t(`settings.pace_${pace}Desc`),
+              }))}
+            />
+            <p className="text-xs text-muted-foreground">{t(`settings.pace_${settings.reasoningPace}Desc`)}</p>
           </Field>
 
           <Field label={<><Eye className="mr-1 inline h-3.5 w-3.5 text-primary" />{t("settings.showModelReasoning")}</>}>

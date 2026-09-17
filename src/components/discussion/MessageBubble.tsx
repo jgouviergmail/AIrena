@@ -1,10 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { BookOpen, Brain, Database, Globe } from "lucide-react";
+import { BookOpen, Brain, Database, Globe, Link2 } from "lucide-react";
+import { SourceRow } from "@/components/sources/SourcesList";
+import { ReactionBar } from "./ReactionBar";
+import type { SourceRecord } from "@/lib/report";
 import { SpeakerBadge } from "./SpeakerBadge";
 import { MathText } from "@/components/shared/MathText";
 import { cn } from "@/lib/utils";
-import type { Message, RagChunkInfo, SpeakerRole } from "@/lib/types";
+import { REACTION_EMOJI, REACTION_TONE_CLASS, reactionTone } from "@/lib/reactions";
+import { openExternalUrl } from "@/lib/tauri-api";
+import { messageKind, type IntentionData, type Message, type RagChunkInfo, type ReactionType, type SpeakerRole } from "@/lib/types";
 
 /** Stable empty array to avoid re-creating [] on every render (breaks useMemo deps). */
 const EMPTY_NAMES: string[] = [];
@@ -98,6 +103,8 @@ export function MessageBubble({
   ragChunkDetails,
   participantNames = EMPTY_NAMES,
   emojiMap,
+  sources,
+  audience,
 }: {
   message: Message;
   streaming?: string;
@@ -110,9 +117,14 @@ export function MessageBubble({
   ragChunkDetails?: RagChunkInfo[];
   participantNames?: string[];
   emojiMap?: Map<string, string>;
+  /** References injected into this speaker's prompt for this message */
+  sources?: SourceRecord[];
+  /** Audience reactions (arena, running discussion): handler + cap */
+  audience?: { onReact: (type: ReactionType) => void; max: number };
 }) {
   const { t } = useTranslation();
   const [showThought, setShowThought] = useState(false);
+  const [showSources, setShowSources] = useState(false);
   const content = streaming ?? message.content;
   const isStreaming = streaming !== undefined;
   const highlighted = useMemo(
@@ -120,10 +132,31 @@ export function MessageBubble({
     [content, participantNames],
   );
 
-  if (message.isBanNotification) {
+  const kind = messageKind(message);
+  if (kind === "banNotification") {
     return (
       <div className="flex justify-center py-2">
         <div className="rounded-full bg-destructive/10 px-4 py-1.5 text-xs text-destructive">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
+  if (kind === "stageDirection") {
+    return (
+      <p className="px-6 py-1 text-center text-xs italic text-muted-foreground motion-safe:animate-in motion-safe:fade-in">
+        {emoji && <span className="mr-1 not-italic">{emoji}</span>}
+        {message.content}
+      </p>
+    );
+  }
+  if (kind === "actAnnouncement" || kind === "sceneEvent") {
+    return (
+      <div className="flex justify-center py-2">
+        <div className={cn(
+          "max-w-prose rounded-lg border px-4 py-2 text-center text-xs font-medium",
+          kind === "actAnnouncement" ? "border-primary/30 bg-primary/5 text-primary" : "border-amber-500/30 bg-amber-500/5 text-amber-600 dark:text-amber-400",
+        )}>
           {message.content}
         </div>
       </div>
@@ -154,7 +187,7 @@ export function MessageBubble({
             <span
               className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500 cursor-pointer"
               title={wikiArticleUrls?.join("\n") ?? `${wikiSearchCount} Wikipedia`}
-              onClick={() => wikiArticleUrls?.[0] && window.open(wikiArticleUrls[0], "_blank")}
+              onClick={() => wikiArticleUrls?.[0] && openExternalUrl(wikiArticleUrls[0]).catch(() => {})}
             >
               <BookOpen className="h-3 w-3" />
             </span>
@@ -174,6 +207,17 @@ export function MessageBubble({
           )}
         </div>
         <div className="flex items-center gap-2">
+          {sources && sources.length > 0 && (
+            <button
+              onClick={() => setShowSources(!showSources)}
+              aria-expanded={showSources}
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={t("sources.title")}
+            >
+              <Link2 className="h-3 w-3" />
+              {sources.length}
+            </button>
+          )}
           {message.innerThought && (
             <button
               onClick={() => setShowThought(!showThought)}
@@ -187,6 +231,12 @@ export function MessageBubble({
           )}
         </div>
       </div>
+
+      {showSources && sources && sources.length > 0 && (
+        <ul className="mb-3 divide-y divide-border/60 rounded-md border border-dashed border-border bg-muted/30 px-3">
+          {sources.map((s, i) => <SourceRow key={`${s.url}-${i}`} source={s} />)}
+        </ul>
+      )}
 
       {showThought && message.innerThought && (
         <div className="mb-3 rounded-md border border-dashed border-border bg-muted/30 p-3">
@@ -208,22 +258,30 @@ export function MessageBubble({
         </p>
       </div>
 
+      {audience && (
+        <ReactionBar
+          onReact={audience.onReact}
+          used={(message.reactions ?? []).filter((r) => r.fromSpeakerId === "user").length}
+          max={audience.max}
+        />
+      )}
+
       {(message.reactions?.length ?? 0) > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5 border-t border-border pt-2">
           {(message.reactions ?? []).map((r, i) => {
             const reactorEmoji = emojiMap?.get(r.fromSpeakerId) ?? "";
+            const title = [r.justification, r.quote ? `« ${r.quote} »` : null].filter(Boolean).join("\n");
             return (
               <span
                 key={i}
                 className={cn(
-                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px]",
-                  r.reactionType === "like"
-                    ? "bg-green-500/10 text-green-500"
-                    : "bg-red-500/10 text-red-500",
+                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] motion-safe:animate-in motion-safe:fade-in",
+                  REACTION_TONE_CLASS[reactionTone(r.reactionType)],
+                  r.pending && "opacity-50",
                 )}
-                title={r.justification ?? undefined}
+                title={title || undefined}
               >
-                {r.reactionType === "like" ? "👍" : "👎"}
+                {REACTION_EMOJI[r.reactionType] ?? "👍"}
                 {reactorEmoji && <span>{reactorEmoji}</span>}
                 {r.fromSpeakerName}
               </span>
@@ -237,6 +295,26 @@ export function MessageBubble({
 
 /** Characters of live reasoning kept on screen (the tail — the bubble must not grow unbounded). */
 const REASONING_PREVIEW_CHARS = 600;
+/** Refresh period of the "thinking for N s" chronometer. */
+const REASONING_CLOCK_MS = 1000;
+
+/** Seconds elapsed since the component mounted (the first reasoning chunk), refreshed every second. */
+function useElapsedSeconds(): number {
+  const [startedAt] = useState(() => Date.now());
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setSeconds(Math.floor((Date.now() - startedAt) / 1000)), REASONING_CLOCK_MS);
+    return () => window.clearInterval(id);
+  }, [startedAt]);
+  return seconds;
+}
+
+/** "réfléchit depuis N s" — mounted only while a reasoning stream is open. */
+function ReasoningClock() {
+  const { t } = useTranslation();
+  const seconds = useElapsedSeconds();
+  return <span className="tabular-nums text-muted-foreground">{t("arena.reasoningSince", { seconds })}</span>;
+}
 
 export function StreamingBubble({
   speakerName,
@@ -245,6 +323,7 @@ export function StreamingBubble({
   emoji,
   participantNames = EMPTY_NAMES,
   variant = "content",
+  intention,
 }: {
   speakerName: string;
   role: SpeakerRole;
@@ -253,6 +332,8 @@ export function StreamingBubble({
   participantNames?: string[];
   /** "reasoning": the model is still thinking — muted tail preview */
   variant?: "content" | "reasoning";
+  /** Backstage: the speaker's declared intention, shown while they think */
+  intention?: IntentionData;
 }) {
   const { t } = useTranslation();
   const highlighted = useMemo(
@@ -269,7 +350,16 @@ export function StreamingBubble({
             <Brain className="h-3 w-3 animate-pulse" />
             {t("arena.reasoningLive")}
           </span>
+          <span className="ml-auto text-[10px]"><ReasoningClock /></span>
         </div>
+        {intention && (
+          <p className="mb-1 text-[11px] text-muted-foreground">
+            <span className="font-medium text-foreground">{t(`directive.goals.${intention.goal}`, intention.goal)}</span>
+            {" · "}
+            {intention.target ?? t("directive.intentionTopic")}
+            {intention.angle && <> — {intention.angle}</>}
+          </p>
+        )}
         <p className="whitespace-pre-wrap text-xs italic text-muted-foreground">{tail}</p>
       </div>
     );

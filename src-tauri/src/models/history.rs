@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::llm::UsageLedger;
+use super::persona_memory::PersonaRecapRecord;
 use super::message::Message;
 
 fn default_provider() -> String {
@@ -49,6 +50,13 @@ pub struct SaveDiscussionRequest {
     pub usage: UsageLedger,
     #[serde(default)]
     pub estimated_cost_usd: f64,
+    /// Serialised `DiscussionReport` built by the frontend (sources, timeline,
+    /// emotion history, positions, agendas, scores…); empty for v1.16 payloads.
+    #[serde(default)]
+    pub report_json: String,
+    /// Recaps of the personas that came from a catalogue profile (long memory, v1.20)
+    #[serde(default)]
+    pub recaps: Vec<PersonaRecapRecord>,
 }
 
 /// Lightweight summary for listing discussions (no messages).
@@ -69,6 +77,11 @@ pub struct DiscussionSummary {
     pub llm_provider: String,
     pub total_tokens: u32,
     pub estimated_cost_usd: f64,
+    /// User tags (v1.20)
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 /// Full discussion detail with all messages.
@@ -94,4 +107,11 @@ pub struct DiscussionDetail {
     pub llm_provider: String,
     pub usage: UsageLedger,
     pub estimated_cost_usd: f64,
+    /// Empty for discussions saved before v1.17
+    pub report_json: String,
+    /// User tags (v1.20)
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub favorite: bool,
 }

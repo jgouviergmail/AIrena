@@ -6,9 +6,14 @@ import { GeneralSettings } from "@/components/settings/GeneralSettings";
 import { LicenseSettings } from "@/components/settings/LicenseSettings";
 import { ProviderSettings } from "@/components/settings/ProviderSettings";
 import { DeepSeekSettings } from "@/components/settings/DeepSeekSettings";
+import { OpenAiCompatSettings } from "@/components/settings/OpenAiCompatSettings";
 import { OllamaSettings } from "@/components/settings/OllamaSettings";
 import { TokenBudgetPrioritiesSettings } from "@/components/settings/TokenBudgetPriorities";
 import { TavilySettings } from "@/components/settings/TavilySettings";
+import { AudioSettings } from "@/components/settings/AudioSettings";
+import { MemorySettings } from "@/components/settings/MemorySettings";
+import { AdvancedTuning } from "@/components/settings/AdvancedTuning";
+import { AboutSettings } from "@/components/settings/AboutSettings";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useTheme } from "@/providers/ThemeProvider";
 import { extractErrorMessage } from "@/lib/error-utils";
@@ -75,6 +80,7 @@ export default function SettingsPage() {
   }
 
   const isDeepSeek = settings.llmProvider === "deepseek";
+  const isOpenAiCompat = settings.llmProvider === "openaiCompat";
 
   return (
     <>
@@ -92,9 +98,14 @@ export default function SettingsPage() {
           <LicenseSettings />
           <ProviderSettings />
           {isDeepSeek && <DeepSeekSettings />}
-          <OllamaSettings chatEnabled={!isDeepSeek} />
+          {isOpenAiCompat && <OpenAiCompatSettings />}
+          <OllamaSettings chatEnabled={!isDeepSeek && !isOpenAiCompat} />
           <TokenBudgetPrioritiesSettings />
           <TavilySettings />
+          <AudioSettings />
+          <MemorySettings />
+          <AdvancedTuning />
+          <AboutSettings />
         </div>
       </div>
     </>

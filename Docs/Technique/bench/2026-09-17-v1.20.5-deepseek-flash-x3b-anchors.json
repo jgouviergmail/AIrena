@@ -1,0 +1,88 @@
+{
+  "date": "2026-09-17",
+  "provider": "deepseek-deepseek-flash-x3b",
+  "runs": 3,
+  "scenarios": [
+    {
+      "metrics": {
+        "argmapDeepShare": 0.09295809268951416,
+        "argmapMaxDepth": 2,
+        "argmapUnanswered": 4,
+        "avgLengthChars": 1887.72216796875,
+        "avgSpeakerGapMs": 15119.6064453125,
+        "emotionPeak": 86,
+        "emotionSaturatedShare": 0.0,
+        "errorEvents": 0,
+        "intentionCompliance": 0.8181818127632141,
+        "interventions": 12,
+        "markdownLeaks": 0,
+        "nameUsageRate": 0.8055555820465088,
+        "reactionCriticalShare": 0.3472222089767456,
+        "reactionInsightfulShare": 0.4305555820465088,
+        "reactionsPerIntervention": 2.0,
+        "refusals": 0,
+        "repetition": 0.1512071192264557
+      },
+      "name": "debat",
+      "runs": [
+        {
+          "argmapDeepShare": 0.0625,
+          "argmapMaxDepth": 2,
+          "argmapUnanswered": 2,
+          "avgLengthChars": 2043.6666259765625,
+          "avgSpeakerGapMs": 13471.7275390625,
+          "emotionPeak": 85,
+          "emotionSaturatedShare": 0.0,
+          "errorEvents": 0,
+          "intentionCompliance": 0.6363636255264282,
+          "interventions": 12,
+          "markdownLeaks": 0,
+          "nameUsageRate": 0.6666666865348816,
+          "reactionCriticalShare": 0.2916666567325592,
+          "reactionInsightfulShare": 0.5416666865348816,
+          "reactionsPerIntervention": 2.0,
+          "refusals": 0,
+          "repetition": 0.1408732533454895
+        },
+        {
+          "argmapDeepShare": 0.1111111119389534,
+          "argmapMaxDepth": 3,
+          "argmapUnanswered": 4,
+          "avgLengthChars": 1709.1666259765625,
+          "avgSpeakerGapMs": 17272.908203125,
+          "emotionPeak": 87,
+          "emotionSaturatedShare": 0.0,
+          "errorEvents": 0,
+          "intentionCompliance": 0.8181818127632141,
+          "interventions": 12,
+          "markdownLeaks": 0,
+          "nameUsageRate": 0.75,
+          "reactionCriticalShare": 0.375,
+          "reactionInsightfulShare": 0.4166666567325592,
+          "reactionsPerIntervention": 2.0,
+          "refusals": 0,
+          "repetition": 0.14881010353565216
+        },
+        {
+          "argmapDeepShare": 0.10526315867900848,
+          "argmapMaxDepth": 2,
+          "argmapUnanswered": 6,
+          "avgLengthChars": 1910.3333740234375,
+          "avgSpeakerGapMs": 14614.181640625,
+          "emotionPeak": 85,
+          "emotionSaturatedShare": 0.0,
+          "errorEvents": 0,
+          "intentionCompliance": 1.0,
+          "interventions": 12,
+          "markdownLeaks": 0,
+          "nameUsageRate": 1.0,
+          "reactionCriticalShare": 0.375,
+          "reactionInsightfulShare": 0.3333333432674408,
+          "reactionsPerIntervention": 2.0,
+          "refusals": 0,
+          "repetition": 0.1639380156993866
+        }
+      ]
+    }
+  ]
+}

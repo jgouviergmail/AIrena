@@ -42,6 +42,7 @@ export function EmotionPanel() {
   const emotionHistory = useArenaStore((s) => s.emotionHistory);
   const moodSummary = useArenaStore((s) => s.moodSummary);
   const directives = useArenaStore((s) => s.directives);
+  const intentions = useArenaStore((s) => s.intentions);
   const bans = useArenaStore((s) => s.bans);
   const currentTurn = useArenaStore((s) => s.currentTurn);
   const activeSpeakerId = useArenaStore((s) => s.activeSpeakerId);
@@ -150,6 +151,7 @@ export function EmotionPanel() {
             moodSummary={moodSummary.get(p.id)}
             currentTurn={currentTurn}
             directive={directives.get(p.id)}
+            intention={intentions.get(p.id)}
             banInfo={bans.get(p.id)}
             view={view}
             isActive={p.id === activeSpeakerId}

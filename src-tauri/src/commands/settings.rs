@@ -6,6 +6,33 @@ use crate::license;
 use crate::models::profile::PredefinedProfile;
 use crate::models::settings::AppSettings;
 use crate::state::AppState;
+use crate::engine::tuning::{Tuning, TuningBounds};
+
+/// Defaults and bounds of the advanced tuning (the settings sliders mirror them).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TuningInfo {
+    pub defaults: Tuning,
+    pub bounds: TuningBounds,
+}
+
+#[tauri::command]
+pub fn get_tuning_info() -> TuningInfo {
+    TuningInfo { defaults: Tuning::default(), bounds: Tuning::BOUNDS }
+}
+
+#[tauri::command]
+pub async fn count_persona_memories(state: State<'_, AppState>) -> Result<u32, CommandError> {
+    let db = state.db.clone();
+    repository::count_persona_memories(&db).await.map_err(|e| CommandError::History(e.to_string()))
+}
+
+/// "Forget everything": every persona memory is deleted (the discussions stay).
+#[tauri::command]
+pub async fn forget_persona_memories(state: State<'_, AppState>) -> Result<(), CommandError> {
+    let db = state.db.clone();
+    repository::delete_all_persona_memories(&db).await.map_err(|e| CommandError::History(e.to_string()))
+}
 
 #[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, CommandError> {

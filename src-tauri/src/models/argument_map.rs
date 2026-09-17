@@ -79,6 +79,30 @@ impl ArgumentNode {
     }
 }
 
+/// A counter-argument nobody has answered yet: the debtor (author of the countered
+/// argument, or the thesis owner) owes an answer on the merits (v1.20.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Objection {
+    pub debtor_id: String,
+    pub thesis_label: String,
+    pub argument_id: String,
+    pub text: String,
+    pub by_name: String,
+    /// 1 = against the thesis itself, 2 = against an argument, …
+    pub depth: usize,
+}
+
+/// How deep the map goes (v1.20.1): the deepest argument, the share of arguments
+/// answering another argument (depth ≥ 2) and the counters still unanswered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepthStats {
+    pub max_depth: usize,
+    pub deep_share: f32,
+    pub unanswered_counters: usize,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArgumentMap {
@@ -97,6 +121,59 @@ impl ArgumentMap {
             .flat_map(|t| &t.arguments)
             .map(|a| a.count_all())
             .sum()
+    }
+
+    /// The counter-arguments nobody else has answered (no child by another
+    /// speaker), in map order — the newest last. Self-inflicted counters
+    /// (author = debtor) are not objections.
+    pub fn unanswered_objections(&self) -> Vec<Objection> {
+        let mut out = Vec::new();
+        for thesis in &self.theses {
+            for arg in &thesis.arguments {
+                Self::collect_objections(thesis, &thesis.speaker_id, arg, 1, &mut out);
+            }
+        }
+        out
+    }
+
+    fn collect_objections(thesis: &ThesisNode, parent_author: &str, arg: &ArgumentNode, depth: usize, out: &mut Vec<Objection>) {
+        let answered = arg.children.iter().any(|c| c.speaker_id != arg.speaker_id);
+        if arg.arg_type == ArgumentType::Counter && !answered && arg.speaker_id != parent_author {
+            out.push(Objection {
+                debtor_id: parent_author.to_string(),
+                thesis_label: thesis.label.clone(),
+                argument_id: arg.id.clone(),
+                text: arg.label.clone(),
+                by_name: arg.speaker_name.clone(),
+                depth,
+            });
+        }
+        for child in &arg.children {
+            Self::collect_objections(thesis, &arg.speaker_id, child, depth + 1, out);
+        }
+    }
+
+    /// Depth of the map (see [`DepthStats`]); zeros for an empty map.
+    pub fn depth_stats(&self) -> DepthStats {
+        fn walk(arg: &ArgumentNode, depth: usize, total: &mut usize, deep: &mut usize, max: &mut usize) {
+            *total += 1;
+            if depth >= 2 {
+                *deep += 1;
+            }
+            *max = (*max).max(depth);
+            for c in &arg.children {
+                walk(c, depth + 1, total, deep, max);
+            }
+        }
+        let (mut total, mut deep, mut max) = (0usize, 0usize, 0usize);
+        for arg in self.theses.iter().flat_map(|t| &t.arguments) {
+            walk(arg, 1, &mut total, &mut deep, &mut max);
+        }
+        DepthStats {
+            max_depth: max,
+            deep_share: if total == 0 { 0.0 } else { deep as f32 / total as f32 },
+            unanswered_counters: self.unanswered_objections().len(),
+        }
     }
 
     pub(crate) fn arg_icon(arg_type: &ArgumentType) -> &'static str {
@@ -217,6 +294,47 @@ impl ArgumentMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn node(id: &str, label: &str, arg_type: ArgumentType, speaker: (&str, &str), children: Vec<ArgumentNode>) -> ArgumentNode {
+        ArgumentNode { id: id.into(), label: label.into(), arg_type, speaker_id: speaker.0.into(), speaker_name: speaker.1.into(), targets_thesis_id: None, children }
+    }
+
+    /// v1.20.1 — objections: a counter without an answer by someone else is owed by the
+    /// author of what it hits (the thesis owner at depth 1, the argument's author deeper);
+    /// evidence added by the objector does not count as an answer; depth stats follow.
+    #[test]
+    fn unanswered_objections_and_depth_stats() {
+        let alice = ("s1", "Alice");
+        let bob = ("s2", "Bob");
+        let map = ArgumentMap {
+            theses: vec![ThesisNode {
+                id: "t-0".into(),
+                label: "L'IA remplacera les développeurs".into(),
+                speaker_id: "s1".into(),
+                speaker_name: "Alice".into(),
+                arguments: vec![
+                    // Answered: Alice replied under Bob's counter
+                    node("a-1", "Les outils déplacent le travail", ArgumentType::Counter, bob, vec![node("a-2", "Le déplacement est déjà un remplacement", ArgumentType::Support, alice, vec![])]),
+                    // Unanswered (depth 1): only Bob's own evidence underneath
+                    node("a-3", "Les études montrent une productivité stable", ArgumentType::Counter, bob, vec![node("a-4", "Étude X 2025", ArgumentType::Evidence, bob, vec![])]),
+                    // Bob counters Alice's support at depth 2: Alice owes the answer
+                    node("a-5", "Les LLM codent déjà des modules entiers", ArgumentType::Support, alice, vec![node("a-6", "Sans revue humaine ils cassent la prod", ArgumentType::Counter, bob, vec![])]),
+                    // A counter by the thesis owner herself is not an objection
+                    node("a-7", "Nuance de l'autrice", ArgumentType::Counter, alice, vec![]),
+                ],
+            }],
+        };
+        let objections = map.unanswered_objections();
+        assert_eq!(objections.iter().map(|o| (o.argument_id.as_str(), o.debtor_id.as_str(), o.depth)).collect::<Vec<_>>(), vec![("a-3", "s1", 1), ("a-6", "s1", 2)]);
+        assert_eq!(objections[0].by_name, "Bob");
+        assert_eq!(objections[0].thesis_label, "L'IA remplacera les développeurs");
+        let stats = map.depth_stats();
+        assert_eq!(stats.max_depth, 2);
+        assert_eq!(stats.unanswered_counters, 2);
+        // 7 arguments, 3 at depth 2 (a-2, a-4, a-6)
+        assert!((stats.deep_share - 3.0 / 7.0).abs() < 1e-6);
+        assert_eq!(ArgumentMap::default().depth_stats(), DepthStats::default());
+    }
 
     fn make_arg(
         id: &str,

@@ -24,6 +24,16 @@ pub enum DiscussionMode {
     Tutorial,
     CritiqueReview,
     CollaborativeFiction,
+    /// Adversarial trial: prosecution, defence, witnesses, jurors, a verdict (v1.19)
+    Trial,
+    /// Oxford-style debate on a motion, two camps, the audience votes before and after (v1.19)
+    OxfordDebate,
+    /// Parties with distinct interests seek an agreement (v1.19)
+    Negotiation,
+    /// De Bono's six thinking hats, rotating every turn (v1.19)
+    SixHats,
+    /// A crisis cell fed with dispatches every turn (v1.19)
+    CrisisCell,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -88,6 +98,138 @@ pub struct DiscussionConfig {
     /// Co-construction: regenerate the document once per turn or after every intervention.
     #[serde(default)]
     pub document_update_granularity: DocumentUpdateGranularity,
+    /// Liveliness options (v1.17): reaction timing, audience, staging…
+    #[serde(default)]
+    pub features: DiscussionFeatures,
+}
+
+/// When participants react to an intervention.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReactionTiming {
+    /// Everyone reacts right after each intervention (default since v1.17).
+    #[default]
+    Immediate,
+    /// Each speaker reacts to the previous turn just before speaking (v1.16 behaviour).
+    Deferred,
+}
+
+/// Optional liveliness features of a discussion. Every field has a default so
+/// that v1.16 configurations deserialise; the "v1.16 equivalent" profile
+/// (`DiscussionFeatures::legacy()`) reproduces the historical engine behaviour.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscussionFeatures {
+    #[serde(default)]
+    pub reaction_timing: ReactionTiming,
+    /// The user may react to messages from the arena.
+    #[serde(default = "default_true")]
+    pub audience_reactions: bool,
+    /// The moderator may trigger scene events (surprise fact, duel, hot seat…).
+    #[serde(default = "default_true")]
+    pub scene_events: bool,
+    /// Each participant receives a secret agenda (mode permitting).
+    #[serde(default = "default_true")]
+    pub hidden_agenda: bool,
+    /// Allies may relay each other within a turn.
+    #[serde(default = "default_true")]
+    pub coalitions: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for DiscussionFeatures {
+    fn default() -> Self {
+        Self {
+            reaction_timing: ReactionTiming::Immediate,
+            audience_reactions: true,
+            scene_events: true,
+            hidden_agenda: true,
+            coalitions: true,
+        }
+    }
+}
+
+impl DiscussionMode {
+    /// Modes where a secret objective makes sense: the debate-like ones and the
+    /// relay story (an author's agenda). Teaching, questioning, reviewing and
+    /// user-led sessions have none.
+    pub fn supports_hidden_agenda(&self) -> bool {
+        matches!(
+            self,
+            DiscussionMode::Debate | DiscussionMode::CollaborativeFiction | DiscussionMode::Trial | DiscussionMode::OxfordDebate | DiscussionMode::Negotiation
+        )
+    }
+
+    /// Modes where answering objections on the merits is the point (v1.20.1): the
+    /// argument map opens loops on the objected speakers, the moderator asks for
+    /// depth and the `Deepen` speech act is available.
+    pub fn rewards_depth(&self) -> bool {
+        matches!(
+            self,
+            DiscussionMode::Debate
+                | DiscussionMode::Trial
+                | DiscussionMode::OxfordDebate
+                | DiscussionMode::CritiqueReview
+                | DiscussionMode::Socratic
+                | DiscussionMode::Negotiation
+                | DiscussionMode::UserDriven
+        )
+    }
+
+    /// Every mode, in the order the wizard shows them (test sweeps).
+    #[cfg(test)]
+    pub const ALL: [DiscussionMode; 13] = [
+        DiscussionMode::Debate,
+        DiscussionMode::Ideation,
+        DiscussionMode::CoConstruction,
+        DiscussionMode::UserDriven,
+        DiscussionMode::Socratic,
+        DiscussionMode::Tutorial,
+        DiscussionMode::CritiqueReview,
+        DiscussionMode::CollaborativeFiction,
+        DiscussionMode::Trial,
+        DiscussionMode::OxfordDebate,
+        DiscussionMode::Negotiation,
+        DiscussionMode::SixHats,
+        DiscussionMode::CrisisCell,
+    ];
+}
+
+impl DiscussionFeatures {
+    /// The v1.16 behaviour: deferred reactions, nothing staged (test profile).
+    #[cfg(test)]
+    pub fn legacy() -> Self {
+        Self {
+            reaction_timing: ReactionTiming::Deferred,
+            audience_reactions: false,
+            scene_events: false,
+            hidden_agenda: false,
+            coalitions: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn features_default_from_empty_json_and_legacy_profile() {
+        let f: DiscussionFeatures = serde_json::from_str("{}").unwrap();
+        assert_eq!(f, DiscussionFeatures::default());
+        assert_eq!(f.reaction_timing, ReactionTiming::Immediate);
+        assert!(f.audience_reactions && f.scene_events && f.hidden_agenda && f.coalitions);
+        let legacy = DiscussionFeatures::legacy();
+        assert_eq!(legacy.reaction_timing, ReactionTiming::Deferred);
+        assert!(!legacy.scene_events);
+        // Partial payload keeps the other defaults
+        let partial: DiscussionFeatures = serde_json::from_str(r#"{"reactionTiming":"deferred"}"#).unwrap();
+        assert_eq!(partial.reaction_timing, ReactionTiming::Deferred);
+        assert!(partial.audience_reactions);
+    }
 }
 
 /// When the co-construction document is regenerated.

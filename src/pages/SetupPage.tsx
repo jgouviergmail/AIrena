@@ -57,7 +57,8 @@ export default function SetupPage() {
     return () => { cancelled = true; };
   }, [settings.llmProvider, settings.deepseekApiKey, settings.deepseekMonthlyBudgetUsd]);
 
-  // Provider readiness: a cloud provider needs its key (and headroom), a local one needs a model
+  // Provider readiness: a cloud provider needs its key (and headroom), a local one needs a model,
+  // an OpenAI-compatible server needs its URL and a model
   const providerBlocker: string | null =
     settings.llmProvider === "deepseek"
       ? !settings.deepseekApiKey.trim()
@@ -65,7 +66,9 @@ export default function SetupPage() {
         : budgetExhausted
           ? t("setup.budgetExhausted")
           : null
-      : settings.ollamaModel ? null : t("setup.ollamaModelRequired");
+      : settings.llmProvider === "openaiCompat"
+        ? settings.openaiCompatBaseUrl.trim() && settings.openaiCompatModel.trim() ? null : t("setup.openaiCompatRequired")
+        : settings.ollamaModel ? null : t("setup.ollamaModelRequired");
 
   const canNext = () => {
     switch (step) {

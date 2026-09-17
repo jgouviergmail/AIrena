@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Brain, ChevronDown, ChevronUp, Crosshair } from "lucide-react";
+import { Brain, ChevronDown, ChevronUp, Crosshair, Target } from "lucide-react";
 import { EmotionAxisSlider } from "./EmotionAxisSlider";
 import { EMOTION_AXES, EmotionRadar } from "./EmotionRadar";
 import { cn } from "@/lib/utils";
-import type { BanInfo, DirectiveData, EmotionalProfile, EmotionSnapshot } from "@/lib/types";
+import type { BanInfo, DirectiveData, EmotionalProfile, EmotionSnapshot, IntentionData } from "@/lib/types";
 
 export type EmotionView = "bars" | "radar";
 
@@ -36,6 +36,8 @@ interface ParticipantEmotionCardProps {
   moodSummary?: string;
   currentTurn: number;
   directive?: DirectiveData;
+  /** Pre-speech contract of the last intervention (v1.17) */
+  intention?: IntentionData;
   banInfo?: BanInfo;
   view?: EmotionView;
   isActive?: boolean;
@@ -50,6 +52,7 @@ export function ParticipantEmotionCard({
   moodSummary,
   currentTurn,
   directive,
+  intention,
   banInfo,
   view = "bars",
   isActive = false,
@@ -90,7 +93,7 @@ export function ParticipantEmotionCard({
         </span>
       )}
       {moodSummary && currentTurn >= 2 && (
-        <p className="truncate text-[10px] font-bold italic text-muted-foreground">
+        <p className="text-[10px] font-bold italic leading-snug text-muted-foreground">
           <span className="not-italic">{getEmotionEmoji(emotions)}</span>{" "}
           {moodSummary}
         </p>
@@ -111,7 +114,7 @@ export function ParticipantEmotionCard({
         ))
       )}
 
-      {directive && (
+      {(directive || intention) && (
         <div className="border-t border-border pt-1">
           <button
             onClick={() => setShowDirective(!showDirective)}
@@ -129,28 +132,61 @@ export function ParticipantEmotionCard({
           </button>
           {showDirective && (
             <div className="mt-1 space-y-1 text-[10px] text-muted-foreground">
-              <div>
-                <span className="font-medium text-foreground">
-                  {t("directive.speechAct")}:
-                </span>{" "}
-                <span className="rounded bg-accent px-1 py-0.5">
-                  {t(`directive.acts.${directive.speechAct}`, directive.speechAct)}
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                <span className="inline-flex items-center gap-0.5">
-                  <Crosshair className="h-3 w-3" />
-                  <span className="font-medium text-foreground">{t("directive.focus")}:</span>{" "}
-                  {directive.focusSpeaker ?? t("directive.focusTopic")}
-                </span>
-                {directive.reasoningLevel !== "off" && (
-                  <span className="inline-flex items-center gap-0.5">
-                    <Brain className="h-3 w-3" />
-                    {t(`settings.reasoning_${directive.reasoningLevel}`)}
-                  </span>
-                )}
-              </div>
-              {directive.emotionBehavior && (
+              {intention && (
+                <div className="rounded border border-primary/20 bg-primary/5 px-1.5 py-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className="inline-flex items-center gap-0.5 font-medium text-foreground">
+                      <Target className="h-3 w-3" />
+                      {t("directive.intention")}
+                    </span>
+                    <span className="rounded bg-accent px-1 py-0.5">{t(`directive.goals.${intention.goal}`, intention.goal)}</span>
+                    <span>
+                      {t("directive.intentionTarget")}: {intention.target ?? t("directive.intentionTopic")}
+                    </span>
+                  </div>
+                  {intention.angle && (
+                    <div>
+                      <span className="font-medium text-foreground">{t("directive.intentionAngle")}:</span> {intention.angle}
+                    </div>
+                  )}
+                  {intention.concession && (
+                    <div>
+                      <span className="font-medium text-foreground">{t("directive.intentionConcession")}:</span> {intention.concession}
+                    </div>
+                  )}
+                  {intention.question && (
+                    <div>
+                      <span className="font-medium text-foreground">{t("directive.intentionQuestion")}:</span> {intention.question}
+                    </div>
+                  )}
+                </div>
+              )}
+              {directive && (
+                <>
+                  <div>
+                    <span className="font-medium text-foreground">
+                      {t("directive.speechAct")}:
+                    </span>{" "}
+                    <span className="rounded bg-accent px-1 py-0.5">
+                      {t(`directive.acts.${directive.speechAct}`, directive.speechAct)}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className="inline-flex items-center gap-0.5">
+                      <Crosshair className="h-3 w-3" />
+                      <span className="font-medium text-foreground">{t("directive.focus")}:</span>{" "}
+                      {directive.focusSpeaker ?? t("directive.focusTopic")}
+                    </span>
+                    {directive.reasoningLevel !== "off" && (
+                      <span className="inline-flex items-center gap-0.5">
+                        <Brain className="h-3 w-3" />
+                        {t(`settings.reasoning_${directive.reasoningLevel}`)}
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+              {directive?.emotionBehavior && (
                 <div>
                   <span className="font-medium text-foreground">
                     {t("directive.behavior")}:
@@ -158,7 +194,7 @@ export function ParticipantEmotionCard({
                   {directive.emotionBehavior}
                 </div>
               )}
-              {directive.relationshipSummary && (
+              {directive?.relationshipSummary && (
                 <div>
                   <span className="font-medium text-foreground">
                     {t("directive.relationships")}:

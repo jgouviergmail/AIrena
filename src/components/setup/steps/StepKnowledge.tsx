@@ -8,6 +8,7 @@ import type { BudgetParams, SectionPriority, TokenBudgetPreview } from "@/lib/ty
 import * as api from "@/lib/tauri-api";
 import { extractErrorMessage } from "@/lib/error-utils";
 import { toast } from "@/stores/useToastStore";
+import { modeSupportsHiddenAgenda } from "@/lib/modes";
 import { inputClass, OptionCard, RAG_SUPPORTED_EXTENSIONS, SectionLabel } from "./shared";
 
 export function StepKnowledge() {
@@ -26,6 +27,10 @@ export function StepKnowledge() {
   const tokenBudgetPreview = useSetupStore((s) => s.tokenBudgetPreview);
   const setTokenBudgetPreview = useSetupStore((s) => s.setTokenBudgetPreview);
   const documentInjectionMode = useSetupStore((s) => s.documentInjectionMode);
+  const features = useSetupStore((s) => s.features);
+  const discussionMode = useSetupStore((s) => s.discussionMode);
+  const engineConstants = useSettingsStore((s) => s.engineConstants);
+  const loadEngineConstants = useSettingsStore((s) => s.loadEngineConstants);
   const setDocumentInjectionMode = useSetupStore((s) => s.setDocumentInjectionMode);
   const settingsNumCtx = useSettingsStore((s) => s.settings.numCtx);
   const provider = useSettingsStore((s) => s.settings.llmProvider);
@@ -119,6 +124,11 @@ export function StepKnowledge() {
     };
   }, []);
 
+  // The agenda block size comes from the backend (cached once loaded)
+  useEffect(() => {
+    if (features.hiddenAgenda) loadEngineConstants();
+  }, [features.hiddenAgenda, loadEngineConstants]);
+
   // Compute token budget preview when relevant params change
   const computeBudget = useCallback(async (): Promise<TokenBudgetPreview> => {
     const totalDocChars = ragDocuments.reduce((sum, d) => sum + d.charCount, 0);
@@ -133,6 +143,7 @@ export function StepKnowledge() {
         wikiSearchEnabled: wikiSearchPool > 0 || (arbitre.wikiSearchIntro ?? false),
         ragEnabled: ragDocuments.length > 0,
         documentChars: ragDocuments.length > 0 && documentInjectionMode === "fullInjection" ? totalDocChars : 0,
+        agendaChars: features.hiddenAgenda && modeSupportsHiddenAgenda(discussionMode) ? (engineConstants?.agendaBlockMaxChars ?? 0) : 0,
       },
       provider,
     };
@@ -148,6 +159,7 @@ export function StepKnowledge() {
     gladiateurs.length, discussionLanguage, webSearchPool, wikiSearchPool,
     ragDocuments, arbitre.webSearchIntro, arbitre.wikiSearchIntro,
     tokenBudgetPriorities, documentInjectionMode, provider,
+    features.hiddenAgenda, discussionMode, engineConstants?.agendaBlockMaxChars,
   ]);
 
   useEffect(() => {

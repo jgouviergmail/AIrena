@@ -354,6 +354,9 @@ mod tests {
 
     fn make_gladiateur(id: &str, number: u32, banned: u32) -> GladIAteurState {
         let mut state = GladIAteurState::new(GladIAteurConfig {
+            mode_role: None,
+            model: None,
+            source_profile_id: None,
             id: id.to_string(),
             name: id.to_string(),
             intervention_number: number,

@@ -19,13 +19,19 @@ export function StepSummary() {
   const argumentMapEnabled = useSetupStore((s) => s.argumentMapEnabled);
   const ragDocuments = useSetupStore((s) => s.ragDocuments);
   const documentInjectionMode = useSetupStore((s) => s.documentInjectionMode);
+  const features = useSetupStore((s) => s.features);
   const settings = useSettingsStore((s) => s.settings);
+  const speakerModels = [arbitre.model, ...gladiateurs.map((g) => g.model)];
+  const mixedOllama = settings.llmProvider === "ollama" && describeActiveModel(settings, speakerModels).includes("mixte");
 
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-border bg-card p-4 space-y-4">
         {/* Provider */}
-        <SummaryRow label={t("setup.summaryProvider")} value={describeActiveModel(settings)} />
+        <SummaryRow label={t("setup.summaryProvider")} value={describeActiveModel(settings, speakerModels)} />
+        {mixedOllama && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">{t("setup.summaryMixedModelsVram")}</p>
+        )}
         {settings.llmProvider === "deepseek" && (
           <SummaryRow label={t("setup.summaryReasoning")} value={t(`settings.reasoning_${settings.reasoningLevel}`)} />
         )}
@@ -62,6 +68,13 @@ export function StepSummary() {
         {argumentMapEnabled && (
           <SummaryRow label={t("setup.summaryArgumentMap")} value={t("setup.switchYes")} />
         )}
+        <SummaryRow
+          label={t("setup.staging")}
+          value={[
+            t(`setup.reactionTiming_${features.reactionTiming}`),
+            ...(["audienceReactions", "sceneEvents", "hiddenAgenda", "coalitions"] as const).filter((k) => features[k]).map((k) => t(`setup.feature_${k}`)),
+          ].join(" · ")}
+        />
         {(arbitre.webSearchIntro ?? false) && <SummaryRow label={t("setup.summaryWebIntro")} value="1" />}
         {(arbitre.wikiSearchIntro ?? false) && <SummaryRow label={t("setup.summaryWikiIntro")} value="1" />}
 

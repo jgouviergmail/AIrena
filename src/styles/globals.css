@@ -78,6 +78,10 @@
   --sidebar-border: oklch(0.88 0.01 250);
   --sidebar-ring: oklch(0.45 0.15 260);
   --diff-highlight: oklch(0.92 0.08 145);
+  /* Arena stage (v1.18): backdrop gradient and the spotlight of the active speaker */
+  --arena-stage-top: oklch(0.96 0.01 260);
+  --arena-stage-bottom: oklch(0.9 0.02 260);
+  --arena-spotlight: radial-gradient(circle, oklch(0.85 0.12 80 / 0.55) 0%, transparent 70%);
 }
 
 .dark {
@@ -114,6 +118,9 @@
   --sidebar-border: oklch(0.25 0.02 260);
   --sidebar-ring: oklch(0.6 0.18 260);
   --diff-highlight: oklch(0.30 0.08 145);
+  --arena-stage-top: oklch(0.2 0.02 260);
+  --arena-stage-bottom: oklch(0.1 0.015 260);
+  --arena-spotlight: radial-gradient(circle, oklch(0.8 0.14 80 / 0.5) 0%, transparent 70%);
 }
 
 @layer base {
@@ -135,4 +142,24 @@
     overflow-x: auto;
     overflow-y: hidden;
   }
+}
+
+/* Display face for the arena's announcements — system serif stack, no web font offline */
+.font-display {
+  font-family: ui-serif, Georgia, "Times New Roman", serif;
+  letter-spacing: 0.01em;
+}
+
+/* A reaction flying from its author to its target on the stage (see ArenaStage) */
+/* Print / PDF (v1.20): the report alone, one column, no chrome */
+@media print {
+  aside, nav, header[data-topbar], .print\:hidden { display: none !important; }
+  main, body { overflow: visible !important; height: auto !important; }
+  * { box-shadow: none !important; }
+}
+
+@keyframes arena-burst {
+  0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--burst-dx)), calc(-50% + var(--burst-dy))) scale(1.3); opacity: 0; }
 }

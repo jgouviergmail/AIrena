@@ -4,6 +4,7 @@ import { Check, ChevronDown, ChevronRight, ChevronUp, GripVertical, Heart, Plus,
 import { LlmParamsForm } from "@/components/setup/LlmParamsForm";
 import { PersonaEditor } from "@/components/setup/PersonaEditor";
 import { EmojiPicker } from "@/components/setup/EmojiPicker";
+import { CastingAssistant, CompatibilityMatrix } from "@/components/setup/CastingAssistant";
 import { getProfileEmoji } from "@/lib/profile-emoji";
 import { useSetupStore } from "@/stores/useSetupStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
@@ -11,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { DEFAULT_LLM_PARAMS } from "@/lib/types";
 import type { GladIAteurConfig, PredefinedProfile } from "@/lib/types";
 import { SectionLabel } from "./shared";
+import { selectableRoles } from "@/lib/modes";
 
 const CATEGORY_ORDER = ["personnel", "experts", "imaginaires", "personnalites", "metiers", "autres"] as const;
 
@@ -23,6 +25,7 @@ export function StepGladiateurs() {
   const removeGladiateur = useSetupStore((s) => s.removeGladiateur);
   const updateGladiateur = useSetupStore((s) => s.updateGladiateur);
   const updateGladiateurLlm = useSetupStore((s) => s.updateGladiateurLlm);
+  const updateArbitre = useSetupStore((s) => s.updateArbitre);
   const reorderGladiateurs = useSetupStore((s) => s.reorderGladiateurs);
   const profiles = useSettingsStore((s) => s.profiles);
   const emotionDriven = useSettingsStore((s) => s.settings.emotionDriven);
@@ -31,6 +34,8 @@ export function StepGladiateurs() {
   const saveProfile = useSettingsStore((s) => s.saveProfile);
   const deleteProfile = useSettingsStore((s) => s.deleteProfile);
   const discussionLanguage = useSetupStore((s) => s.discussionLanguage);
+  const discussionMode = useSetupStore((s) => s.discussionMode);
+  const roles = selectableRoles(discussionMode);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [collapsedCats, setCollapsedCats] = useState<Set<string>>(() => new Set(CATEGORY_ORDER));
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
@@ -87,16 +92,30 @@ export function StepGladiateurs() {
     profiles: profiles.filter((p) => p.category === cat),
   })).filter((g) => g.profiles.length > 0);
 
-  const addFromProfile = (profile: PredefinedProfile) => {
+  const addFromProfile = (profile: PredefinedProfile, position = gladiateurs.length + 1) => {
     addGladiateur({
       id: newGladiateurId(),
       name: t(`profiles.${profile.id}.name`, { defaultValue: profile.name }),
-      interventionNumber: gladiateurs.length + 1,
+      interventionNumber: position,
       systemPrompt: t(`profiles.${profile.id}.systemPrompt`, { defaultValue: profile.systemPrompt }),
       llmParams: { ...DEFAULT_LLM_PARAMS },
       sourceProfileId: profile.id,
       initialEmotions: profile.initialEmotions,
     });
+  };
+
+  // Casting assistant: the suggested cast replaces (or completes) the selection
+  const addSuggested = (suggested: PredefinedProfile[], from: number) =>
+    suggested.forEach((p, i) => addFromProfile(p, from + i + 1));
+  const replaceCast = (suggested: PredefinedProfile[], arbitre: PredefinedProfile | null) => {
+    gladiateurs.forEach((g) => removeGladiateur(g.id));
+    addSuggested(suggested, 0);
+    if (arbitre) {
+      updateArbitre({
+        name: t(`profiles.${arbitre.id}.name`, { defaultValue: arbitre.name }),
+        systemPrompt: t(`profiles.${arbitre.id}.systemPrompt`, { defaultValue: arbitre.systemPrompt }),
+      });
+    }
   };
 
   const addEmpty = () => {
@@ -179,6 +198,8 @@ export function StepGladiateurs() {
           <span className="text-sm text-muted-foreground">{t("settings.emotionDrivenDesc")}</span>
         </div>
       </div>
+
+      <CastingAssistant onReplace={replaceCast} onAdd={(suggested) => addSuggested(suggested, gladiateurs.length)} />
 
       {/* Profile picker grouped by category */}
       <div className="space-y-3">
@@ -281,6 +302,18 @@ export function StepGladiateurs() {
                 />
               </div>
               <div className="flex shrink-0 items-center gap-1">
+                {roles.length > 0 && (
+                  <select
+                    value={g.modeRole ?? ""}
+                    onChange={(e) => updateGladiateur(g.id, { modeRole: e.target.value || undefined })}
+                    title={t("roles.pick")}
+                    aria-label={t("roles.pick")}
+                    className="max-w-[9rem] rounded-md border border-border bg-background px-1.5 py-1 text-xs text-foreground"
+                  >
+                    <option value="">{t("roles.auto")}</option>
+                    {roles.map((r) => <option key={r} value={r}>{t(`roles.${r}`)}</option>)}
+                  </select>
+                )}
                 {isModified(g) && (
                   <button
                     onClick={() => handleResetGladiateur(g)}
@@ -330,13 +363,15 @@ export function StepGladiateurs() {
                 </div>
                 <div>
                   <label className="mb-2 block text-xs text-muted-foreground">{t("setup.llmParams")}</label>
-                  <LlmParamsForm params={g.llmParams} onChange={(patch) => updateGladiateurLlm(g.id, patch)} />
+                  <LlmParamsForm params={g.llmParams} onChange={(patch) => updateGladiateurLlm(g.id, patch)} model={g.model} onModelChange={(model) => updateGladiateur(g.id, { model })} />
                 </div>
               </div>
             )}
           </div>
         ))}
       </div>
+
+      <CompatibilityMatrix members={gladiateurs} />
     </div>
   );
 }

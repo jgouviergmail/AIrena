@@ -215,30 +215,39 @@ impl RagStore {
             .map(|c| c.embedding.len())
     }
 
-    /// Compute embeddings for all chunks if not already done. No-op if ready.
-    /// Called lazily before the first RAG query when documents were imported text-only.
-    pub async fn ensure_embeddings(&mut self) -> Result<(), LlmError> {
+    /// Compute embeddings for all chunks if not already done (documents imported
+    /// text-only). Tried once: when the embedding service is unreachable the
+    /// store stays lexical (BM25-only queries) instead of retrying — and failing —
+    /// before every speaker. Returns whether vector search is available.
+    pub async fn ensure_embeddings(&mut self) -> bool {
         if self.embeddings_ready {
-            return Ok(());
+            return self.embedding_dim().is_some();
         }
 
         let texts: Vec<String> = self.chunks.iter().map(|c| c.text.clone()).collect();
         if texts.is_empty() {
             self.embeddings_ready = true;
-            return Ok(());
+            return false;
         }
 
         tracing::info!(
             chunk_count = texts.len(),
             "Computing deferred embeddings for RAG fallback"
         );
-        let embeddings = self.embedding_client.embed_batch(&texts).await?;
-
-        for (chunk, embedding) in self.chunks.iter_mut().zip(embeddings) {
-            chunk.embedding = embedding;
-        }
+        // One attempt only, whatever the outcome
         self.embeddings_ready = true;
-        Ok(())
+        match self.embedding_client.embed_batch(&texts).await {
+            Ok(embeddings) => {
+                for (chunk, embedding) in self.chunks.iter_mut().zip(embeddings) {
+                    chunk.embedding = embedding;
+                }
+                true
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Deferred embeddings unavailable — the knowledge base stays lexical (BM25) for this discussion");
+                false
+            }
+        }
     }
 
     /// Full hybrid retrieval pipeline:
@@ -894,6 +903,9 @@ mod bm25_only_tests {
         let chunks = chunk_text(&doc.text, 0, 60, 10);
         store.add_document_text_only(&doc, "doc-1", chunks);
         assert!(store.embedding_dim().is_none());
+        // The engine asks for embeddings first: one failed attempt, then lexical for good
+        assert!(!store.ensure_embeddings().await, "embedding endpoint unreachable");
+        assert!(!store.ensure_embeddings().await, "not retried");
 
         let llm = MockLlmProvider::scripted(|_| Ok(LlmResponse {
             content: r#"{"selected": [1]}"#.to_string(),

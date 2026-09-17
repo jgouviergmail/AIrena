@@ -1,3 +1,4 @@
+pub mod cast;
 pub mod directive_builder;
 pub mod dynamics_parser;
 pub mod emotion_engine;
@@ -8,11 +9,26 @@ pub mod memory_manager;
 pub mod mode_prompts;
 pub mod orchestrator;
 pub mod prompt_builder;
+pub mod reactions;
+pub mod open_loops;
+pub mod relationships;
+pub mod stage_directions;
+pub mod tuning;
+pub mod diagnostics;
+pub mod dramaturgy;
+pub mod scene_events;
+pub mod mode_roles;
 pub mod token_budget;
 pub mod turn_manager;
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
+pub mod bench_metrics;
+#[cfg(test)]
 mod engine_tests;
+#[cfg(test)]
+mod emotion_sim;
 
 /// UTF-8–safe truncation: returns the longest prefix of `s` that fits within `max_chars`.
 /// Uses `str::floor_char_boundary` to avoid splitting multi-byte characters.
@@ -47,6 +63,65 @@ pub(crate) fn truncate_at_word_boundary(s: &str, max_bytes: usize) -> String {
     }
     // No good word boundary — truncate at char boundary
     format!("{}…", prefix.trim_end())
+}
+
+/// Sentence terminators, Latin and CJK.
+const SENTENCE_ENDS: [char; 7] = ['.', '!', '?', '…', '。', '！', '？'];
+
+/// Whole sentences only (v1.20.4): the text unchanged when it fits and ends a
+/// sentence; otherwise the last complete sentence within `max_bytes` when it
+/// keeps at least half of the allowance, else a word-boundary cut with "…".
+/// For model output shown as is (announcements, stage directions, quoted facts),
+/// which a token allowance may have cut mid-sentence.
+pub(crate) fn truncate_at_sentence_boundary(s: &str, max_bytes: usize) -> String {
+    let s = s.trim();
+    let end = s.floor_char_boundary(max_bytes.min(s.len()));
+    let prefix = &s[..end];
+    let fits = prefix.len() == s.len();
+    if fits && prefix.ends_with(SENTENCE_ENDS) {
+        return s.to_string();
+    }
+    let last_end = prefix
+        .char_indices()
+        .rev()
+        .find(|(_, c)| SENTENCE_ENDS.contains(c))
+        .map(|(i, c)| i + c.len_utf8());
+    match last_end {
+        Some(cut) if cut >= end / 2 => prefix[..cut].trim_end().to_string(),
+        _ if fits => s.to_string(),
+        _ => truncate_at_word_boundary(s, max_bytes),
+    }
+}
+
+/// Detect model safety refusals (e.g. "I'm sorry, but I can't help with that.",
+/// "Je ne peux pas…", "抱歉…") — short answers only, a long answer that merely
+/// quotes such a phrase is content. Shared by the engine and the bench metrics.
+pub(crate) fn is_model_refusal(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let trimmed = lower.trim();
+    if trimmed.len() > crate::constants::ORCH_MAX_REFUSAL_LENGTH {
+        return false;
+    }
+    crate::constants::REFUSAL_PREFIXES.iter().any(|p| trimmed.starts_with(p))
+        || crate::constants::REFUSAL_SUBSTRINGS.iter().any(|s| trimmed.contains(s))
+}
+
+/// A reaction's quoted excerpt is kept only when it really appears in the
+/// target message (case-insensitive, whitespace-normalised) — models often
+/// paraphrase, and a fabricated quote must never be highlighted.
+pub(crate) fn validated_quote(target: &str, quote: Option<&str>) -> Option<String> {
+    let quote = quote?.trim();
+    if quote.chars().count() < crate::constants::REACTION_QUOTE_MIN_CHARS {
+        return None;
+    }
+    let normalise = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    let haystack = normalise(target);
+    let needle = normalise(quote);
+    if haystack.contains(&needle) {
+        Some(truncate_at_word_boundary(quote, crate::constants::REACTION_QUOTE_MAX_CHARS))
+    } else {
+        None
+    }
 }
 
 /// Apply a signed i8 delta to a u8 value, clamping result to 0-100.
@@ -144,6 +219,39 @@ mod tests {
     #[test]
     fn test_word_boundary_exact_fit() {
         assert_eq!(truncate_at_word_boundary("hello", 5), "hello");
+    }
+
+    // ── truncate_at_sentence_boundary (v1.20.4) ─────────────────────────
+
+    #[test]
+    fn sentence_boundary_keeps_whole_sentences_only() {
+        // Fits and ends a sentence: unchanged
+        assert_eq!(truncate_at_sentence_boundary("Une phrase. Une autre !", 100), "Une phrase. Une autre !");
+        // Too long: the last complete sentence within the allowance
+        assert_eq!(truncate_at_sentence_boundary("Une phrase. Une autre phrase. Et la fin", 30), "Une phrase. Une autre phrase.");
+        // Cut by a token allowance (no terminator): back to the last sentence when half remains
+        assert_eq!(truncate_at_sentence_boundary("Première phrase complète. Puis le modèle s'arrê", 100), "Première phrase complète.");
+        // No usable sentence end: word boundary with an ellipsis
+        assert_eq!(truncate_at_sentence_boundary("mot mot mot mot mot mot mot mot", 15), "mot mot mot…");
+        // A short first sentence would drop more than half: word cut instead
+        assert_eq!(truncate_at_sentence_boundary("Oui. Puis une longue explication sans fin qui continue", 30), "Oui. Puis une longue…");
+        // Fits without a terminator and without any sentence end: unchanged
+        assert_eq!(truncate_at_sentence_boundary("Ana — devient cassant", 100), "Ana — devient cassant");
+        // CJK terminators and multibyte safety
+        assert_eq!(truncate_at_sentence_boundary("第一句。第二句很长很长很长很长", 20), "第一句。");
+        assert_eq!(truncate_at_sentence_boundary("Élan… suite très très longue", 8), "Élan…");
+    }
+
+    #[test]
+    fn validated_quote_keeps_real_excerpts_only() {
+        let msg = "Les données montrent une transformation,   pas un remplacement du métier.";
+        assert_eq!(validated_quote(msg, Some("une transformation, pas un remplacement")).as_deref(), Some("une transformation, pas un remplacement"));
+        assert_eq!(validated_quote(msg, Some("UNE TRANSFORMATION")).as_deref(), Some("UNE TRANSFORMATION"), "case-insensitive");
+        assert!(validated_quote(msg, Some("les robots remplacent tout")).is_none(), "paraphrase rejected");
+        assert!(validated_quote(msg, Some("pas")).is_none(), "too short to be a quote");
+        assert!(validated_quote(msg, None).is_none());
+        let long = "x".repeat(400);
+        assert!(validated_quote(&long, Some(&long)).unwrap().len() <= crate::constants::REACTION_QUOTE_MAX_CHARS + 3);
     }
 
 }

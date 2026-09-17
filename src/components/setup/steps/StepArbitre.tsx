@@ -5,6 +5,7 @@ import { LlmParamsForm } from "@/components/setup/LlmParamsForm";
 import { PersonaEditor } from "@/components/setup/PersonaEditor";
 import { getProfileEmoji } from "@/lib/profile-emoji";
 import { useSetupStore } from "@/stores/useSetupStore";
+import { FIXED_ORDER_MODES } from "@/lib/modes";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { inputClass, OptionCard, SectionLabel, Toggle } from "./shared";
 
@@ -67,7 +68,7 @@ export function StepArbitre() {
     updateArbitre({ name: "", systemPrompt: "" });
   };
 
-  const fixedDistribution = discussionMode === "userDriven" || discussionMode === "collaborativeFiction";
+  const fixedDistribution = FIXED_ORDER_MODES.includes(discussionMode);
 
   return (
     <div className="space-y-4">
@@ -211,7 +212,7 @@ export function StepArbitre() {
           {showLlm ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
         </span>
       </button>
-      {showLlm && <LlmParamsForm params={arbitre.llmParams} onChange={updateArbitreLlm} />}
+      {showLlm && <LlmParamsForm params={arbitre.llmParams} onChange={updateArbitreLlm} model={arbitre.model} onModelChange={(model) => updateArbitre({ model })} />}
     </div>
   );
 }

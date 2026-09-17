@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { ArrowDown } from "lucide-react";
 import { parseStreamKey, useArenaStore } from "@/stores/useArenaStore";
 import { useSetupStore } from "@/stores/useSetupStore";
+import { useSettingsStore } from "@/stores/useSettingsStore";
+import { messageKind } from "@/lib/types";
 import { useTokenBuffer } from "@/hooks/useTokenBuffer";
 import { MessageBubble, StreamingBubble } from "./MessageBubble";
 import { getProfileEmoji, ROLE_EMOJIS } from "@/lib/profile-emoji";
@@ -33,8 +35,23 @@ export function DiscussionFeed() {
   const wikiArticleUrlsPerMessage = useArenaStore((s) => s.wikiArticleUrlsPerMessage);
   const ragChunksPerMessage = useArenaStore((s) => s.ragChunksPerMessage);
   const ragChunkDetailsPerMessage = useArenaStore((s) => s.ragChunkDetailsPerMessage);
+  const sources = useArenaStore((s) => s.sources);
+  const status = useArenaStore((s) => s.status);
+  const reactAsAudience = useArenaStore((s) => s.reactAsAudience);
+  const intentions = useArenaStore((s) => s.intentions);
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
   const arbitre = useSetupStore((s) => s.arbitre);
+  const audienceEnabled = useSetupStore((s) => s.features.audienceReactions);
+  const engineConstants = useSettingsStore((s) => s.engineConstants);
+  const loadEngineConstants = useSettingsStore((s) => s.loadEngineConstants);
+
+  useEffect(() => {
+    if (audienceEnabled) loadEngineConstants();
+  }, [audienceEnabled, loadEngineConstants]);
+
+  // Audience reactions: only on AI contributions while the discussion runs
+  const audienceMax = engineConstants?.audienceReactionsPerMessageMax ?? 0;
+  const canReact = audienceEnabled && status === "running" && audienceMax > 0;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showJump, setShowJump] = useState(false);
   const atBottomRef = useRef(true);
@@ -110,6 +127,18 @@ export function DiscussionFeed() {
     return map;
   }, [gladiateurs, arbitre]);
 
+  // Sources attached to each message (popover under the header)
+  const sourcesPerMessage = useMemo(() => {
+    const map = new Map<string, typeof sources>();
+    for (const s of sources) {
+      if (!s.messageId) continue;
+      const list = map.get(s.messageId) ?? [];
+      list.push(s);
+      map.set(s.messageId, list);
+    }
+    return map;
+  }, [sources]);
+
   // All participant names for highlighting mentions in messages
   const participantNames = useMemo(
     () => [arbitre.name, ...gladiateurs.map((g) => g.name)],
@@ -135,6 +164,10 @@ export function DiscussionFeed() {
                 ragChunkDetails={ragChunkDetailsPerMessage[msg.id]}
                 participantNames={participantNames}
                 emojiMap={emojiMap}
+                sources={sourcesPerMessage.get(msg.id)}
+                audience={canReact && msg.role !== "user" && messageKind(msg) === "normal"
+                  ? { onReact: (type) => reactAsAudience(msg.id, type), max: audienceMax }
+                  : undefined}
               />
             </Fragment>
           );
@@ -154,6 +187,7 @@ export function DiscussionFeed() {
               emoji={emojiMap.get(s.speakerId)}
               participantNames={participantNames}
               variant={s.kind}
+              intention={s.kind === "reasoning" ? intentions.get(s.speakerId) : undefined}
             />
           ))}
       </div>

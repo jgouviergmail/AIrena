@@ -1,14 +1,23 @@
 // Mirror of Rust types — keep in sync with src-tauri/src/models/
+import type { AgendaRecord, DiscussionDiagnostics, TurnTimings } from "./report";
 
 // ── LLM provider ────────────────────────────────────────────────────────
 
 /** Backend serving the discussion (settings.llmProvider). */
-export type ProviderKind = "ollama" | "deepseek";
+export type ProviderKind = "ollama" | "deepseek" | "openaiCompat";
 
 /** Reasoning ("thinking") intensity. "auto" is resolved per call by the engine. */
 export type ReasoningLevel = "off" | "low" | "high" | "max" | "auto";
 
 export const REASONING_LEVELS: ReasoningLevel[] = ["auto", "off", "low", "high", "max"];
+
+/** Wall-clock pace of the reasoning: "fast" caps Auto at Low and halves the DeepSeek allowances. */
+export type ReasoningPace = "normal" | "fast";
+export const REASONING_PACES: ReasoningPace[] = ["normal", "fast"];
+
+/** How the voice keeps up with the discussion (v1.18). */
+export type TtsMode = "follow" | "full";
+export const TTS_MODES: TtsMode[] = ["follow", "full"];
 
 export interface LlmParams {
   temperature: number;
@@ -36,7 +45,16 @@ export type CallKind =
   | "argumentMap"
   | "synthesis"
   | "socratic"
-  | "respondOrPass";
+  | "respondOrPass"
+  | "intention"
+  | "agenda"
+  | "casting"
+  | "recap"
+  | "turnAnalyst"
+  | "verdict"
+  | "crisisDispatches"
+  | "announcement"
+  | "audienceQuestion";
 
 /** Token usage reported by a provider (all zero when unknown). */
 export interface LlmUsage {
@@ -108,6 +126,31 @@ export interface LlmConstants {
   deepseekPeakWindowsUtc: [number, number][];
   deepseekTopPMinThinking: number;
   budgetWarnRatio: number;
+  /** Suggested base URL of an OpenAI-compatible server (v1.20) */
+  openaiCompatDefaultBaseUrl: string;
+  /** Where releases are published (manual update check, v1.20) */
+  releasesUrl: string;
+}
+
+/** Models an OpenAI-compatible server publishes (empty without catalogue). */
+export interface OpenAiCompatModels {
+  models: string[];
+}
+
+/** Engine limits the frontend mirrors in its UI (owned by the backend). */
+export interface EngineConstants {
+  /** Audience reactions accepted per message */
+  audienceReactionsPerMessageMax: number;
+  /** Chars the secret agenda block takes in the system prompt (budget preview) */
+  agendaBlockMaxChars: number;
+  /** Gladiateurs a casting may suggest, at most */
+  castingMaxGladiateurs: number;
+}
+
+/** Casting suggested by the model for a topic (ids of the profile catalogue). */
+export interface CastingSuggestion {
+  gladiateurs: { id: string; reason: string }[];
+  arbitre: string | null;
 }
 
 export interface DeepSeekModels {
@@ -139,9 +182,15 @@ export interface GladIAteurConfig {
   emoji?: string;
   sourceProfileId?: string;
   initialEmotions?: string;
+  /** Role in the structured modes (trial, Oxford); the engine deals the missing ones (v1.19) */
+  modeRole?: string;
+  /** Model of this speaker (undefined = the provider's global model, v1.20) */
+  model?: string;
 }
 
 export interface IArbitreConfig {
+  /** Model of the moderator (undefined = the provider's global model, v1.20) */
+  model?: string;
   id: string;
   name: string;
   systemPrompt: string;
@@ -166,9 +215,32 @@ export interface DiscussionConfig {
   argumentMapEnabled: boolean;
   documentInjectionMode: DocumentInjectionMode;
   documentUpdateGranularity: DocumentUpdateGranularity;
+  features: DiscussionFeatures;
 }
 
-export type DiscussionMode = "debate" | "ideation" | "coConstruction" | "userDriven" | "socratic" | "tutorial" | "critiqueReview" | "collaborativeFiction";
+/** When participants react: right after each intervention, or to the previous turn before speaking (v1.16). */
+export type ReactionTiming = "immediate" | "deferred";
+
+/** Liveliness options of a discussion (mirror of `DiscussionFeatures`). */
+export interface DiscussionFeatures {
+  reactionTiming: ReactionTiming;
+  audienceReactions: boolean;
+  sceneEvents: boolean;
+  hiddenAgenda: boolean;
+  coalitions: boolean;
+}
+
+export const DEFAULT_DISCUSSION_FEATURES: DiscussionFeatures = {
+  reactionTiming: "immediate",
+  audienceReactions: true,
+  sceneEvents: true,
+  hiddenAgenda: true,
+  coalitions: true,
+};
+
+export type DiscussionMode =
+  | "debate" | "ideation" | "coConstruction" | "userDriven" | "socratic" | "tutorial" | "critiqueReview" | "collaborativeFiction"
+  | "trial" | "oxfordDebate" | "negotiation" | "sixHats" | "crisisCell";
 export type DocumentFormat = "none" | "txt" | "md" | "csv";
 export type DocumentInjectionMode = "rag" | "fullInjection";
 /** Co-construction: regenerate the document once per turn (default) or after every intervention. */
@@ -177,7 +249,15 @@ export type DocumentUpdateGranularity = "turn" | "intervention";
 export type ThoughtKind = "persona" | "reasoning";
 
 export type SpeakerRole = "IArbitre" | "GladIAteur" | "user";
-export type ReactionType = "like" | "dislike";
+/** like/dislike are the historical pair; the others refine them (v1.17). */
+export type ReactionType = "like" | "dislike" | "insightful" | "question" | "offTopic" | "laugh";
+export const REACTION_TYPES: ReactionType[] = ["like", "dislike", "insightful", "question", "offTopic", "laugh"];
+/** Approval / disapproval classes (neutral otherwise) — mirrors the Rust classification. */
+export const POSITIVE_REACTIONS: ReadonlySet<ReactionType> = new Set(["like", "insightful"]);
+export const NEGATIVE_REACTIONS: ReadonlySet<ReactionType> = new Set(["dislike", "offTopic"]);
+
+/** What a message is (contribution or one of the engine's system lines). */
+export type MessageKind = "normal" | "banNotification" | "stageDirection" | "actAnnouncement" | "sceneEvent";
 
 export interface Reaction {
   fromSpeakerId: string;
@@ -185,6 +265,10 @@ export interface Reaction {
   reactionType: ReactionType;
   targetMessageId: string;
   justification?: string;
+  /** Exact excerpt of the target message (validated by the engine) */
+  quote?: string;
+  /** Frontend only: audience reaction sent, not yet confirmed by the engine */
+  pending?: boolean;
 }
 
 export interface Message {
@@ -198,8 +282,16 @@ export interface Message {
   innerThought: string | null;
   thoughtKind?: ThoughtKind;
   reactions: Reaction[];
+  /** Kept for v1.16 payloads; always consistent with kind === "banNotification" */
   isBanNotification: boolean;
+  /** Absent on v1.16 payloads (= "normal", or "banNotification" when the flag is set) */
+  kind?: MessageKind;
   timestamp: string;
+}
+
+/** Message kind with the v1.16 fallback applied. */
+export function messageKind(m: Pick<Message, "kind" | "isBanNotification">): MessageKind {
+  return m.kind ?? (m.isBanNotification ? "banNotification" : "normal");
 }
 
 export interface EmotionalProfile {
@@ -235,6 +327,12 @@ export interface AppSettings {
   llmProvider: ProviderKind;
   reasoningLevel: ReasoningLevel;
   showModelReasoning: boolean;
+  reasoningPace: ReasoningPace;
+  ttsEnabled: boolean;
+  ttsMode: TtsMode;
+  ttsVolume: number;
+  soundEnabled: boolean;
+  soundVolume: number;
   deepseekApiKey: string;
   deepseekModel: string;
   /** Monthly spending cap in USD (0 = unlimited) */
@@ -242,6 +340,31 @@ export interface AppSettings {
   deepseekPeriodStart: string;
   deepseekPeriodUsageJson: string;
   deepseekUsageHistory: string;
+  /** OpenAI-compatible server (v1.20): base URL, optional key, model, manual model list (JSON array) */
+  openaiCompatBaseUrl: string;
+  openaiCompatApiKey: string;
+  openaiCompatModel: string;
+  openaiCompatModels: string;
+  /** Advanced tuning override (JSON of the knobs that differ from the defaults, v1.20) */
+  advancedTuningJson: string;
+  /** Personas remember their past discussions (v1.20) */
+  personaMemoryEnabled: boolean;
+}
+
+/** What a persona keeps of a discussion (long memory, v1.20) — mirror of `PersonaRecap`. */
+export interface PersonaRecap {
+  positions: string[];
+  bestLines: string[];
+  allies: string[];
+  rivals: string[];
+  lesson: string;
+}
+
+export interface PersonaRecapRecord {
+  speakerId: string;
+  speakerName: string;
+  profileId: string;
+  recap: PersonaRecap;
 }
 
 export interface LicenseStatus {
@@ -305,6 +428,10 @@ export interface SaveDiscussionRequest {
   llmProvider: ProviderKind;
   usage: UsageLedger;
   estimatedCostUsd: number;
+  /** Serialised DiscussionReport (lib/report.ts); empty when nothing was collected */
+  reportJson: string;
+  /** Recaps of the personas built from a catalogue profile (persisted as their long memory) */
+  recaps: PersonaRecapRecord[];
 }
 
 export interface DiscussionSummary {
@@ -322,6 +449,19 @@ export interface DiscussionSummary {
   llmProvider: string;
   totalTokens: number;
   estimatedCostUsd: number;
+  /** User tags and favourite flag (v1.20) */
+  tags: string[];
+  favorite: boolean;
+}
+
+/** A reusable discussion setup (v1.20). `configJson` holds a `TemplateConfig` (`lib/templates.ts`). */
+export interface DiscussionTemplate {
+  id: string;
+  name: string;
+  configJson: string;
+  /** Seeded templates cannot be deleted; their name is translated from `templates.<id>` */
+  builtin: boolean;
+  createdAt: string;
 }
 
 export interface DiscussionDetail {
@@ -344,6 +484,10 @@ export interface DiscussionDetail {
   llmProvider: string;
   usage: UsageLedger;
   estimatedCostUsd: number;
+  /** Empty for discussions saved before v1.17 */
+  reportJson: string;
+  tags: string[];
+  favorite: boolean;
 }
 
 // ── Argument map (structured) ──────────────────────────────────────────
@@ -368,11 +512,23 @@ export interface ThesisNode {
   arguments: ArgumentNode[];
 }
 
+/** How deep the argument map goes (v1.20.1). */
+export interface ArgumentMapDepth {
+  maxDepth: number;
+  /** Share of arguments answering another argument (depth ≥ 2), 0–1 */
+  deepShare: number;
+  /** Counter-arguments nobody has answered yet */
+  unansweredCounters: number;
+}
+
 export interface ArgumentMap {
   theses: ThesisNode[];
 }
 
 /** One undirected edge of the reaction graph (counts in both directions). */
+/** How an edge's net warmth moved since the previous update (v1.17). */
+export type RelationshipTrend = "warming" | "cooling" | "stable";
+
 export interface RelationshipEdge {
   a: string;
   b: string;
@@ -382,7 +538,66 @@ export interface RelationshipEdge {
   baDislikes: number;
   /** "ally" | "rival" | "tense" when strong enough, else null */
   kind: string | null;
+  /** Net weighted warmth (approvals − disapprovals, both ways, decayed each turn) */
+  score?: number;
+  trend?: RelationshipTrend | null;
 }
+
+/** Temperature of the room (average of the active gladiateurs, v1.17). */
+export type RoomMood = "tense" | "flat" | "lively" | "serene";
+
+/** Acts of the mode scripts (v1.18) — mirror of `engine::dramaturgy::ActKey`. */
+export type ActKey =
+  | "opening" | "confrontation" | "crossExamination" | "concessions" | "closingStatements"
+  | "divergence" | "association" | "convergence"
+  | "proposal" | "critique" | "consolidation"
+  | "questioning" | "digging" | "synthesis"
+  | "foundations" | "deepening" | "recap"
+  | "impressions" | "examination" | "recommendations"
+  | "exposition" | "complication" | "climax" | "resolution";
+
+export type FormatConstraintKind = "oneSentence" | "noJargon" | "metaphor" | "numbers" | "endWithQuestion";
+
+/** A scene event of the turn (v1.18) — mirror of `engine::scene_events::SceneEvent`. */
+export type SceneEvent =
+  | { kind: "surpriseFact"; fact: string; source: string | null }
+  | { kind: "formatConstraint"; constraint: FormatConstraintKind }
+  | { kind: "audienceQuestion"; target: string; question: string }
+  | { kind: "forcedSteelman" }
+  | { kind: "duel"; a: string; b: string }
+  | { kind: "hotSeat"; target: string }
+  | { kind: "dispatch"; text: string; index: number; total: number };
+
+/** Who plays what this turn (v1.19) — mirror of `RoleAssignment`. */
+export interface RoleAssignment {
+  speakerId: string;
+  role: string;
+  /** Display label in the discussion language */
+  label: string;
+}
+
+/** When the audience votes in an Oxford debate. */
+export type VotePhase = "before" | "after";
+
+export interface VerdictVote {
+  voterId: string;
+  voterName: string;
+  choice: string;
+  reason: string;
+}
+
+export interface PartyDecision {
+  partyId: string;
+  partyName: string;
+  accepts: boolean;
+  reason: string;
+}
+
+/** Mode-specific result (v1.19) — mirror of `ModeOutcome`, persisted in `report_json.outcome`. */
+export type ModeOutcome =
+  | { kind: "verdict"; votes: VerdictVote[]; winner: string | null; byArbitre: boolean }
+  | { kind: "agreement"; parties: PartyDecision[]; reached: boolean }
+  | { kind: "audienceSwing"; before: string | null; after: string | null; winner: string | null };
 
 // ArenaEvent — tagged union (discriminated via "type" field)
 export type ArenaEvent =
@@ -407,6 +622,21 @@ export type ArenaEvent =
   | { type: "speakerActive"; data: { speakerId: string } }
   | { type: "speakerPassed"; data: { speakerId: string; speakerName: string } }
   | { type: "relationshipsUpdated"; data: { edges: RelationshipEdge[] } }
+  | { type: "intentionGenerated"; data: { speakerId: string; speakerName: string } & IntentionData }
+  | { type: "relationshipShift"; data: { a: string; b: string; from: string; to: string } }
+  | { type: "roomMoodUpdated"; data: { avg: EmotionalProfile; label: RoomMood } }
+  | { type: "turnTimings"; data: { timings: TurnTimings } }
+  | { type: "actStarted"; data: { turn: number; act: ActKey; title: string } }
+  | { type: "sceneEventTriggered"; data: { turn: number; event: SceneEvent; participants: string[] } }
+  | { type: "coalitionFormed"; data: { turn: number; a: string; b: string; aName: string; bName: string } }
+  | { type: "diagnosticsReady"; data: { diagnostics: DiscussionDiagnostics } }
+  | { type: "agendaRevealed"; data: { agendas: AgendaRecord[] } }
+  | { type: "rolesAssigned"; data: { turn: number; roles: RoleAssignment[] } }
+  | { type: "audienceVoteRequested"; data: { phase: VotePhase; timeoutSecs: number } }
+  | { type: "audienceVoteRecorded"; data: { phase: VotePhase; choice: string } }
+  | { type: "outcomeReady"; data: { outcome: ModeOutcome } }
+  | { type: "personaRecapReady"; data: { recap: PersonaRecapRecord } }
+  | { type: "positionsUpdated"; data: { positions: ParticipantPosition[] } }
   | {
       type: "emotionUpdated";
       data: { speakerId: string; emotions: EmotionalProfile; moodSummary?: string };
@@ -434,6 +664,7 @@ export type ArenaEvent =
     }
   | { type: "userTurnReady"; data: null }
   | { type: "userTurnTimeout"; data: null }
+  | { type: "awaitingCue"; data: { speakerId: string; speakerName: string } }
   | { type: "pauseConfirmed"; data: null }
   | { type: "resumeConfirmed"; data: null }
   | { type: "synthesisChunk"; data: { chunk: string } }
@@ -446,6 +677,8 @@ export type ArenaEvent =
         queries: string[];
         resultsCount: number;
         poolUsed: number;
+        /** Results injected into the prompt (v1.17) */
+        results: WebSourceInfo[];
       };
     }
   | {
@@ -457,6 +690,8 @@ export type ArenaEvent =
         resultsCount: number;
         poolUsed: number;
         articleUrls: string[];
+        /** Articles injected into the prompt (v1.17) */
+        articles: WikiSourceInfo[];
       };
     }
   | {
@@ -500,6 +735,8 @@ export type ArenaEvent =
         map: ArgumentMap;
         newNodeIds: string[];
         droppedCount: number;
+        /** Depth of the map and objections waiting for an answer (v1.20.1; absent in older fixtures) */
+        depth?: ArgumentMapDepth;
       };
     }
   | {
@@ -521,6 +758,23 @@ export type ArenaEvent =
     }
   | { type: "discussionEnded"; data: null }
   | { type: "error"; data: { message: string } };
+
+// ── Sources ────────────────────────────────────────────────────────────
+
+/** One web result injected into a prompt. */
+export interface WebSourceInfo {
+  title: string;
+  url: string;
+  domain: string;
+  snippet: string;
+}
+
+/** One Wikipedia article injected into a prompt. */
+export interface WikiSourceInfo {
+  title: string;
+  url: string;
+  snippet: string;
+}
 
 // RAG types
 export interface RagDocumentInfo {
@@ -545,6 +799,28 @@ export interface DirectiveData {
   relationshipSummary: string;
   focusSpeaker: string | null;
   reasoningLevel: ReasoningLevel;
+}
+
+/** What a speaker tries to achieve with their coming intervention (v1.17). */
+export type IntentionGoal = "convince" | "nuance" | "contest" | "question" | "concede" | "relaunch";
+
+/** Pre-speech contract of a speaker, shown in the backstage panel. */
+export interface IntentionData {
+  /** Participant addressed (display name); null = the topic */
+  target: string | null;
+  goal: IntentionGoal;
+  angle: string;
+  concession: string | null;
+  question: string | null;
+}
+
+/** A participant's position and its trajectory (engine memory, v1.17). */
+export interface ParticipantPosition {
+  participantName: string;
+  stance: string;
+  initialStance?: string | null;
+  shift?: string | null;
+  wouldChangeIf?: string | null;
 }
 
 // Ban tracking for emotion sidebar
@@ -594,7 +870,9 @@ export type BudgetSection =
   | "fullDocument"
   | "ragContext"
   | "webWikiSearch"
-  | "positionalMap";
+  | "positionalMap"
+  | "openLoops"
+  | "debateState";
 
 /** Sections whose priority rank can be configured by the user in Settings. */
 export const CONFIGURABLE_BUDGET_SECTIONS: BudgetSection[] = [
@@ -605,7 +883,12 @@ export const CONFIGURABLE_BUDGET_SECTIONS: BudgetSection[] = [
   "arbitreDirectives",
   "webWikiSearch",
   "positionalMap",
+  "openLoops",
+  "debateState",
 ];
+
+/** Configurable sections added after v1.16: a saved order without them stays valid (they are appended). */
+export const LATER_BUDGET_SECTIONS: BudgetSection[] = ["openLoops", "debateState"];
 
 export interface SectionPriority {
   section: BudgetSection;
@@ -619,6 +902,8 @@ export interface BudgetFeatures {
   wikiSearchEnabled: boolean;
   ragEnabled: boolean;
   documentChars: number;
+  /** Chars of the hidden agenda block in the system prompt (0 when off) */
+  agendaChars: number;
 }
 
 export interface BudgetParams {

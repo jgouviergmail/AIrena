@@ -14,7 +14,7 @@ export function TopBar({ title, subtitle, children }: { title: string; subtitle?
     : null;
 
   return (
-    <header className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-card px-4">
+    <header data-topbar className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-card px-4">
       <div className="flex min-w-0 items-center gap-3">
         <h1 className="shrink-0 text-sm font-semibold text-foreground">{title}</h1>
         {subtitle}

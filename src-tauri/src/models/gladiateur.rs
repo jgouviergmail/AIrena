@@ -17,6 +17,15 @@ pub struct GladIAteurConfig {
     /// JSON string of initial EmotionalProfile (from predefined profile)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_emotions: Option<String>,
+    /// Role in the structured modes (trial, Oxford); dealt by the engine when absent (v1.19)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode_role: Option<String>,
+    /// Model of this speaker (`None` = the global model of the provider, v1.20)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Catalogue profile the speaker was built from (long memory key, v1.20)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_profile_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]

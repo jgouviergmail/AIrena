@@ -200,9 +200,21 @@ pub const EMOTION_STAGNATION_SIMILARITY: f32 = 0.8;
 /// considered stagnating.
 pub const EMOTION_STAGNATION_REACTION_DROUGHT_TURNS: u32 = 2;
 
+// Typed reactions (v1.17) — effects added on top of the like/dislike rules
+/// Extra confidence per "insightful" received.
+pub const EMOTION_INSIGHTFUL_CONF_BONUS: u8 = 3;
+/// Curiosity per "question" received, and cap per intervention.
+pub const EMOTION_QUESTION_CURIOSITY: u16 = 4;
+pub const EMOTION_QUESTION_CURIOSITY_CAP: u16 = 12;
+/// Frustration per "off-topic" received (softer than a dislike, whose factor is 5).
+pub const EMOTION_OFFTOPIC_FRUST_FACTOR: u16 = 3;
+/// Enthusiasm per "laugh" received or given, and cap per intervention.
+pub const EMOTION_LAUGH_ENTHUSIASM: u16 = 4;
+pub const EMOTION_LAUGH_ENTHUSIASM_CAP: u16 = 12;
+
 // Accord follows the reactions a speaker GIVES: per net reaction, and cap
-pub const EMOTION_ACCORD_GIVEN_FACTOR: u8 = 4;
-pub const EMOTION_ACCORD_GIVEN_CAP: u8 = 12;
+pub const EMOTION_ACCORD_GIVEN_FACTOR: u8 = 2;
+pub const EMOTION_ACCORD_GIVEN_CAP: u8 = 6;
 
 /// Bound (±) on each axis of an LLM-provided emotion delta. Reactions and bans
 /// are already applied by rules; the model only adds tone/content nuance.
@@ -210,7 +222,35 @@ pub const EMOTION_LLM_DELTA_CAP: i8 = 10;
 
 // Natural decay — extremes return toward the persona's INITIAL profile at the given rate
 pub const EMOTION_DECAY_FRUSTRATION_RATE: u8 = 2;
-pub const EMOTION_DECAY_ENTHUSIASM_RATE: u8 = 1;
+pub const EMOTION_DECAY_ENTHUSIASM_RATE: u8 = 2;
+
+// ── Émotions : réalisme et variabilité (v1.20.4) ────────────────────────
+
+/// Above this value an increase meets resistance (below `100 - it`, a decrease does):
+/// the comfort band where a rule delta applies in full.
+pub const EMOTION_COMFORT_HIGH: u8 = 65;
+/// Share of a delta that still applies at the very extreme (0 or 100): never zero,
+/// so a saturated axis keeps moving — slowly. The braking is quadratic in the
+/// distance past the comfort band (v1.20.5: 58 % left at 75, 31 % at 85, 17 % at
+/// 95), which caps a unanimous chorus around 85 instead of 90.
+pub const EMOTION_EXTREME_RESISTANCE: f32 = 0.15;
+/// Net change one reception round (every reaction to one intervention) may make
+/// on a single axis, before the resistance.
+pub const EMOTION_ROUND_AXIS_CAP: u8 = 12;
+/// Homeostasis: share of the distance to the persona's baseline recovered at every
+/// intervention on every axis (percent), one point at least; for frustration and
+/// enthousiasme the explicit `EMOTION_DECAY_*_RATE` is the floor instead (v1.20.5),
+/// so a storm of dislikes plateaus around 80 instead of creeping to 100.
+pub const EMOTION_HOMEOSTASIS_PERCENT: u8 = 12;
+/// A move of at least this many points away from the persona's baseline on one
+/// axis is a notable shift: the directive names it ("ébranlé", "convaincu"…)
+/// and a shaken speaker thinks harder.
+pub const EMOTION_NOTABLE_SHIFT: u8 = 15;
+/// Hysteresis of the notable zone (v1.20.5): entered at `EMOTION_NOTABLE_SHIFT`,
+/// left only below `EMOTION_NOTABLE_SHIFT - EMOTION_SHIFT_REARM`, so a speaker
+/// hovering around the boundary (homeostasis pulls back, a reaction pushes
+/// again) is announced once, not at every intervention.
+pub const EMOTION_SHIFT_REARM: u8 = 5;
 
 // Emotional contagion — weak pull toward group average
 pub const EMOTION_CONTAGION_RATE: f32 = 0.05;
@@ -220,6 +260,54 @@ pub const EMOTION_CONTAGION_MAX_DELTA: f32 = 3.0;
 /// The moderator observes more than it participates: it feels the room but
 /// does not set its mood.
 pub const EMOTION_CONTAGION_INCLUDE_ARBITRE: bool = false;
+
+// ── Émotions incarnées (v1.17) ───────────────────────────────────────────
+
+/// OCEAN value at or above which a trait is "extreme high" (directives, gains).
+pub const OCEAN_EXTREME_HIGH: u8 = 8;
+/// OCEAN value at or below which a trait is "extreme low".
+pub const OCEAN_EXTREME_LOW: u8 = 3;
+/// Bounds of the persona gains derived from OCEAN (1.0 = the v1.16 rule deltas).
+pub const OCEAN_GAIN_MIN: f32 = 0.6;
+pub const OCEAN_GAIN_MAX: f32 = 1.4;
+
+/// Sampling modulation (emotion-driven only, never on JSON calls):
+/// temperature moves by ±`EMOTION_TEMP_SPAN` with enthusiasm, within [MIN, MAX].
+pub const EMOTION_TEMP_SPAN: f32 = 0.15;
+pub const EMOTION_TEMP_MIN: f32 = 0.3;
+pub const EMOTION_TEMP_MAX: f32 = 1.2;
+/// `num_predict` scales between these factors with engagement (0 → MIN, 100 → MAX).
+pub const EMOTION_LEN_MIN: f32 = 0.8;
+pub const EMOTION_LEN_MAX: f32 = 1.2;
+
+/// Stage directions (theatre lines about a participant's state, no LLM) — whole
+/// sentences (v1.20.4), a persona's own line rarely exceeds this.
+pub const STAGE_DIRECTION_MAX_CHARS: usize = 240;
+pub const STAGE_DIRECTIONS_PER_SPEAKER_PER_TURN: usize = 1;
+
+/// Weighted relationship scores: decay applied at the end of every turn, and
+/// the thresholds from which a pair is classified (v1.20.5: on the **sum** of
+/// both directions' net warmth — sincere reactions leave half of the reactions
+/// neutral, so a single direction rarely reaches 2 on its own).
+pub const RELATIONSHIP_DECAY_PER_TURN: f32 = 0.85;
+/// Allies: combined net warmth at or above this, each direction warm (`RELATIONSHIP_MUTUAL_MIN`).
+pub const RELATIONSHIP_ALLY_SCORE: f32 = 2.5;
+/// Rivals: combined net warmth at or below minus this, each direction cold.
+pub const RELATIONSHIP_RIVAL_SCORE: f32 = 2.5;
+/// Tense: opposite signs with a spread at or above this, or one direction cold
+/// by this much on its own (a persistent critic makes a pair tense whatever the
+/// other does).
+pub const RELATIONSHIP_TENSE_SCORE: f32 = 2.0;
+/// Net warmth a direction must show (in absolute value) to count as warm / cold:
+/// about one approval still in memory.
+pub const RELATIONSHIP_MUTUAL_MIN: f32 = 0.8;
+/// Net-score move below which a relationship trend is "stable".
+pub const RELATIONSHIP_TREND_EPSILON: f32 = 0.5;
+
+/// Room mood thresholds on the average profile of the active gladiateurs.
+pub const ROOM_MOOD_TENSE_FRUSTRATION: u8 = 65;
+pub const ROOM_MOOD_FLAT_ENGAGEMENT: u8 = 35;
+pub const ROOM_MOOD_LIVELY_ENTHUSIASM: u8 = 65;
 
 // ── Personality description thresholds ───────────────────────────────────
 
@@ -269,8 +357,6 @@ pub const EMOTION_STAGNATION_JSON_KEY: &str = "stagnating";
 
 /// Frustration and confidence gained by IArbitre when it issues a ban.
 pub const EMOTION_ARBITRE_BAN_DELTA: u8 = 5;
-/// Engagement lost by IArbitre per intervention while the discussion stagnates.
-pub const EMOTION_ARBITRE_STAGNATION_ENG: u8 = 3;
 
 // ── Model refusal detection (trilingual) ────────────────────────────────
 
@@ -294,6 +380,176 @@ pub const MODERATION_BAN_MIN_TURNS: u32 = 1;
 
 /// Maximum ban duration (turns) that IArbitre can issue.
 pub const MODERATION_BAN_MAX_TURNS: u32 = 3;
+
+// ── Reactions (v1.17) ───────────────────────────────────────────────────
+
+/// Shortest excerpt a reaction may quote (shorter strings match almost anything).
+pub const REACTION_QUOTE_MIN_CHARS: usize = 8;
+/// Longest excerpt kept from a reaction's quote (word-boundary truncation).
+pub const REACTION_QUOTE_MAX_CHARS: usize = 120;
+/// "insightful" is a scarce token (v1.20.5): a reactor may distinguish one strong
+/// point per this many reactions given — the prompt says when the credit is spent,
+/// and a 💡 given anyway is recorded as a like. Real models ignored "rare" and
+/// "at most one out of five" (deepseek-flash: 36-43 % of 💡 in a debate).
+pub const INSIGHTFUL_CREDIT_WINDOW: usize = 5;
+/// Audience reactions accepted on one message (the rest is ignored).
+pub const AUDIENCE_REACTIONS_PER_MESSAGE_MAX: u32 = 3;
+/// Focus weight bonus for a participant the audience just reacted to.
+pub const FOCUS_WEIGHT_AUDIENCE: u32 = 2;
+/// Reactions shown under a message of the current turn in the speaker prompt.
+pub const PROMPT_REACTIONS_PER_MESSAGE_MAX: usize = 3;
+/// Characters of a reaction justification kept in the speaker prompt.
+pub const PROMPT_REACTION_JUSTIFICATION_CHARS: usize = 120;
+/// Reaction hints (quotes flagged insightful / questioned) added to the argument extraction context.
+pub const ARGMAP_REACTION_HINTS_MAX: usize = 6;
+/// Extraversion (OCEAN E) at or below which a persona reacts rarely.
+pub const REACTION_PROPENSITY_LOW_E: u8 = 4;
+/// Extraversion at or above which a persona reacts often.
+pub const REACTION_PROPENSITY_HIGH_E: u8 = 7;
+/// Agreeableness (OCEAN A) at or above which a persona is lenient.
+pub const REACTION_PROPENSITY_HIGH_A: u8 = 8;
+/// Agreeableness at or below which a persona is demanding.
+pub const REACTION_PROPENSITY_LOW_A: u8 = 3;
+/// Reaction colours allowed in collaborative fiction (a relay has no disagreement).
+pub const REACTION_TYPES_FICTION: [crate::models::message::ReactionType; 3] = [
+    crate::models::message::ReactionType::Like,
+    crate::models::message::ReactionType::Insightful,
+    crate::models::message::ReactionType::Laugh,
+];
+
+// ── Intention and open loops (v1.17) ────────────────────────────────────
+
+/// Longest "[Ton intention]" block injected into the intervention prompt
+/// (counted in the deterministic overhead).
+pub const INTENTION_BLOCK_MAX_CHARS: usize = 300;
+/// Longest angle kept from an intention (chars).
+pub const INTENTION_ANGLE_MAX_CHARS: usize = 160;
+/// Longest concession / question kept from an intention (chars).
+pub const INTENTION_FIELD_MAX_CHARS: usize = 120;
+/// Chars kept per intention field for the display (backstage, report); the prompt bounds above still apply.
+pub const INTENTION_DISPLAY_MAX_CHARS: usize = 600;
+/// Words that mean "no participant in particular" for an intention target.
+pub const INTENTION_TOPIC_WORDS: [&str; 6] = ["sujet", "topic", "主题", "null", "none", "aucun"];
+/// Own interventions during which an open loop stays in a speaker's prompt.
+pub const OPEN_LOOPS_TTL_TURNS: u8 = 2;
+/// Open loops kept per speaker (FIFO: the oldest is dropped first).
+pub const OPEN_LOOPS_MAX_PER_SPEAKER: usize = 3;
+/// Longest text kept for one open loop (chars).
+pub const OPEN_LOOP_TEXT_MAX_CHARS: usize = 200;
+
+// ── Agendas cachés et casting (v1.19) ───────────────────────────────────
+
+/// Longest agenda content (the three fields together) kept per participant.
+pub const AGENDA_MAX_CHARS: usize = 300;
+/// Longest text kept per agenda field (objective, red line, victory).
+pub const AGENDA_FIELD_MAX_CHARS: usize = AGENDA_MAX_CHARS / 3;
+/// Labels and instruction around the fields in the "[Ton agenda secret]" system
+/// block: the block never exceeds `AGENDA_MAX_CHARS + AGENDA_BLOCK_OVERHEAD_CHARS`,
+/// which the token budget reserves when the feature is on.
+pub const AGENDA_BLOCK_OVERHEAD_CHARS: usize = 260;
+/// Output budget of one agenda call (tokens) — three short sentences of JSON.
+pub const AGENDA_NUM_PREDICT: i32 = 256;
+/// Longest catalogue line per profile in the casting prompt (chars).
+pub const CASTING_PERSONALITY_MAX_CHARS: usize = 120;
+/// Output budget of the casting call (tokens).
+pub const CASTING_NUM_PREDICT: i32 = 512;
+/// Gladiateurs a casting may suggest, at most.
+pub const CASTING_MAX_GLADIATEURS: u32 = 8;
+/// Upper bound of the catalogue text handed to the casting call (chars), before
+/// the context-derived bound (`num_ctx` minus the output and the instructions).
+pub const CASTING_CATALOGUE_MAX_CHARS: usize = 16_000;
+/// Prompt chars of the casting instructions (kept out of the catalogue bound).
+pub const CASTING_INSTRUCTIONS_CHARS: usize = 1_200;
+
+// ── Modes structurés : rôles, verdicts, dépêches (v1.19) ─────────────────
+
+/// Longest "[Ton rôle]" block appended to a persona (roles and hats).
+pub const ROLE_BLOCK_MAX_CHARS: usize = 600;
+/// Output budget of a verdict / agreement call (tokens): a choice and a reason.
+pub const VERDICT_NUM_PREDICT: i32 = 256;
+/// Longest reason kept from a verdict or an agreement answer.
+pub const VERDICT_REASON_MAX_CHARS: usize = 300;
+/// Crisis dispatches generated at the start when the discussion has no turn limit.
+pub const CRISIS_DISPATCH_DEFAULT_COUNT: u32 = 5;
+/// Crisis dispatches generated at most (one per turn).
+pub const CRISIS_DISPATCH_MAX_COUNT: u32 = 12;
+/// Longest dispatch kept (chars).
+pub const CRISIS_DISPATCH_MAX_CHARS: usize = 280;
+/// Output budget of the dispatches call (tokens).
+pub const CRISIS_DISPATCHES_NUM_PREDICT: i32 = 1_536;
+
+// ── Mémoire longue des personas (v1.20) ─────────────────────────────────
+
+/// Past recaps injected at most per speaker (the closest to the topic, BM25).
+pub const PERSONA_MEMORY_MAX_RECAPS: usize = 3;
+/// Query tokens shorter than this (articles, prepositions) are ignored by the recall ranking.
+pub const PERSONA_MEMORY_MIN_TOKEN_CHARS: usize = 3;
+/// Longest "[Souvenirs de discussions passées]" block (chars), reserved in the budget.
+pub const PERSONA_MEMORY_MAX_CHARS: usize = 900;
+/// Output budget of one recap call (tokens).
+pub const RECAP_NUM_PREDICT: i32 = 512;
+/// Items kept per recap list (positions, best lines, allies, rivals).
+pub const RECAP_LIST_MAX_ITEMS: usize = 3;
+/// Longest item or lesson kept from a recap (chars).
+pub const RECAP_ITEM_MAX_CHARS: usize = 160;
+/// Own interventions (most recent first) handed to the recap prompt.
+pub const RECAP_OWN_MESSAGES_MAX: usize = 4;
+/// Chars of each own intervention kept in the recap prompt.
+pub const RECAP_OWN_MESSAGE_MAX_CHARS: usize = 600;
+
+// ── Exploitation : journal, mises à jour (v1.20) ────────────────────────
+
+/// Directory of the rotating log files, next to the executable.
+pub const LOG_DIR_NAME: &str = "logs";
+/// Prefix of the daily log files (`airena.log.YYYY-MM-DD`).
+pub const LOG_FILE_PREFIX: &str = "airena.log";
+/// Bytes of the backend log exported by "export the journal" (its tail).
+pub const LOG_EXPORT_MAX_BYTES: usize = 512 * 1024;
+/// Where new releases are published (manual update check until the updater is activated).
+pub const RELEASES_URL: &str = "https://github.com/jgouviergmail/AIrena/releases";
+
+// ── Historique enrichi et modèles de discussion (v1.20) ─────────────────
+
+/// Tags a discussion may carry, at most (the UI mirrors it as `TAG_MAX_LENGTH` / chips).
+pub const HISTORY_TAGS_MAX: usize = 12;
+/// Characters of one tag (lower-cased, trimmed) — the UI input mirrors it.
+pub const HISTORY_TAG_MAX_CHARS: usize = 24;
+/// Characters of a template name.
+pub const TEMPLATE_NAME_MAX_CHARS: usize = 80;
+/// Bytes of a template configuration (a full cast with prompts stays far below).
+pub const TEMPLATE_CONFIG_MAX_BYTES: usize = 64 * 1024;
+
+// ── Audio (v1.18) ───────────────────────────────────────────────────────
+
+/// Default volumes (0.0–1.0) of the voice and of the procedural sounds.
+pub const AUDIO_DEFAULT_TTS_VOLUME: f32 = 1.0;
+pub const AUDIO_DEFAULT_SOUND_VOLUME: f32 = 0.5;
+
+// ── Dramaturgie (v1.18) ─────────────────────────────────────────────────
+
+/// Chance of a scene event on an eligible turn, and its boost while the discussion stagnates.
+pub const SCENE_EVENT_BASE_PROBABILITY: f64 = 0.15;
+pub const SCENE_EVENT_STAGNATION_BOOST: f64 = 0.35;
+/// Turns between two scene events (never two turns in a row).
+pub const SCENE_EVENT_MIN_GAP_TURNS: u32 = 2;
+/// Longest scene instruction injected into a speaker's prompt (deterministic overhead).
+pub const SCENE_EVENT_INSTRUCTION_MAX_CHARS: usize = 300;
+/// Active speakers needed for a duel or a hot seat.
+pub const SCENE_EVENT_MIN_ACTIVE_FOR_DUEL: usize = 3;
+/// Longest surprise fact quoted by the moderator (bytes, whole sentences).
+pub const SURPRISE_FACT_MAX_CHARS: usize = 500;
+/// Chance, per turn, that two allies relay each other (debate-like modes, ≥ 3 active).
+pub const COALITION_PROBABILITY: f64 = 0.2;
+pub const COALITION_MIN_ACTIVE: usize = 3;
+
+// ── Sources (v1.17) ─────────────────────────────────────────────────────
+
+/// Characters of a source excerpt kept for display and persistence.
+pub const SOURCE_SNIPPET_CHARS: usize = 200;
+/// Longest "[Sources utilisées]" block handed to the synthesis prompt.
+pub const SYNTHESIS_SOURCES_MAX_CHARS: usize = 1_500;
+/// Most recent sources listed in the synthesis prompt (one line each).
+pub const SYNTHESIS_SOURCES_MAX_ENTRIES: usize = 20;
 
 // ── Search deduplication ──────────────────────────────────────────────
 
@@ -329,6 +585,9 @@ pub const THINK_NEAR_END_TURNS: u32 = 2;
 
 /// Additional probability when the speaker was contradicted (>= 2 dislikes).
 pub const THINK_CONTRADICTED_BOOST: f64 = 0.10;
+/// Boost when the speaker's confiance dropped by `EMOTION_NOTABLE_SHIFT` or more
+/// since the start (v1.20.4): a shaken speaker thinks harder before answering.
+pub const THINK_SHAKEN_BOOST: f64 = 0.15;
 
 /// Maximum think mode probability (cap to keep it non-systematic).
 pub const THINK_MAX_PROBABILITY: f64 = 0.60;
@@ -440,8 +699,9 @@ pub const CHARS_PER_TOKEN_LATIN: f64 = 3.8;
 pub const CHARS_PER_TOKEN_CJK: f64 = 1.5;
 
 /// Fixed overhead for deterministic prompt sections (preamble, mode, language,
-/// datetime, emotions description, emotion thresholds). Measured at ~2 378 chars.
-pub const BUDGET_DETERMINISTIC_OVERHEAD_CHARS: usize = 2_400;
+/// datetime, emotions description, emotion thresholds — measured at ~2 378 chars)
+/// plus the intention block (`INTENTION_BLOCK_MAX_CHARS`, v1.17).
+pub const BUDGET_DETERMINISTIC_OVERHEAD_CHARS: usize = 2_400 + INTENTION_BLOCK_MAX_CHARS;
 
 /// Minimum num_ctx below which the discussion is refused outright.
 pub const BUDGET_MIN_VIABLE_NUM_CTX: usize = 2_048;
@@ -477,8 +737,12 @@ pub const BUDGET_FLOOR_FULL_DOCUMENT: usize = 0;
 pub const BUDGET_FLOOR_RAG_CONTEXT: usize = 500;
 /// Floor: total chars for web+wiki search results.
 pub const BUDGET_FLOOR_WEB_WIKI: usize = 500;
-/// Floor: total chars for positional map.
+/// Floor: per-participant chars for positional map (one short stance each).
 pub const BUDGET_FLOOR_POSITIONAL_MAP: usize = 50;
+/// Floor: total chars for open loops (questions and commitments awaiting the
+/// speaker). Non-zero on purpose: the waterfall fills surplus in rank order, so a
+/// zero floor would hide the loops below ~16k contexts (one or two loops fit here).
+pub const BUDGET_FLOOR_OPEN_LOOPS: usize = 300;
 
 // ── Token Budget — section ceilings (maximum chars) ───────────────────
 
@@ -496,8 +760,10 @@ pub const BUDGET_CEIL_ARBITRE_DIRECTIVES: usize = 2_000;
 pub const BUDGET_CEIL_RAG_CONTEXT: usize = 10_000;
 /// Ceiling: total chars for web+wiki search results.
 pub const BUDGET_CEIL_WEB_WIKI: usize = 8_000;
-/// Ceiling: per-participant chars for positional map.
-pub const BUDGET_CEIL_POSITIONAL_MAP_PER_PARTICIPANT: usize = 200;
+/// Ceiling: per-participant chars for positional map (stance + shift + condition, v1.17).
+pub const BUDGET_CEIL_POSITIONAL_MAP_PER_PARTICIPANT: usize = 320;
+/// Ceiling: total chars for open loops.
+pub const BUDGET_CEIL_OPEN_LOOPS: usize = 900;
 
 // ── Argument Map ──────────────────────────────────────────────────────
 
@@ -537,6 +803,8 @@ pub const ARGMAP_PROMPT_LABEL_CHARS: usize = 100;
 
 /// Minimum num_predict for argument map extraction (generous for quality JSON output).
 pub const ARGMAP_NUM_PREDICT: i32 = 4096;
+/// Chars of an unusable extraction answer kept in the log (diagnosis of a model's JSON habits).
+pub const ARGMAP_RAW_LOG_MAX_CHARS: usize = 4_000;
 
 /// Minimum num_ctx for argument map extraction (prompt + response must both fit).
 /// Only the Ollama adapter consumes `num_ctx`; cloud providers ignore it.
@@ -602,6 +870,12 @@ pub const REASONING_MAX_FAILURES: u32 = 2;
 /// Share of the monthly cloud budget at which a warning is emitted (0.8 = 80%).
 pub const LLM_BUDGET_WARN_RATIO: f64 = 0.8;
 
+/// Concurrent requests a local Ollama server is asked to serve. Measured on
+/// 2026-09-16: two concurrent short chats finish only ~15 % faster than two
+/// sequential ones on a consumer GPU (the server interleaves them), so the
+/// engine keeps local calls strictly sequential.
+pub const OLLAMA_MAX_PARALLEL_CALLS: usize = 1;
+
 // ── DeepSeek — API ───────────────────────────────────────────────────
 
 /// OpenAI-compatible base URL.
@@ -632,6 +906,10 @@ pub const DEEPSEEK_RETRY_BASE_MS: u64 = 1_000;
 /// Random jitter added to each backoff (ms).
 pub const DEEPSEEK_RETRY_JITTER_MS: u64 = 250;
 
+/// Concurrent requests sent to the DeepSeek API (end-of-turn analyses, reaction rounds).
+/// Bounded so that a burst never trips the rate limiter; 429s still back off.
+pub const DEEPSEEK_MAX_PARALLEL_CALLS: usize = 4;
+
 /// Hard cap on `max_tokens` accepted by the API.
 pub const DEEPSEEK_MAX_OUTPUT_TOKENS: i32 = 393_216;
 
@@ -641,6 +919,8 @@ pub const DEEPSEEK_MAX_OUTPUT_TOKENS: i32 = 393_216;
 pub const DEEPSEEK_REASONING_ALLOWANCE_LOW: i32 = 4_096;
 pub const DEEPSEEK_REASONING_ALLOWANCE_HIGH: i32 = 12_288;
 pub const DEEPSEEK_REASONING_ALLOWANCE_MAX: i32 = 32_768;
+/// Fast reasoning pace: the allowances above are scaled down by this factor (v1.17).
+pub const DEEPSEEK_FAST_PACE_ALLOWANCE_FACTOR: f64 = 0.5;
 
 /// `top_p` lower bound enforced by the API while thinking is enabled.
 pub const DEEPSEEK_TOP_P_MIN_THINKING: f32 = 0.95;
@@ -657,6 +937,19 @@ pub const DEEPSEEK_MAX_CONTEXT_BUDGET: u32 = 262_144;
 
 /// Default UI bound for `num_predict` in DeepSeek mode (Ollama keeps 4096).
 pub const DEEPSEEK_MAX_NUM_PREDICT_UI: i32 = 16_384;
+
+// ── OpenAI-compatible servers (v1.20) ───────────────────────────────────
+// The transport timings (connect / idle timeouts, retries, backoff) are the
+// `DEEPSEEK_*` ones above: one SSE transport serves both dialects.
+
+/// Suggested base URL shown in the settings (LM Studio's default).
+pub const OPENAI_COMPAT_DEFAULT_BASE_URL: &str = "http://localhost:1234/v1";
+/// Hard cap on `max_tokens` for a generic server (its own limit applies below).
+pub const OPENAI_COMPAT_MAX_OUTPUT_TOKENS: i32 = 65_536;
+/// Concurrent calls worth issuing to a generic server (local ones interleave).
+pub const OPENAI_COMPAT_MAX_PARALLEL_CALLS: usize = 2;
+/// Context window assumed when the settings hold none.
+pub const OPENAI_COMPAT_DEFAULT_CONTEXT_TOKENS: u32 = 32_768;
 
 // ── DeepSeek — pricing (USD per 1M tokens, peak hours) ───────────────
 
@@ -676,3 +969,54 @@ pub const DEEPSEEK_PRICE_FLASH_OUTPUT: f64 = 1.20;
 pub const DEEPSEEK_PRICE_V4PRO_INPUT_HIT: f64 = 0.044;
 pub const DEEPSEEK_PRICE_V4PRO_INPUT_MISS: f64 = 1.32;
 pub const DEEPSEEK_PRICE_V4PRO_OUTPUT: f64 = 3.96;
+
+// ── Profondeur argumentative (v1.20.1) ─────────────────────────────────
+
+/// Weight added to the `Deepen` speech act in the argumentative modes.
+pub const SPEECH_ACT_DEEPEN_BONUS: u32 = 6;
+/// Weight added instead when the speaker still owes an answer to an objection.
+pub const SPEECH_ACT_DEEPEN_OWED_BONUS: u32 = 16;
+/// Unanswered objections listed in the extraction prompt (newest first), so an
+/// answer gets nested under the objection it addresses.
+pub const ARGMAP_PROMPT_MAX_OBJECTIONS: usize = 6;
+
+// ── Le public dans le débat, variété de forme (v1.20.2) ─────────────────
+
+/// Chars of the audience's message quoted to the speaker who owes them an answer and to the moderator.
+pub const AUDIENCE_MESSAGE_EXCERPT_CHARS: usize = 240;
+/// Own previous interventions a speaker is reminded of (anti-repetition of content and openings).
+pub const SELF_MEMORY_MESSAGES: usize = 3;
+/// Chars of an intervention's opening quoted back to its author ("do not open like this again").
+pub const OPENING_EXCERPT_CHARS: usize = 80;
+/// Recent openings of the moderator's own lines quoted in the moderation prompt.
+pub const ARBITRE_RECENT_OPENINGS: usize = 4;
+/// Share of interventions the moderator may comment on before being told to hold back (percent).
+pub const MODERATION_COMMENT_RATE_MAX_PERCENT: u32 = 25;
+/// Speaker id of the audience member (the user) in messages, reactions and the argument map.
+pub const USER_SPEAKER_ID: &str = "user";
+
+// ── Réalisme de la mise en scène (v1.20.3) ──────────────────────────────
+
+/// Output allowance of the moderator's voiced announcement (an act, a scene event):
+/// two full sentences, even verbose ones.
+pub const ANNOUNCEMENT_NUM_PREDICT: i32 = 220;
+/// Bytes kept of a voiced announcement, whole sentences only (v1.20.4); the
+/// brief stays the fallback.
+pub const ANNOUNCEMENT_MAX_CHARS: usize = 900;
+/// Output allowance of the audience-question call (JSON).
+pub const AUDIENCE_QUESTION_NUM_PREDICT: i32 = 200;
+/// Chars kept of the audience's question.
+pub const AUDIENCE_QUESTION_MAX_CHARS: usize = 240;
+/// A room question shorter than this is not one (a bare "Oui ?").
+pub const AUDIENCE_QUESTION_MIN_CHARS: usize = 12;
+/// Chars of one participant's portrait in the cast block (role, creed, register).
+pub const CAST_PORTRAIT_MAX_CHARS: usize = 220;
+/// Chars of the whole cast block appended to a system prompt.
+pub const CAST_BLOCK_MAX_CHARS: usize = 1_400;
+/// Theses listed in the "[État du débat]" block (the most argued first).
+pub const DEBATE_STATE_MAX_THESES: usize = 6;
+/// Unanswered objections listed in the "[État du débat]" block (the newest first).
+pub const DEBATE_STATE_MAX_OBJECTIONS: usize = 4;
+/// Floor / ceiling (chars) of the debate-state section of the waterfall budget.
+pub const BUDGET_FLOOR_DEBATE_STATE: usize = 300;
+pub const BUDGET_CEIL_DEBATE_STATE: usize = 1_200;

@@ -1,6 +1,9 @@
+pub mod casting;
+pub mod diagnostics;
 pub mod discussion;
 pub mod history;
 pub mod llm;
 pub mod ollama;
 pub mod rag;
 pub mod settings;
+pub mod templates;

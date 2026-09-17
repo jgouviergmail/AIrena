@@ -1,13 +1,16 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Brain, Info } from "lucide-react";
-import { useSettingsStore } from "@/stores/useSettingsStore";
+import { Brain, Cpu, Info } from "lucide-react";
+import { availableModels, globalModel, useSettingsStore } from "@/stores/useSettingsStore";
 import { REASONING_LEVELS } from "@/lib/types";
 import type { LlmParams, ReasoningLevel } from "@/lib/types";
 
 interface Props {
   params: LlmParams;
   onChange: (patch: Partial<LlmParams>) => void;
+  /** Model override of this speaker (undefined = the global model, v1.20) */
+  model?: string;
+  onModelChange?: (model: string | undefined) => void;
 }
 
 /** Local (Ollama) bound on generated tokens. */
@@ -20,9 +23,11 @@ const NUM_PREDICT_MIN = 64;
  * repeat_penalty), adds the reasoning level and reflects the API contract
  * (temperature ignored while thinking, top_p floored at 0.95).
  */
-export function LlmParamsForm({ params, onChange }: Props) {
+export function LlmParamsForm({ params, onChange, model, onModelChange }: Props) {
   const { t } = useTranslation();
-  const provider = useSettingsStore((s) => s.settings.llmProvider);
+  const settings = useSettingsStore((s) => s.settings);
+  const ollamaModels = useSettingsStore((s) => s.models);
+  const provider = settings.llmProvider;
   const globalReasoning = useSettingsStore((s) => s.settings.reasoningLevel);
   const llmConstants = useSettingsStore((s) => s.llmConstants);
   const loadLlmConstants = useSettingsStore((s) => s.loadLlmConstants);
@@ -37,8 +42,29 @@ export function LlmParamsForm({ params, onChange }: Props) {
   const maxNumPredict = isDeepSeek ? (llmConstants?.deepseekMaxNumPredictUi ?? OLLAMA_MAX_NUM_PREDICT) : OLLAMA_MAX_NUM_PREDICT;
   const topPMin = isDeepSeek && thinkingMayApply ? (llmConstants?.deepseekTopPMinThinking ?? 0.95) : 0;
 
+  const models = onModelChange ? availableModels(settings, ollamaModels, llmConstants) : [];
+  const inherited = globalModel(settings);
+
   return (
     <div className="space-y-3">
+      {onModelChange && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Cpu className="h-3 w-3 text-primary" />
+            {t("setup.speakerModel")}
+          </label>
+          <select
+            value={model ?? ""}
+            onChange={(e) => onModelChange(e.target.value === "" ? undefined : e.target.value)}
+            className="w-full rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="">{t("setup.speakerModelInherit", { model: inherited || "—" })}</option>
+            {models.filter((m) => m !== inherited).map((m) => <option key={m} value={m}>{m}</option>)}
+            {model && !models.includes(model) && <option value={model}>{model}</option>}
+          </select>
+          {model && provider === "ollama" && <p className="text-[11px] text-muted-foreground">{t("setup.speakerModelVramHint")}</p>}
+        </div>
+      )}
       {isDeepSeek && (
         <div className="space-y-1">
           <label className="flex items-center gap-1 text-xs text-muted-foreground">

@@ -4,7 +4,7 @@
 
 **Transformez vos modèles IA locaux en gladiateurs du débat**
 
-[![Version](https://img.shields.io/badge/version-1.16-blue.svg)](https://github.com/jgouv/AIrena/releases)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/jgouviergmail/AIrena/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg)](https://reactjs.org/)
 [![Rust](https://img.shields.io/badge/Rust-1.93+-orange.svg)](https://www.rust-lang.org/)
@@ -82,7 +82,59 @@ Par défaut l'application fonctionne **entièrement en local** via [Ollama](http
 
 - **Mode Think** : réflexion interne séparée du contenu visible (heuristique probabiliste selon le contexte)
 
-### 🎪 8 modes de discussion
+### 🎬 Arène vivante (v1.17)
+
+- **Réactions à six couleurs** (approuve, désapprouve, point fort, question, hors sujet, rire) avec citation exacte, **à chaud** ou au tour suivant, propension selon le profil OCEAN, **réactions du public** depuis l'arène
+- **Intention** avant chaque intervention (cible, objectif, angle, concession, question) visible dans les coulisses, **fils ouverts** rappelés aux intervenants, **positions qui évoluent** (onglet Positions, section dédiée de la synthèse)
+- **Émotions incarnées** : gains OCEAN, génération modulée par l'état, **didascalies** dans le fil, relations qui s'estompent et réconciliations, **ambiance de la salle**
+- **Sources** : onglet Sources (arène, résumé, historique), section « Sources » de la synthèse, liens ouverts dans le navigateur, export Markdown
+- **Mesures** : temps par tour et diagnostic du moteur dans le résumé ; fin de tour parallèle (cloud) ou fusionnée (local) ; **rythme de réflexion** Normal / Rapide
+
+### 🎭 Spectacle (v1.18)
+
+- **Actes** par mode annoncés par le modérateur, **coups de théâtre** (fait surprise, contrainte de forme, question de la salle, steelman, duel, sellette), **coalitions** entre alliés
+- **Scène** de l'arène (projecteur, auras émotionnelles, réactions volantes), bandeaux, chronologie, coulisses en direct, **mode projection**, raccourcis clavier
+- **Voix** des participants (synthèse vocale système, prosodie OCEAN) et **sons** d'ambiance procéduraux
+- **Score** en direct, **générique de fin**, **relecture** au rythme réel avec scène animée
+
+### 💓 Émotions réalistes, réactions sincères (v1.20.4)
+
+- Plus de jauges saturées à 100 % : rendements décroissants, **résistance près des extrêmes**, **retour vers le tempérament** du persona à chaque intervention
+- Ce que le débat **a fait** à chacun (ébranlé, rapproché, durci…) se lit dans sa consigne, dans les didascalies et dans sa réflexion
+- Les réactions sont des **opinions** : 💡 se mérite, le désaccord se dit, ne pas réagir est normal
+- Annonces, didascalies et faits surprenants en **phrases entières**
+- **Repasse d'équilibrage** : modèle validé par simulations déterministes (chœur poli, foule hostile, réactions sincères, personas extrêmes, récupération) et sur modèle réel — freinage quadratique près des extrêmes, hystérésis des didascalies, modérateur lissé une fois par tour
+
+### 🎭 Réalisme (v1.20.3)
+
+- Annonces **dans la voix de l'IArbitre**, question de la salle **écrite depuis le débat**, coups de théâtre sans répétition
+- Chaque participant **connaît les autres** (rôle, credo, registre) ; l'**état du débat** (thèses, objections ouvertes) est rappelé à chaque orateur
+
+### 🗣️ Le public dans le débat (v1.20.2)
+
+- Dès votre première intervention, l'orateur suivant **vous répond en vous nommant**, l'IArbitre y veille, vos arguments entrent dans la carte, vous apparaissez sur la scène, au score et dans le graphe
+- **Variété de forme** : ouvertures jamais répétées, tics rationnés, commentaires du modérateur plafonnés
+- **Démarrage** : le modèle de chat Ollama n'est chargé que si Ollama sert la discussion
+
+### 🎙️ Retours du premier build (v1.20.1)
+
+- **Pas-à-pas vocal** : quand la voix suit le direct, chaque orateur attend votre signal (bouton « Orateur suivant », touche N)
+- **Contrôles de la voix** dans l'arène : pause / reprise, « Suivre » ↔ « Tout lire »
+- **Profondeur des argumentaires** : les objections sans réponse deviennent des fils ouverts, l'acte « Approfondir » et l'IArbitre poussent à répondre sur le fond, la carte affiche sa profondeur
+
+### 🧩 Plateforme (v1.20)
+
+- **Un modèle par orateur** (Ollama, DeepSeek, OpenAI-compatible) et fournisseur **serveur OpenAI-compatible** (LM Studio, vLLM, llama.cpp, OpenRouter…)
+- **Modèles de discussion**, **recherche plein texte**, **filtres**, **favoris** et **tags** dans l'historique, **export HTML** autonome et **impression / PDF**
+- **Mémoire des personas** (recaps, souvenirs rappelés par sujet), **réglages avancés** de la dynamique du moteur, export du journal
+
+### 🎯 Enjeux et formats (v1.19)
+
+- **Agendas cachés** : chaque GladIAteur poursuit un objectif secret (agenda d'auteur en fiction), jugé par la synthèse et révélé à la fin
+- **Casting assisté** : le modèle propose les GladIAteurs et l'IArbitre adaptés au sujet ; affinités probables calculées localement d'après les profils OCEAN
+- **Cinq nouveaux modes** : Procès (rôles, verdict du jury), Débat d'Oxford (camps fixes, vote du public avant / après), Négociation (agendas obligatoires, accord signé), Six chapeaux (rotation des chapeaux), Cellule de crise (dépêches à chaque tour)
+
+### 🎪 13 modes de discussion
 
 | Mode | Description |
 |------|-------------|
@@ -94,6 +146,11 @@ Par défaut l'application fonctionne **entièrement en local** via [Ollama](http
 | **📚 Tutoriel** | Panel d'experts enseignants |
 | **🔍 Revue critique** | Critique équilibrée (forces + améliorations) |
 | **📖 Fiction collaborative** | Co-création narrative en relais |
+| **⚖️ Procès** | Accusation, défense, témoins, jurés — verdict à la fin |
+| **🏛️ Débat d'Oxford** | Une motion, deux camps, le public vote avant et après |
+| **🤝 Négociation** | Des parties aux intérêts distincts cherchent un accord |
+| **🎩 Six chapeaux** | Un mode de pensée par chapeau, rotation à chaque tour |
+| **🚨 Cellule de crise** | Des dépêches tombent à chaque tour : décider, agir |
 
 ### 🗺️ Carte des arguments (v1.10)
 
@@ -177,7 +234,7 @@ Par défaut l'application fonctionne **entièrement en local** via [Ollama](http
 
 ```bash
 # 1. Cloner le dépôt
-git clone https://github.com/jgouv/AIrena.git
+git clone https://github.com/jgouviergmail/AIrena.git
 cd AIrena
 
 # 2. Installer les dépendances
@@ -326,7 +383,7 @@ ollama list
 │                                             │
 │  ┌─────────────────────────────────┐        │
 │  │   DiscussionEngine              │        │
-│  │   (orchestrator.rs ~2800 lines) │        │
+│  │   (engine/orchestrator/ module) │        │
 │  │                                 │        │
 │  │  ┌──────────┬──────────┬───────┴─┐      │
 │  │  │Prompt    │Emotion   │Directive│      │
@@ -357,12 +414,12 @@ ollama list
    - Détermination ordre (Sequential/Random/Democratic/Authoritarian)
    - Construction prompt (contexte + émotions + directive)
    - Recherche RAG/Web/Wiki (optionnel)
-   - Streaming LLM (+ think si heuristique active)
-   - Collecte réactions (like/dislike)
-   - Mise à jour émotions (rule-based)
+   - Intention (JSON) puis streaming LLM (+ réflexion native selon le niveau)
+   - Ronde de réactions typées (à chaud ou différée), réactions du public
+   - Mise à jour émotions (rule-based, gains OCEAN), didascalies, ambiance de la salle
    - Modération (ban éventuel)
-   - Mise à jour document (Co-Construction)
-   - Extraction carte des arguments (si activée)
+   - Fin de tour : document, analyse émotionnelle, mémoire (positions, fils ouverts), carte des arguments — en parallèle ou fusionnés
+   - Chronométrage du tour, diagnostic en fin de discussion
 4. **Événements** → `Channel<ArenaEvent>` → Zustand → React
 5. **Synthèse** → Sauvegarde → Historique
 
@@ -384,7 +441,7 @@ npm run tauri dev
 ```bash
 # TypeScript
 npm run typecheck    # tsc --noEmit
-npm test             # vitest (stores et helpers)
+npm test             # vitest (stores, réducteurs, helpers, fixture d'événements)
 npm run i18n:check   # parité des clés FR/EN/ZH
 
 # Rust (tous les tests)
@@ -392,6 +449,10 @@ cd src-tauri && cargo test --lib
 
 # Rust (un test spécifique)
 cd src-tauri && cargo test test_name
+
+# Banc de prompts sur un vrai modèle (test ignoré, rapport dans target/bench/)
+cd src-tauri && AIRENA_BENCH_PROVIDER=ollama OLLAMA_MODEL=<modèle> cargo test --lib bench_prompts -- --ignored --nocapture
+node tools/bench-compare.mjs Docs/Technique/bench/<référence>.json src-tauri/target/bench/<rapport>.json
 
 # Lint Rust
 cd src-tauri && cargo clippy --all-targets
@@ -422,8 +483,12 @@ npm run tauri build
 
 ## 🗺️ Roadmap
 
-### ✅ Complété (v1.0 - v1.16)
+### ✅ Complété (v1.0 - v1.20)
 
+- [x] Plateforme : multi-modèle, serveur OpenAI-compatible, modèles de discussion, historique enrichi, export HTML, mémoire des personas, réglages avancés (v1.20)
+- [x] Enjeux et formats : agendas cachés, casting assisté, procès, débat d'Oxford, négociation, six chapeaux, cellule de crise (v1.19)
+- [x] Spectacle : actes, coups de théâtre, coalitions, scène animée, projection, voix et sons, score, générique, relecture (v1.18)
+- [x] Arène vivante : réactions typées et à chaud, public, intentions, fils ouverts, positions, émotions incarnées, didascalies, sources, diagnostic (v1.17)
 - [x] Fournisseur DeepSeek (réflexion native, comptage des tokens, coûts, plafond mensuel)
 - [x] Cible tournante des GladIAteurs et émotions consolidées
 - [x] Arène à onglets, file de parole, radar émotionnel, graphe de relations
@@ -431,7 +496,7 @@ npm run tauri build
 - [x] Streaming temps réel
 - [x] Système émotionnel (6 axes)
 - [x] Personnalités cognitives (5 couches)
-- [x] 8 modes de discussion
+- [x] 13 modes de discussion
 - [x] Recherche Wikipedia
 - [x] Recherche web Tavily
 - [x] Système RAG (documents PDF/TXT/MD/CSV/DOCX)
@@ -444,7 +509,8 @@ npm run tauri build
 ### 🚧 En cours / Prochaines versions
 
 - [ ] Profils avec avatars générés IA
-- [ ] Autres fournisseurs cloud sur le même trait `LlmProvider` (Anthropic, OpenAI, Gemini)
+- [ ] Mise à jour automatique (updater Tauri) dès qu'un point de publication signe les paquets
+- [ ] Fournisseurs cloud natifs (Anthropic, Gemini) — OpenRouter les sert déjà via le fournisseur OpenAI-compatible
 
 ### 💭 Idées futures
 
@@ -457,15 +523,15 @@ npm run tauri build
 
 ## 🤝 Contribution
 
-Ce projet est actuellement un projet personnel. Les contributions ne sont pas acceptées pour le moment, mais les suggestions et les rapports de bugs sont les bienvenus via les [Issues](https://github.com/jgouv/AIrena/issues).
+Ce projet est actuellement un projet personnel. Les contributions ne sont pas acceptées pour le moment, mais les suggestions et les rapports de bugs sont les bienvenus via les [Issues](https://github.com/jgouviergmail/AIrena/issues).
 
 ---
 
 ## 💬 Support
 
-- **Bugs** : [Créer une issue](https://github.com/jgouv/AIrena/issues)
+- **Bugs** : [Créer une issue](https://github.com/jgouviergmail/AIrena/issues)
 - **Documentation** : Voir [Docs/](Docs/)
-- **Discussions** : [GitHub Discussions](https://github.com/jgouv/AIrena/discussions)
+- **Discussions** : [GitHub Discussions](https://github.com/jgouviergmail/AIrena/discussions)
 
 ---
 

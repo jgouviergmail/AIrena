@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 use tokio::sync::mpsc;
@@ -10,7 +11,7 @@ use crate::engine::token_budget;
 use crate::error::CommandError;
 use crate::llm::factory;
 use crate::models::discussion::DiscussionConfig;
-use crate::models::llm::ProviderKind;
+use crate::models::message::ReactionType;
 use crate::models::engine_command::EngineCommand;
 use crate::models::events::ArenaEvent;
 use crate::state::AppState;
@@ -88,27 +89,24 @@ pub async fn start_discussion(
     }
 
     // ── Monthly cloud budget pre-flight (DeepSeek) ─────────────────
-    let mut period_spent_usd = 0.0;
-    if settings.llm_provider == ProviderKind::DeepSeek {
-        if let Err(e) = repository::check_and_reset_deepseek_period(&state.db).await {
-            tracing::warn!(error = %e, "Failed to check/reset DeepSeek period — continuing");
-        }
-        period_spent_usd = repository::get_deepseek_period_usage(&state.db)
-            .await
-            .map(|p| p.cost_usd)
-            .unwrap_or(0.0);
-        if settings.deepseek_monthly_budget_usd > 0.0 && period_spent_usd >= settings.deepseek_monthly_budget_usd {
+    let period_spent_usd = match super::llm::cloud_budget_preflight(&state.db, &settings).await {
+        Ok(spent) => spent,
+        Err(e) => {
             AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
-            return Err(CommandError::Llm(format!(
-                "Monthly budget exhausted ({period_spent_usd:.2} / {:.2} USD)",
-                settings.deepseek_monthly_budget_usd
-            )));
+            return Err(e);
         }
-    }
+    };
     let monthly_budget_usd = settings.deepseek_monthly_budget_usd;
 
-    // Build and validate the configured LLM provider (model exists / key accepted)
-    let provider = match factory::build_provider(&settings).await {
+    // Build and validate the configured LLM provider (model exists / key accepted),
+    // with one inner provider per speaker model override (v1.20)
+    let overrides: Vec<factory::SpeakerModel> = config
+        .gladiateurs
+        .iter()
+        .filter_map(|g| g.model.as_deref().map(|m| factory::SpeakerModel { speaker_id: g.id.clone(), model: m.to_string() }))
+        .chain(config.arbitre.model.as_deref().map(|m| factory::SpeakerModel { speaker_id: config.arbitre.id.clone(), model: m.to_string() }))
+        .collect();
+    let provider = match factory::build_provider_for(&settings, &overrides).await {
         Ok(p) => p,
         Err(e) => {
             AppState::clear_engine_slots(&cleanup_tx, &cleanup_cancel);
@@ -138,6 +136,7 @@ pub async fn start_discussion(
     let emotion_driven = settings.emotion_driven;
     let reasoning_level = settings.reasoning_level;
     let show_model_reasoning = settings.show_model_reasoning;
+    let reasoning_pace = settings.reasoning_pace;
     let tavily_key = if settings.tavily_api_key.is_empty() {
         None
     } else {
@@ -152,6 +151,9 @@ pub async fn start_discussion(
 
     let priorities = token_budget::parse_priorities_or_default(&settings.token_budget_priorities);
 
+    let tuning = crate::engine::tuning::Tuning::from_settings(&settings.advanced_tuning_json);
+    let persona_memory_enabled = settings.persona_memory_enabled;
+
     tauri::async_runtime::spawn(async move {
         let mut engine = DiscussionEngine::new(
             config, id_clone, provider,
@@ -159,7 +161,9 @@ pub async fn start_discussion(
         );
         engine.set_cancel_token(engine_cancel);
         engine.set_emotion_driven(emotion_driven);
-        engine.set_reasoning_options(reasoning_level, show_model_reasoning);
+        engine.set_tuning(tuning);
+        engine.set_persona_memory(persona_memory_enabled);
+        engine.set_reasoning_options(reasoning_level, show_model_reasoning, reasoning_pace);
         engine.set_budget_guard(period_spent_usd, monthly_budget_usd);
         engine.set_argument_map_enabled(argument_map_enabled);
         engine.run(cmd_rx, on_event).await;
@@ -223,6 +227,64 @@ pub async fn skip_user_turn(state: State<'_, AppState>) -> Result<(), CommandErr
     state
         .send_engine_command(EngineCommand::SkipUserTurn)
         .await
+}
+
+/// Engine limits the frontend mirrors in its UI (owned by the backend, never duplicated).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineConstants {
+    pub audience_reactions_per_message_max: u32,
+    /// Chars the secret agenda block takes in the system prompt (budget preview, v1.19)
+    pub agenda_block_max_chars: usize,
+    /// Gladiateurs a casting may suggest, at most (v1.19)
+    pub casting_max_gladiateurs: u32,
+}
+
+#[tauri::command]
+pub fn get_engine_constants() -> EngineConstants {
+    EngineConstants {
+        audience_reactions_per_message_max: crate::constants::AUDIENCE_REACTIONS_PER_MESSAGE_MAX,
+        agenda_block_max_chars: crate::constants::AGENDA_MAX_CHARS + crate::constants::AGENDA_BLOCK_OVERHEAD_CHARS,
+        casting_max_gladiateurs: crate::constants::CASTING_MAX_GLADIATEURS,
+    }
+}
+
+/// The audience (the user) reacts to a message of the running discussion.
+#[tauri::command]
+pub async fn react_to_message(
+    message_id: String,
+    reaction_type: ReactionType,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    if message_id.trim().is_empty() {
+        return Err(CommandError::Settings("Message id must not be empty".to_string()));
+    }
+    state
+        .send_engine_command(EngineCommand::AudienceReaction { message_id, reaction_type })
+        .await
+}
+
+/// The audience votes on the motion of an Oxford debate (`for` / `against`).
+#[tauri::command]
+pub async fn audience_vote(choice: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let choice = choice.trim().to_lowercase();
+    if choice != crate::models::outcome::VOTE_FOR && choice != crate::models::outcome::VOTE_AGAINST {
+        return Err(CommandError::Settings(format!("Unknown vote choice: {choice}")));
+    }
+    state.send_engine_command(EngineCommand::AudienceVote { choice }).await
+}
+
+/// Step mode (v1.20.1): the engine waits for the audience's cue before each speaker
+/// (the voice in "follow" mode reads at its own pace).
+#[tauri::command]
+pub async fn set_step_mode(enabled: bool, state: State<'_, AppState>) -> Result<(), CommandError> {
+    state.send_engine_command(EngineCommand::SetStepMode { enabled }).await
+}
+
+/// The audience's cue: the next speaker may talk.
+#[tauri::command]
+pub async fn next_speaker(state: State<'_, AppState>) -> Result<(), CommandError> {
+    state.send_engine_command(EngineCommand::NextSpeaker).await
 }
 
 #[tauri::command]

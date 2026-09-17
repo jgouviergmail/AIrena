@@ -37,6 +37,42 @@ pub async fn get_discussion_history(
         .map_err(|e| CommandError::History(e.to_string()))
 }
 
+/// Full-text search over topics, syntheses and messages (empty query = everything).
+#[tauri::command]
+pub async fn search_discussion_history(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<DiscussionSummary>, CommandError> {
+    let db = state.db.clone();
+    repository::search_discussions(&db, &query)
+        .await
+        .map_err(|e| CommandError::History(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn set_discussion_tags(
+    id: String,
+    tags: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let db = state.db.clone();
+    repository::set_discussion_tags(&db, &id, tags)
+        .await
+        .map_err(|e| CommandError::History(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn set_discussion_favorite(
+    id: String,
+    favorite: bool,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let db = state.db.clone();
+    repository::set_discussion_favorite(&db, &id, favorite)
+        .await
+        .map_err(|e| CommandError::History(e.to_string()))
+}
+
 #[tauri::command]
 pub async fn delete_discussion_history(
     id: String,

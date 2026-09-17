@@ -10,7 +10,7 @@ vi.mock("@/lib/tauri-api", () => ({
   saveSettings: () => Promise.resolve(),
 }));
 
-const { describeActiveModel, needsOllama, useSettingsStore } = await import("./useSettingsStore");
+const { availableModels, describeActiveModel, needsOllama, parseModelList, useSettingsStore } = await import("./useSettingsStore");
 
 const base = (): AppSettings => ({ ...useSettingsStore.getState().settings });
 
@@ -27,6 +27,8 @@ const constants: LlmConstants = {
   deepseekPeakWindowsUtc: [[1, 4], [6, 10]],
   deepseekTopPMinThinking: 0.95,
   budgetWarnRatio: 0.8,
+  openaiCompatDefaultBaseUrl: "http://localhost:1234/v1",
+  releasesUrl: "https://example.org/releases",
 };
 
 beforeEach(() => {
@@ -39,6 +41,23 @@ describe("describeActiveModel", () => {
     expect(describeActiveModel({ ...base(), llmProvider: "ollama", ollamaModel: "llama3.2" })).toBe("ollama · llama3.2");
     expect(describeActiveModel({ ...base(), llmProvider: "deepseek", deepseekModel: "deepseek-flash", ollamaModel: "llama3.2" })).toBe("deepseek · deepseek-flash");
     expect(describeActiveModel({ ...base(), llmProvider: "deepseek", deepseekModel: "" })).toBe("deepseek");
+    expect(describeActiveModel({ ...base(), llmProvider: "openaiCompat", openaiCompatModel: "qwen" })).toBe("openaiCompat · qwen");
+  });
+
+  it("says \"mixte\" when speakers override the model (v1.20)", () => {
+    const s = { ...base(), llmProvider: "ollama" as const, ollamaModel: "llama3.2" };
+    expect(describeActiveModel(s, [undefined, "llama3.2", " "])).toBe("ollama · llama3.2");
+    expect(describeActiveModel(s, ["mistral", undefined, "mistral"])).toBe("ollama · mixte (llama3.2, mistral)");
+  });
+
+  it("lists the models a speaker may pick, global first, per provider", () => {
+    const ollama = { ...base(), llmProvider: "ollama" as const, ollamaModel: "llama3.2" };
+    expect(availableModels(ollama, [{ name: "mistral" }, { name: "llama3.2" }], constants)).toEqual(["llama3.2", "mistral"]);
+    const deepseek = { ...base(), llmProvider: "deepseek" as const, deepseekModel: "deepseek-v4-pro" };
+    expect(availableModels(deepseek, [], constants)).toEqual(["deepseek-v4-pro", "deepseek-flash"]);
+    const compat = { ...base(), llmProvider: "openaiCompat" as const, openaiCompatModel: "a", openaiCompatModels: JSON.stringify(["b", "", 3, "a"]) };
+    expect(availableModels(compat, [], null)).toEqual(["a", "b"]);
+    expect(parseModelList("not json")).toEqual([]);
   });
 });
 

@@ -1,11 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { DiscussionMode, DocumentFormat } from "@/lib/types";
-
-export const DISCUSSION_MODES: DiscussionMode[] = [
-  "debate", "ideation", "coConstruction", "userDriven",
-  "socratic", "tutorial", "critiqueReview", "collaborativeFiction",
-];
+import type { DocumentFormat } from "@/lib/types";
+export { DISCUSSION_MODES } from "@/lib/modes";
 
 export const DOCUMENT_FORMATS: DocumentFormat[] = ["none", "txt", "md", "csv"];
 

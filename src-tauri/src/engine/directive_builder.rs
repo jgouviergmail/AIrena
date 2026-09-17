@@ -14,13 +14,13 @@ use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 use serde::Serialize;
 
-use std::collections::{HashMap, HashSet};
 
 use super::dynamics_parser::ParsedDynamics;
+use super::emotion_engine;
 use super::focus::Focus;
 use super::mode_prompts;
 use super::truncate_str;
-use crate::models::relationship::RelationshipEdge;
+use crate::models::relationship::RelationshipKind;
 use crate::constants;
 use crate::models::discussion::DiscussionMode;
 use crate::models::emotion::EmotionalProfile;
@@ -30,6 +30,8 @@ use crate::models::emotion::EmotionalProfile;
 /// Full context needed to build a directive for one speaker on one turn.
 pub struct SpeakerTurnContext {
     pub emotions: EmotionalProfile,
+    /// The persona's initial profile — what the debate did to them is measured from it (v1.20.4)
+    pub baseline: EmotionalProfile,
     pub relationships: Vec<RelationshipHint>,
     pub own_previous_messages: Vec<String>,
     pub dynamics: Option<ParsedDynamics>,
@@ -49,28 +51,44 @@ pub struct SpeakerTurnContext {
     pub recent_speech_acts: Vec<SpeechAct>,
     /// CollaborativeFiction: who wrote the opening this turn (None on turn 1 = write it).
     pub opening_author: Option<String>,
+    /// A former rival just approved the speaker (v1.17): invite them to acknowledge it once.
+    pub reconciliation_with: Option<String>,
+    /// Coalition of the turn (v1.18): the leader relays, the follower extends.
+    pub coalition: Option<CoalitionRole>,
+    /// The most recent counter the speaker still owes an answer to, as "text (by)" (argument map, v1.20.1).
+    pub unanswered_objection: Option<String>,
+    /// The audience's message this speaker owes an answer to (excerpt, v1.20.2).
+    pub audience_message: Option<String>,
+    /// The audience has spoken at least once in this discussion: no longer a mere observer (v1.20.2).
+    pub user_has_spoken: bool,
+}
+
+/// The speaker's part in a coalition relay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoalitionRole {
+    /// Speaks first: forced `Relay` act toward `partner`
+    Leader { partner: String },
+    /// Speaks right after: extends without repeating
+    Follower { partner: String },
 }
 
 pub struct RelationshipHint {
     pub other_name: String,
     pub kind: RelationshipKind,
+    /// Which way a tension leans (v1.20.5): who is the cold one
+    pub lean: RelationshipLean,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum RelationshipKind {
-    Ally,
-    Rival,
-    Tense,
-}
-
-impl RelationshipKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Ally => "ally",
-            Self::Rival => "rival",
-            Self::Tense => "tense",
-        }
-    }
+/// Who carries the coldness of a tense pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RelationshipLean {
+    /// Both directions matter (allies, rivals, one warm and one cold)
+    #[default]
+    Mutual,
+    /// The speaker keeps disapproving the other, who does not return it
+    IAmTheCritic,
+    /// The other keeps disapproving the speaker, who does not answer
+    TheyAreTheCritic,
 }
 
 /// Output of the directive builder — injected into the prompt + sent to frontend.
@@ -95,14 +113,23 @@ pub enum SpeechAct {
     Humor,
     Appeal,
     Synthesis,
+    /// Depth (v1.20.1): answer the strongest objection on the merits — argumentative modes only
+    Deepen,
+    /// Coalition (v1.18): hand the argument over to an ally who speaks right after — never drawn, only forced
+    Relay,
 }
+
+/// Number of speech acts (the weight table and `ALL` share it).
+pub const SPEECH_ACT_COUNT: usize = 12;
 
 // Compile-time guarantee: enum discriminants match ALL array indices.
 const _: () = assert!(SpeechAct::Challenge as usize == 0);
 const _: () = assert!(SpeechAct::Synthesis as usize == 9);
+const _: () = assert!(SpeechAct::Deepen as usize == 10);
+const _: () = assert!(SpeechAct::Relay as usize == SPEECH_ACT_COUNT - 1);
 
 impl SpeechAct {
-    const ALL: [SpeechAct; 10] = [
+    const ALL: [SpeechAct; SPEECH_ACT_COUNT] = [
         SpeechAct::Challenge,
         SpeechAct::SteelMan,
         SpeechAct::Anecdote,
@@ -113,6 +140,8 @@ impl SpeechAct {
         SpeechAct::Humor,
         SpeechAct::Appeal,
         SpeechAct::Synthesis,
+        SpeechAct::Deepen,
+        SpeechAct::Relay,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -127,6 +156,8 @@ impl SpeechAct {
             SpeechAct::Humor => "Humor",
             SpeechAct::Appeal => "Appeal",
             SpeechAct::Synthesis => "Synthesis",
+            SpeechAct::Deepen => "Deepen",
+            SpeechAct::Relay => "Relay",
         }
     }
 
@@ -181,6 +212,14 @@ impl SpeechAct {
             (SpeechAct::Synthesis, "en") => "Synthesize the discussion so far — summarize key positions, then push forward with YOUR evolved stance.",
             (SpeechAct::Synthesis, "zh") => "综合迄今为止的讨论——总结关键立场，然后以你进化的立场推动讨论前进。",
             (SpeechAct::Synthesis, _) => "Synthétise la discussion — résume les positions clés, puis fais avancer avec TA position enrichie.",
+
+            (SpeechAct::Deepen, "en") => "Go deeper — take the strongest objection made to your position and answer it on the merits: a mechanism, a piece of evidence or a precise example, not a restatement.",
+            (SpeechAct::Deepen, "zh") => "深入——抓住针对你立场的最有力反驳，就实质作出回应：一个机制、一项证据或一个具体例子，而不是重述。",
+            (SpeechAct::Deepen, _) => "Approfondis — reprends l'objection la plus forte faite à ta position et réponds-y sur le fond : un mécanisme, une preuve ou un exemple précis, pas une reformulation.",
+
+            (SpeechAct::Relay, "en") => "Open the argument for your ally who speaks right after you — set the frame, leave them the decisive piece.",
+            (SpeechAct::Relay, "zh") => "为紧接着发言的盟友铺开论点——搭好框架，把决定性的一击留给他。",
+            (SpeechAct::Relay, _) => "Ouvre l'argument pour ton allié qui parle juste après toi — pose le cadre, laisse-lui la pièce décisive.",
         }
     }
 
@@ -227,6 +266,14 @@ impl SpeechAct {
             (SpeechAct::Synthesis, "en") => "Write a transitional passage that ties together narrative threads and propels the story forward.",
             (SpeechAct::Synthesis, "zh") => "写一段过渡段落，将叙事线索联系起来并推动故事向前发展。",
             (SpeechAct::Synthesis, _) => "Écris un passage de transition qui relie les fils narratifs et propulse l'histoire en avant.",
+
+            (SpeechAct::Deepen, "en") => "Dig into a scene already opened instead of opening a new one — give it its consequences.",
+            (SpeechAct::Deepen, "zh") => "深挖一个已经展开的场景，而不是开启新场景——写出它的后果。",
+            (SpeechAct::Deepen, _) => "Creuse une scène déjà ouverte au lieu d'en ouvrir une nouvelle — donne-lui ses conséquences.",
+
+            (SpeechAct::Relay, "en") => "Set up a scene your co-author will complete right after you — leave the door open.",
+            (SpeechAct::Relay, "zh") => "铺设一个由紧接着的合著者完成的场景——留一扇门。",
+            (SpeechAct::Relay, _) => "Prépare une scène que ton co-auteur achèvera juste après toi — laisse la porte ouverte.",
         }
     }
 }
@@ -269,8 +316,8 @@ pub fn build_dynamic_directive(ctx: &SpeakerTurnContext) -> DirectiveOutput {
             parts.push(self_memory);
         }
 
-        // User reminder (observer in most modes, addressee in UserDriven, none in fiction)
-        parts.push(build_user_reminder(lang, &ctx.user_name, &ctx.discussion_mode));
+        // User reminder (observer until they speak, addressee when they just did, none in fiction)
+        parts.push(build_user_reminder(lang, ctx));
 
         // Mode key constraint — recency bias: last line has the most influence on local LLMs
         let constraint = mode_prompts::mode_key_constraint(&ctx.discussion_mode, lang);
@@ -292,7 +339,7 @@ pub fn build_dynamic_directive(ctx: &SpeakerTurnContext) -> DirectiveOutput {
     }
 
     // Turn 1: only Layer 5 + user reminder
-    parts.push(build_user_reminder(lang, &ctx.user_name, &ctx.discussion_mode));
+    parts.push(build_user_reminder(lang, ctx));
 
     DirectiveOutput {
         directive_text: parts.join("\n"),
@@ -307,16 +354,38 @@ pub fn build_dynamic_directive(ctx: &SpeakerTurnContext) -> DirectiveOutput {
 /// In UserDriven mode, the user is an active participant → remind the speaker to respond.
 /// In CollaborativeFiction, the user is a co-author → no special clause (contributions in history).
 /// In all other modes, the user is an observer → remind the speaker NOT to address them.
-fn build_user_reminder(lang: &str, user_name: &str, mode: &DiscussionMode) -> String {
-    match mode {
+/// How the speaker treats the audience member: an observer while silent, the
+/// first addressee right after they spoke, a participant afterwards (v1.20.2).
+fn build_user_reminder(lang: &str, ctx: &SpeakerTurnContext) -> String {
+    let user_name = ctx.user_name.as_str();
+    match ctx.discussion_mode {
         DiscussionMode::UserDriven => match lang {
             "en" => format!("Respond taking into account {}'s message.", user_name),
             "zh" => format!("在回应中考虑{}的消息。", user_name),
             _ => format!("Réponds en tenant compte du message de {}.", user_name),
         },
         DiscussionMode::CollaborativeFiction => String::new(),
-        _ => mode_prompts::user_observer_clause(lang, user_name),
+        _ => match (&ctx.audience_message, ctx.user_has_spoken) {
+            (Some(message), _) => match lang {
+                "en" => format!("{user_name}, from the audience, just spoke: \"{message}\". They are part of the debate now: answer them FIRST, by name — however short or clumsy their words — then carry on."),
+                "zh" => format!("现场观众{user_name}刚刚发言：\"{message}\"。他现在是辩论的一部分：先点名回应他——无论其言辞多么简短或笨拙——然后再继续。"),
+                _ => format!("{user_name}, dans le public, vient d'intervenir : « {message} ». Il fait partie du débat désormais : réponds-lui D'ABORD, en le nommant — même si son propos est court ou maladroit — puis poursuis."),
+            },
+            (None, true) => match lang {
+                "en" => format!("{user_name}, from the audience, has taken part in the debate: you may answer them like any participant."),
+                "zh" => format!("现场观众{user_name}已参与辩论：你可以像回应任何参与者一样回应他。"),
+                _ => format!("{user_name}, dans le public, a pris part au débat : tu peux lui répondre comme à tout participant."),
+            },
+            (None, false) => mode_prompts::user_observer_clause(lang, user_name),
+        },
     }
+}
+
+/// The opening of an intervention (its first sentence, bounded) — what a speaker
+/// must not reproduce twice in a row.
+pub fn opening_of(text: &str) -> String {
+    let first = text.split_inclusive(['.', '!', '?', '…', '。', '！', '？']).next().unwrap_or(text).trim();
+    truncate_str(first, constants::OPENING_EXCERPT_CHARS).to_string()
 }
 
 // ── Layer 1: Emotion → Behavior Bridge ──────────────────────────────
@@ -342,7 +411,7 @@ fn build_layer1_emotion_behavior(ctx: &SpeakerTurnContext) -> Option<String> {
     if emo.frustration > constants::PERSONALITY_HIGH {
         triggered.push(("frustrated", match dyn_field(|d| &d.under_pressure) {
             Some(t) => format_behavior(lang, "under_pressure", &t),
-            None => generic_behavior(lang, "frustrated"),
+            None => generic_behavior(lang, frustration_style(ctx.ocean)),
         }));
     }
     if emo.accord < constants::PERSONALITY_LOW {
@@ -373,8 +442,14 @@ fn build_layer1_emotion_behavior(ctx: &SpeakerTurnContext) -> Option<String> {
         }));
     }
 
+    // v1.20.4 — the movement: the largest notable shift since the start, when its
+    // axis is not already spoken for by a state above
+    let movement = emotion_engine::dominant_shift(emo, &ctx.baseline)
+        .filter(|(axis, _)| !triggered.iter().any(|(key, _)| state_axis(key) == *axis))
+        .and_then(|(axis, shift)| movement_line(lang, axis, shift));
+
     if triggered.is_empty() {
-        return None;
+        return movement;
     }
     let dominant: Vec<(&str, String)> = triggered.into_iter().take(2).collect();
     let mut text = dominant.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(" ");
@@ -391,7 +466,52 @@ fn build_layer1_emotion_behavior(ctx: &SpeakerTurnContext) -> Option<String> {
             _ => "Ces deux états tirent dans des directions opposées — laisse cette tension transparaître au lieu de la lisser.",
         });
     }
+    if let Some(m) = movement {
+        text.push(' ');
+        text.push_str(&m);
+    }
     Some(text)
+}
+
+/// The emotion axis a layer-1 state reads.
+fn state_axis(key: &str) -> &'static str {
+    match key {
+        "frustrated" => "frustration",
+        "disagreeing" => "accord",
+        "disengaged" => "engagement",
+        "confident" => "confiance",
+        "curious" => "curiosite",
+        "enthusiastic" => "enthousiasme",
+        _ => "",
+    }
+}
+
+/// One sentence on what the debate did to the speaker since the start (v1.20.4):
+/// a movement on an axis, not a state. Movements without a behavioural reading
+/// (more curious, less frustrated…) stay silent.
+fn movement_line(lang: &str, axis: &str, shift: i16) -> Option<String> {
+    let line = match (axis, shift > 0, lang) {
+        ("confiance", false, "en") => "Something in this debate shook you — your confidence has dropped since the start. Show it: concede what hit home or defend it precisely, but no bravado.",
+        ("confiance", false, "zh") => "这场辩论中的某些东西动摇了你——你的自信比开始时下降了。表现出来：承认击中你的那一点，或精确地为自己辩护，但不要虚张声势。",
+        ("confiance", false, _) => "Quelque chose dans ce débat t'a ébranlé — ta confiance a baissé depuis le début. Montre-le : concède ce qui a porté ou défends-le avec précision, mais sans bravade.",
+        ("accord", true, "en") => "You have moved closer to the others since the start — say what you now grant them, in your own words, without giving up your line.",
+        ("accord", true, "zh") => "你比开始时更接近其他人了——用你自己的话说出你现在承认他们的哪一点，但不要放弃你的立场。",
+        ("accord", true, _) => "Tu t'es rapproché des autres depuis le début — dis ce que tu leur accordes désormais, avec tes mots, sans abandonner ta ligne.",
+        ("accord", false, "en") => "You have hardened since the start — the gap has widened and you no longer hide it: name the point of rupture.",
+        ("accord", false, "zh") => "你比开始时更强硬了——分歧扩大了，你不再掩饰：说出决裂点。",
+        ("accord", false, _) => "Tu t'es durci depuis le début — l'écart s'est creusé et tu ne le caches plus : nomme le point de rupture.",
+        ("engagement", true, "en") => "This debate has caught you more than you expected — pull the thread that drew you in.",
+        ("engagement", true, "zh") => "这场辩论比你预期的更吸引你——顺着吸引你的那条线索深入下去。",
+        ("engagement", true, _) => "Ce débat t'a pris plus que tu ne l'attendais — tire le fil qui t'a accroché.",
+        ("enthousiasme", false, "en") => "Your enthusiasm has cooled since the start — fewer flourishes, more precision.",
+        ("enthousiasme", false, "zh") => "你的热情比开始时冷却了——少些修饰，多些精确。",
+        ("enthousiasme", false, _) => "Ton enthousiasme s'est refroidi depuis le début — moins d'effets, plus de précision.",
+        ("frustration", false, "en") => "You have calmed down since the start — you can afford a lighter touch.",
+        ("frustration", false, "zh") => "你比开始时平静下来了——你可以更从容一些。",
+        ("frustration", false, _) => "Tu t'es apaisé depuis le début — tu peux te permettre plus de légèreté.",
+        _ => return None,
+    };
+    Some(line.to_string())
 }
 
 /// Fiction-specific emotion → narrative behavior bridge.
@@ -453,11 +573,27 @@ fn format_behavior(lang: &str, emotion_key: &str, dynamics_text: &str) -> String
     format!("{} {}", prefix, dynamics_text)
 }
 
+/// How a persona lets frustration out, from agreeableness (v1.17): a very
+/// agreeable one turns passive-aggressive, a very disagreeable one goes frontal.
+fn frustration_style(ocean: Option<[u8; 5]>) -> &'static str {
+    match ocean {
+        Some([_, _, _, a, _]) if a >= constants::OCEAN_EXTREME_HIGH => "frustrated_passive",
+        Some([_, _, _, a, _]) if a <= constants::OCEAN_EXTREME_LOW => "frustrated_frontal",
+        _ => "frustrated",
+    }
+}
+
 fn generic_behavior(lang: &str, emotion_key: &str) -> String {
     match (lang, emotion_key) {
         ("en", "frustrated") => "You're frustrated — your tone sharpens, your patience thins. Push back harder.".to_string(),
         ("zh", "frustrated") => "你很沮丧——语气更尖锐，耐心更少。更强硬地反击。".to_string(),
         (_, "frustrated") => "Tu es frustré — ton ton se durcit, ta patience s'amenuise. Riposte plus fermement.".to_string(),
+        ("en", "frustrated_passive") => "You're frustrated but you hate conflict — it comes out as icy politeness, pointed understatement and a sigh between the lines.".to_string(),
+        ("zh", "frustrated_passive") => "你很沮丧却厌恶冲突——它化作冰冷的礼貌、意有所指的轻描淡写和字里行间的叹息。".to_string(),
+        (_, "frustrated_passive") => "Tu es frustré mais tu détestes le conflit — cela sort en politesse glaciale, en litotes appuyées et en soupirs entre les lignes.".to_string(),
+        ("en", "frustrated_frontal") => "You're frustrated and you don't soften anything — name the problem head-on, short sentences, no diplomatic cushion.".to_string(),
+        ("zh", "frustrated_frontal") => "你很沮丧且毫不掩饰——直截了当地指出问题，短句，不留外交余地。".to_string(),
+        (_, "frustrated_frontal") => "Tu es frustré et tu n'arrondis rien — nomme le problème de front, phrases courtes, sans coussin diplomatique.".to_string(),
         ("en", "disengaged") => "You're losing interest — respond briefly, maybe with a hint of boredom or irony.".to_string(),
         ("zh", "disengaged") => "你失去兴趣了——简短回应，也许带着一丝厌倦或讽刺。".to_string(),
         (_, "disengaged") => "Tu te désengages — réponds brièvement, peut-être avec une pointe d'ennui ou d'ironie.".to_string(),
@@ -478,6 +614,21 @@ fn generic_behavior(lang: &str, emotion_key: &str) -> String {
 }
 
 // ── Layer 2: Relationship Hints ─────────────────────────────────────
+
+/// The tense hint, by who carries the coldness (v1.20.5).
+fn tense_hint(lang: &str, other: &str, lean: RelationshipLean) -> String {
+    match (lean, lang) {
+        (RelationshipLean::IAmTheCritic, "en") => format!("You keep disapproving of {other}, who does not return it — own your criticism or acknowledge what they bring, but do not let it become a tic."),
+        (RelationshipLean::IAmTheCritic, "zh") => format!("你一直在反对{other}，而对方并未回应——要么坚持你的批评，要么承认对方的贡献，但别让它变成习惯。"),
+        (RelationshipLean::IAmTheCritic, _) => format!("Tu n'as cessé de désapprouver {other}, qui ne te rend pas la pareille — assume ta critique ou reconnais ce qu'il apporte, mais n'en fais pas un tic."),
+        (RelationshipLean::TheyAreTheCritic, "en") => format!("{other} keeps disapproving of you without an answer from you — answer them or ignore them deliberately, but let it be a choice."),
+        (RelationshipLean::TheyAreTheCritic, "zh") => format!("{other}一直在反对你，而你没有回应——回应或有意忽略，但要是一个明确的选择。"),
+        (RelationshipLean::TheyAreTheCritic, _) => format!("{other} ne cesse de te désapprouver sans que tu répondes — réponds-lui ou ignore-le délibérément, mais que ce soit un choix."),
+        (RelationshipLean::Mutual, "en") => format!("Tension with {other}: the relationship is asymmetric — read the room and adapt."),
+        (RelationshipLean::Mutual, "zh") => format!("与{other}关系紧张：关系是不对称的——观察形势并调整。"),
+        (RelationshipLean::Mutual, _) => format!("Tension avec {other} : la relation est asymétrique — lis la situation et adapte-toi."),
+    }
+}
 
 fn build_layer2_relationships(ctx: &SpeakerTurnContext) -> String {
     let lang = ctx.discussion_language.as_str();
@@ -551,21 +702,18 @@ fn build_layer2_relationships(ctx: &SpeakerTurnContext) -> String {
                     "Tu as un rival : {}. Vos désaccords s'accumulent — confronte ou déjoue.",
                     rel.other_name
                 ),
-                (RelationshipKind::Tense, "en") => format!(
-                    "Tension with {}: the relationship is asymmetric — read the room and adapt.",
-                    rel.other_name
-                ),
-                (RelationshipKind::Tense, "zh") => format!(
-                    "与{}关系紧张：关系是不对称的——观察形势并调整。",
-                    rel.other_name
-                ),
-                (RelationshipKind::Tense, _) => format!(
-                    "Tension avec {} : la relation est asymétrique — lis la situation et adapte-toi.",
-                    rel.other_name
-                ),
+                (RelationshipKind::Tense, lang) => tense_hint(lang, &rel.other_name, rel.lean),
             }
         };
         hints.push(hint);
+    }
+
+    if let Some(with) = ctx.reconciliation_with.as_deref().filter(|w| !w.is_empty()) {
+        hints.push(match lang {
+            "en" => format!("{with} just extended a hand to you after your clashes — you may acknowledge it, without giving up your position."),
+            "zh" => format!("{with}在你们的冲突之后向你伸出了手——你可以承认这一点，而不放弃自己的立场。"),
+            _ => format!("{with} vient de te tendre la main après vos accrochages — tu peux le reconnaître, sans renoncer à ta position."),
+        });
     }
 
     hints.join(" ")
@@ -592,7 +740,34 @@ fn build_layer3_speech_act(
     ctx: &SpeakerTurnContext,
     recent_acts: &[SpeechAct],
 ) -> (SpeechAct, String) {
-    let mut weights = [10u32; 10]; // Base weight: 10 each
+    let lang = ctx.discussion_language.as_str();
+    let is_fiction = ctx.discussion_mode == DiscussionMode::CollaborativeFiction;
+
+    // Coalition (v1.18): the leader's act is forced, the follower gets an extension line
+    if let Some(role) = &ctx.coalition {
+        return match role {
+            CoalitionRole::Leader { partner } => {
+                let description = if is_fiction { SpeechAct::Relay.describe_fiction(lang) } else { SpeechAct::Relay.describe(lang) };
+                let text = match lang {
+                    "en" => format!("For this intervention, favor this approach: {description} Your ally {partner} speaks right after you."),
+                    "zh" => format!("在这次发言中，优先采用这种方式：{description} 你的盟友{partner}紧接着发言。"),
+                    _ => format!("Pour cette intervention, privilégie cette approche : {description} Ton allié {partner} parle juste après toi."),
+                };
+                (SpeechAct::Relay, text)
+            }
+            CoalitionRole::Follower { partner } => {
+                let text = match lang {
+                    "en" => format!("{partner} just handed the argument over to you: extend it with the decisive piece, without repeating anything they said."),
+                    "zh" => format!("{partner}刚把论点交给了你：用决定性的一击延伸它，不要重复他说过的任何内容。"),
+                    _ => format!("{partner} vient de te passer le relais : prolonge l'argument avec la pièce décisive, sans rien répéter de ce qu'il a dit."),
+                };
+                (SpeechAct::SteelMan, text)
+            }
+        };
+    }
+
+    let mut weights = [10u32; SPEECH_ACT_COUNT]; // Base weight: 10 each
+    weights[SpeechAct::Relay.idx()] = 0; // only forced by a coalition
 
     // Mode modifiers — adjust base weights before OCEAN/emotion layers
     match ctx.discussion_mode {
@@ -634,8 +809,46 @@ fn build_layer3_speech_act(
             weights[SpeechAct::Challenge.idx()] = 3;
             weights[SpeechAct::Provocation.idx()] = 0;
         }
+        DiscussionMode::Trial => {
+            weights[SpeechAct::Challenge.idx()] += 8;
+            weights[SpeechAct::Question.idx()] += 8;
+            weights[SpeechAct::SteelMan.idx()] += 4;
+            weights[SpeechAct::Provocation.idx()] = 0;
+            weights[SpeechAct::Humor.idx()] = 2;
+        }
+        DiscussionMode::OxfordDebate => {
+            weights[SpeechAct::Challenge.idx()] += 8;
+            weights[SpeechAct::Appeal.idx()] += 8;
+            weights[SpeechAct::Concession.idx()] = 2;
+        }
+        DiscussionMode::Negotiation => {
+            weights[SpeechAct::Concession.idx()] += 8;
+            weights[SpeechAct::Question.idx()] += 6;
+            weights[SpeechAct::Synthesis.idx()] += 4;
+            weights[SpeechAct::Provocation.idx()] = 0;
+        }
+        DiscussionMode::SixHats => {
+            weights[SpeechAct::Redirect.idx()] += 6;
+            weights[SpeechAct::Synthesis.idx()] += 4;
+            weights[SpeechAct::Provocation.idx()] = 0;
+            weights[SpeechAct::Challenge.idx()] = 3;
+        }
+        DiscussionMode::CrisisCell => {
+            weights[SpeechAct::Redirect.idx()] += 8;
+            weights[SpeechAct::Synthesis.idx()] += 6;
+            weights[SpeechAct::Anecdote.idx()] = 2;
+            weights[SpeechAct::Humor.idx()] = 0;
+        }
         // Debate and UserDriven: default weights (no modification)
         DiscussionMode::Debate | DiscussionMode::UserDriven => {}
+    }
+
+    // Depth (v1.20.1): answering objections is an act of the argumentative modes only,
+    // pressed when the speaker owes an answer — never in ideation, fiction or hats
+    if ctx.discussion_mode.rewards_depth() {
+        weights[SpeechAct::Deepen.idx()] += if ctx.unanswered_objection.is_some() { constants::SPEECH_ACT_DEEPEN_OWED_BONUS } else { constants::SPEECH_ACT_DEEPEN_BONUS };
+    } else {
+        weights[SpeechAct::Deepen.idx()] = 0;
     }
 
     // OCEAN modifiers
@@ -692,8 +905,6 @@ fn build_layer3_speech_act(
     let mut rng = rand::thread_rng();
     let selected = weighted_select(&weights, &mut rng);
 
-    let lang = ctx.discussion_language.as_str();
-    let is_fiction = ctx.discussion_mode == DiscussionMode::CollaborativeFiction;
     let description = if is_fiction {
         selected.describe_fiction(lang)
     } else {
@@ -713,10 +924,20 @@ fn build_layer3_speech_act(
         }
     };
 
+    // The owed objection is named when the act is to answer it
+    let act_instruction = match (&selected, &ctx.unanswered_objection) {
+        (SpeechAct::Deepen, Some(objection)) if !is_fiction => match lang {
+            "en" => format!("{act_instruction} Objection to answer: \"{objection}\"."),
+            "zh" => format!("{act_instruction} 需要回应的反驳：\"{objection}\"。"),
+            _ => format!("{act_instruction} Objection à traiter : « {objection} »."),
+        },
+        _ => act_instruction,
+    };
+
     (selected, act_instruction)
 }
 
-fn weighted_select(weights: &[u32; 10], rng: &mut impl Rng) -> SpeechAct {
+fn weighted_select(weights: &[u32; SPEECH_ACT_COUNT], rng: &mut impl Rng) -> SpeechAct {
     let dist = WeightedIndex::new(weights).expect("weights should be valid");
     SpeechAct::ALL[dist.sample(rng)]
 }
@@ -754,17 +975,20 @@ fn build_layer4_self_memory(ctx: &SpeakerTurnContext) -> String {
         };
     }
 
+    // Form (v1.20.2): the openings of the previous interventions are quoted back —
+    // the same attack twice in a row (a name and a comma, a verbal tic) reads as a machine
+    let openings = ctx.own_previous_messages.iter().map(|m| format!("« {} »", opening_of(m))).collect::<Vec<_>>().join(", ");
     match lang {
         "en" => format!(
-            "Your previous interventions: \"{}\". IMPORTANT: find new formulations, new angles. Do NOT repeat yourself.",
+            "Your previous interventions: \"{}\". IMPORTANT: find new formulations, new angles. Do NOT repeat yourself. They opened with {openings} — open differently this time: not the same first words, not systematically your interlocutor's name, a verbal tic at most once every three interventions.",
             joined
         ),
         "zh" => format!(
-            "你之前的发言：\"{}\"。重要：找到新的表述方式和新角度。不要重复自己。",
+            "你之前的发言：\"{}\"。重要：找到新的表述方式和新角度。不要重复自己。它们的开头是{openings}——这次换一种开头：不要同样的起句，不要总以对话者的名字开头，口头禅最多每三次发言用一次。",
             joined
         ),
         _ => format!(
-            "Tes interventions précédentes : \"{}\". IMPORTANT : trouve de nouvelles formulations, de nouveaux angles. Ne te répète PAS.",
+            "Tes interventions précédentes : \"{}\". IMPORTANT : trouve de nouvelles formulations, de nouveaux angles. Ne te répète PAS. Elles commençaient par {openings} — ouvre autrement cette fois : pas les mêmes premiers mots, pas systématiquement le nom de ton interlocuteur, un tic de langage au plus une fois sur trois interventions.",
             joined
         ),
     }
@@ -934,140 +1158,22 @@ fn build_layer5_situation(ctx: &SpeakerTurnContext) -> String {
     parts.join("\n")
 }
 
-// ── Relationship building helper ────────────────────────────────────
-
-/// Build relationship hints from cumulative reactions.
-/// `reactions_from_me`: (target_id, target_name, likes_i_gave, dislikes_i_gave)
-/// `reactions_to_me`: (source_id, source_name, likes_they_gave_me, dislikes_they_gave_me)
-pub fn build_relationships(
-    reactions_from_me: &[(String, String, u32, u32)],
-    reactions_to_me: &[(String, String, u32, u32)],
-) -> Vec<RelationshipHint> {
-    let mut hints = Vec::new();
-
-    for (target_id, target_name, my_likes, my_dislikes) in reactions_from_me {
-        // Find reverse: how does target feel about me?
-        let (their_likes, their_dislikes) = reactions_to_me
-            .iter()
-            .find(|(src_id, _, _, _)| src_id == target_id)
-            .map(|(_, _, l, d)| (*l, *d))
-            .unwrap_or((0, 0));
-
-        let kind = classify_relationship(*my_likes, *my_dislikes, their_likes, their_dislikes);
-        if let Some(kind) = kind {
-            hints.push(RelationshipHint {
-                other_name: target_name.clone(),
-                kind,
-            });
-        }
-    }
-
-    hints
-}
-
-/// Directed reaction counts folded into an undirected edge list for the UI graph.
-/// `cumulative` maps `(from_id, to_id)` to `(likes, dislikes)`.
-pub fn relationship_edges(cumulative: &HashMap<(String, String), (u32, u32)>) -> Vec<RelationshipEdge> {
-    let mut seen: HashSet<(String, String)> = HashSet::new();
-    let mut edges = Vec::new();
-    for (from, to) in cumulative.keys() {
-        let key = if from <= to { (from.clone(), to.clone()) } else { (to.clone(), from.clone()) };
-        if !seen.insert(key.clone()) {
-            continue;
-        }
-        let (a, b) = key;
-        let (ab_likes, ab_dislikes) = cumulative.get(&(a.clone(), b.clone())).copied().unwrap_or((0, 0));
-        let (ba_likes, ba_dislikes) = cumulative.get(&(b.clone(), a.clone())).copied().unwrap_or((0, 0));
-        let kind = classify_relationship(ab_likes, ab_dislikes, ba_likes, ba_dislikes).map(|k| k.as_str().to_string());
-        edges.push(RelationshipEdge { a, b, ab_likes, ab_dislikes, ba_likes, ba_dislikes, kind });
-    }
-    edges.sort_by(|x, y| (&x.a, &x.b).cmp(&(&y.a, &y.b)));
-    edges
-}
-
-fn classify_relationship(
-    my_likes: u32,
-    my_dislikes: u32,
-    their_likes: u32,
-    their_dislikes: u32,
-) -> Option<RelationshipKind> {
-    let mutual_likes = my_likes.min(their_likes);
-    let mutual_dislikes = my_dislikes.min(their_dislikes);
-
-    if mutual_likes >= 2 {
-        Some(RelationshipKind::Ally)
-    } else if mutual_dislikes >= 2 {
-        Some(RelationshipKind::Rival)
-    } else if (my_likes >= 2 && their_dislikes >= 2) || (my_dislikes >= 2 && their_likes >= 2) {
-        Some(RelationshipKind::Tense)
-    } else {
-        None // Neutral — don't inject
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// v1.20.1 — the Deepen act: drawn in a debate (pressed and named when an
+    /// objection is owed), never in ideation.
     #[test]
-    fn test_relationship_edges_fold_directions_and_classify() {
-        let mut cumulative: HashMap<(String, String), (u32, u32)> = HashMap::new();
-        cumulative.insert(("g1".into(), "g2".into()), (3, 0));
-        cumulative.insert(("g2".into(), "g1".into()), (2, 1));
-        cumulative.insert(("g3".into(), "g1".into()), (0, 2));
-        let edges = relationship_edges(&cumulative);
-        assert_eq!(edges.len(), 2);
-        let e12 = edges.iter().find(|e| e.a == "g1" && e.b == "g2").unwrap();
-        assert_eq!((e12.ab_likes, e12.ab_dislikes, e12.ba_likes, e12.ba_dislikes), (3, 0, 2, 1));
-        assert_eq!(e12.kind.as_deref(), Some("ally"));
-        let e13 = edges.iter().find(|e| e.a == "g1" && e.b == "g3").unwrap();
-        assert_eq!((e13.ab_likes, e13.ba_dislikes), (0, 2));
-        assert_eq!(e13.kind, None, "one-sided dislikes are not yet a rivalry");
-    }
-
-    #[test]
-    fn test_classify_ally() {
-        assert_eq!(
-            classify_relationship(3, 0, 2, 0),
-            Some(RelationshipKind::Ally)
-        );
-    }
-
-    #[test]
-    fn test_classify_rival() {
-        assert_eq!(
-            classify_relationship(0, 3, 0, 2),
-            Some(RelationshipKind::Rival)
-        );
-    }
-
-    #[test]
-    fn test_classify_tense() {
-        assert_eq!(
-            classify_relationship(2, 0, 0, 3),
-            Some(RelationshipKind::Tense)
-        );
-    }
-
-    #[test]
-    fn test_classify_neutral() {
-        assert_eq!(classify_relationship(1, 0, 0, 1), None);
-    }
-
-    #[test]
-    fn test_build_relationships() {
-        let from_me = vec![
-            ("id1".to_string(), "Alice".to_string(), 3, 0),
-            ("id2".to_string(), "Bob".to_string(), 0, 3),
-        ];
-        let to_me = vec![
-            ("id1".to_string(), "Alice".to_string(), 2, 0),
-            ("id2".to_string(), "Bob".to_string(), 0, 2),
-        ];
-        let rels = build_relationships(&from_me, &to_me);
-        assert_eq!(rels.len(), 2);
-        assert_eq!(rels[0].kind, RelationshipKind::Ally);
-        assert_eq!(rels[1].kind, RelationshipKind::Rival);
+    fn deepen_act_answers_owed_objections_in_argumentative_modes_only() {
+        let mut ctx = make_test_ctx();
+        ctx.discussion_mode = DiscussionMode::Debate;
+        ctx.turn_number = 3;
+        ctx.unanswered_objection = Some("Les outils déplacent le travail (Le Philosophe)".to_string());
+        let deepen = (0..300).map(|_| build_dynamic_directive(&ctx)).find(|o| o.speech_act == "Deepen").expect("drawn within 300 draws");
+        assert!(deepen.directive_text.contains("Objection à traiter : « Les outils déplacent le travail (Le Philosophe) »"), "{}", deepen.directive_text);
+        ctx.discussion_mode = DiscussionMode::Ideation;
+        assert!((0..300).all(|_| build_dynamic_directive(&ctx).speech_act != "Deepen"));
     }
 
     #[test]
@@ -1131,6 +1237,38 @@ mod tests {
         assert!(build_layer1_emotion_behavior(&ctx).is_none());
     }
 
+    /// v1.20.4 — the movement: what the debate did to the speaker since the start,
+    /// measured from the persona's baseline, one line, never doubling a state.
+    #[test]
+    fn movement_line_names_the_shift_from_the_baseline() {
+        let mut ctx = make_test_ctx();
+        ctx.baseline = EmotionalProfile { confiance: 70, accord: 40, curiosite: 60, ..Default::default() };
+        // Confiance dropped 20 from 70: shaken (no state — 50 is neither high nor low)
+        ctx.emotions = EmotionalProfile { confiance: 50, accord: 40, ..Default::default() };
+        let text = build_layer1_emotion_behavior(&ctx).unwrap();
+        assert!(text.contains("t'a ébranlé") && text.contains("sans bravade"), "{text}");
+        // A small move stays silent
+        ctx.emotions = EmotionalProfile { confiance: 60, accord: 40, ..Default::default() };
+        assert!(build_layer1_emotion_behavior(&ctx).is_none());
+        // Accord rose 25 (the dominant shift): converging — appended after the states
+        ctx.emotions = EmotionalProfile { confiance: 70, accord: 65, curiosite: 75, ..Default::default() };
+        let text = build_layer1_emotion_behavior(&ctx).unwrap();
+        assert!(text.starts_with("Ta curiosité est élevée") && text.ends_with("sans abandonner ta ligne."), "{text}");
+        // The axis of a triggered state is never doubled by a movement line
+        ctx.emotions = EmotionalProfile { confiance: 70, accord: 10, ..Default::default() };
+        let text = build_layer1_emotion_behavior(&ctx).unwrap();
+        assert!(text.contains("désaccord") && !text.contains("durci"), "{text}");
+        // Movements without a behavioural reading stay silent (more curious)
+        ctx.emotions = EmotionalProfile { confiance: 70, accord: 40, curiosite: 40, ..Default::default() };
+        assert!(build_layer1_emotion_behavior(&ctx).is_none());
+        // English and Chinese have their lines
+        ctx.emotions = EmotionalProfile { confiance: 50, accord: 40, ..Default::default() };
+        ctx.discussion_language = "en".into();
+        assert!(build_layer1_emotion_behavior(&ctx).unwrap().contains("shook you"));
+        ctx.discussion_language = "zh".into();
+        assert!(build_layer1_emotion_behavior(&ctx).unwrap().contains("动摇了你"));
+    }
+
     #[test]
     fn test_fiction_opening_author_wording() {
         let mut ctx = make_test_ctx();
@@ -1146,6 +1284,7 @@ mod tests {
     fn make_test_ctx() -> SpeakerTurnContext {
         SpeakerTurnContext {
             emotions: EmotionalProfile::default(),
+            baseline: EmotionalProfile::default(),
             relationships: vec![],
             own_previous_messages: vec!["Previous message content".to_string()],
             dynamics: None,
@@ -1162,6 +1301,74 @@ mod tests {
             focus: None,
             recent_speech_acts: vec![],
             opening_author: None,
+            reconciliation_with: None,
+            coalition: None,
+            unanswered_objection: None,
+            audience_message: None,
+            user_has_spoken: false,
         }
+    }
+
+    /// v1.20.2 — the audience member is an observer until they speak, the first
+    /// addressee right after, a participant afterwards; openings are quoted back.
+    #[test]
+    fn user_reminder_follows_the_audience_and_openings_are_quoted() {
+        let mut ctx = make_test_ctx();
+        let observer = build_dynamic_directive(&ctx).directive_text;
+        assert!(observer.contains("Ne t'adresse PAS à Léo"), "{observer}");
+        ctx.user_has_spoken = true;
+        let participant = build_dynamic_directive(&ctx).directive_text;
+        assert!(participant.contains("Léo, dans le public, a pris part au débat") && !participant.contains("Ne t'adresse PAS"), "{participant}");
+        ctx.audience_message = Some("l'IA c'est bien".to_string());
+        let owed = build_dynamic_directive(&ctx).directive_text;
+        assert!(owed.contains("Léo, dans le public, vient d'intervenir : « l'IA c'est bien ». Il fait partie du débat désormais : réponds-lui D'ABORD"), "{owed}");
+        // Openings of the previous interventions are quoted, bounded to one sentence
+        ctx.own_previous_messages = vec!["Dieu, votre feu m'intéresse. Mais je dois planter un clou.".to_string(), "Le Boomer, vous demandez qui coupe le courant ! Voici.".to_string()];
+        let text = build_dynamic_directive(&ctx).directive_text;
+        assert!(text.contains("commençaient par « Dieu, votre feu m'intéresse. », « Le Boomer, vous demandez qui coupe le courant ! » — ouvre autrement"), "{text}");
+        assert_eq!(opening_of("Une phrase sans fin"), "Une phrase sans fin");
+        assert_eq!(opening_of(&"x".repeat(200)).chars().count(), constants::OPENING_EXCERPT_CHARS, "bounded");
+    }
+
+    /// v1.18 — `Relay` is never drawn; a coalition forces it on the leader and gives the follower its line.
+    #[test]
+    fn relay_is_only_forced_by_a_coalition() {
+        let mut ctx = make_test_ctx();
+        for _ in 0..200 {
+            assert_ne!(build_layer3_speech_act(&ctx, &[]).0, SpeechAct::Relay);
+        }
+        ctx.coalition = Some(CoalitionRole::Leader { partner: "Le Philosophe".to_string() });
+        let (act, text) = build_layer3_speech_act(&ctx, &[]);
+        assert_eq!(act, SpeechAct::Relay);
+        assert!(text.contains("Ton allié Le Philosophe parle juste après toi"), "{text}");
+        ctx.coalition = Some(CoalitionRole::Follower { partner: "Le Scientifique".to_string() });
+        let (act, text) = build_layer3_speech_act(&ctx, &[]);
+        assert_ne!(act, SpeechAct::Relay);
+        assert!(text.contains("vient de te passer le relais"), "{text}");
+        assert_eq!(SpeechAct::from_name("Relay"), Some(SpeechAct::Relay));
+    }
+
+    /// v1.17 — agreeableness shapes how frustration is voiced; a reconciliation is a one-off invitation.
+    #[test]
+    fn frustration_style_follows_agreeableness_and_reconciliation_is_invited() {
+        let mut ctx = make_test_ctx();
+        ctx.emotions = EmotionalProfile { frustration: 90, ..Default::default() };
+        ctx.ocean = Some([5, 5, 5, 9, 5]);
+        assert!(build_layer1_emotion_behavior(&ctx).unwrap().contains("politesse glaciale"));
+        ctx.ocean = Some([5, 5, 5, 2, 5]);
+        assert!(build_layer1_emotion_behavior(&ctx).unwrap().contains("de front"));
+        ctx.ocean = Some([5, 5, 5, 5, 5]);
+        assert!(build_layer1_emotion_behavior(&ctx).unwrap().contains("Riposte plus fermement"), "middling A keeps the v1.16 line");
+        ctx.ocean = None;
+        assert!(build_layer1_emotion_behavior(&ctx).unwrap().contains("Riposte plus fermement"));
+        // The persona own <dynamics> always wins over the generic variants
+        ctx.ocean = Some([5, 5, 5, 9, 5]);
+        ctx.dynamics = Some(ParsedDynamics { under_pressure: "Devient cassant.".to_string(), values: String::new(), triggers: String::new(), confident: String::new(), disengaged: String::new(), enthusiastic: None });
+        assert!(build_layer1_emotion_behavior(&ctx).unwrap().contains("Devient cassant"));
+
+        ctx.reconciliation_with = Some("Le Philosophe".to_string());
+        assert!(build_layer2_relationships(&ctx).contains("Le Philosophe vient de te tendre la main"));
+        ctx.discussion_language = "en".to_string();
+        assert!(build_layer2_relationships(&ctx).contains("just extended a hand"));
     }
 }

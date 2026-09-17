@@ -8,9 +8,32 @@ use crate::constants;
 use crate::db::{repository, rolling_period};
 use crate::error::CommandError;
 use crate::llm::deepseek::{DeepSeekBalance, DeepSeekProvider};
+use crate::llm::openai_compat::OpenAiCompatProvider;
+use crate::llm::LlmProvider;
 use crate::llm::pricing;
 use crate::models::llm::{PeriodHistoryEntry, PeriodUsage, ProviderKind};
+use crate::models::settings::AppSettings;
 use crate::state::AppState;
+
+/// Monthly cloud budget pre-flight: rolls the DeepSeek period over when due
+/// and refuses the call when the cap is reached. Returns the spend so far
+/// (0 on Ollama, which is never billed).
+pub async fn cloud_budget_preflight(db: &tokio_rusqlite::Connection, settings: &AppSettings) -> Result<f64, CommandError> {
+    if settings.llm_provider != ProviderKind::DeepSeek {
+        return Ok(0.0);
+    }
+    if let Err(e) = repository::check_and_reset_deepseek_period(db).await {
+        tracing::warn!(error = %e, "Failed to check/reset DeepSeek period — continuing");
+    }
+    let period_spent_usd = repository::get_deepseek_period_usage(db).await.map(|p| p.cost_usd).unwrap_or(0.0);
+    if settings.deepseek_monthly_budget_usd > 0.0 && period_spent_usd >= settings.deepseek_monthly_budget_usd {
+        return Err(CommandError::Llm(format!(
+            "Monthly budget exhausted ({period_spent_usd:.2} / {:.2} USD)",
+            settings.deepseek_monthly_budget_usd
+        )));
+    }
+    Ok(period_spent_usd)
+}
 
 /// Model ids available on the DeepSeek account.
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +72,17 @@ pub struct LlmConstants {
     pub deepseek_peak_windows_utc: Vec<[u32; 2]>,
     pub deepseek_top_p_min_thinking: f32,
     pub budget_warn_ratio: f64,
+    /// Suggested base URL of an OpenAI-compatible server (v1.20)
+    pub openai_compat_default_base_url: String,
+    /// Where releases are published (manual update check, v1.20)
+    pub releases_url: String,
+}
+
+/// Models an OpenAI-compatible server publishes (empty when it has no catalogue).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAiCompatModels {
+    pub models: Vec<String>,
 }
 
 #[tauri::command]
@@ -77,6 +111,8 @@ pub fn get_llm_constants() -> LlmConstants {
         deepseek_peak_windows_utc: constants::DEEPSEEK_PEAK_WINDOWS_UTC.iter().map(|(s, e)| [*s, *e]).collect(),
         deepseek_top_p_min_thinking: constants::DEEPSEEK_TOP_P_MIN_THINKING,
         budget_warn_ratio: constants::LLM_BUDGET_WARN_RATIO,
+        openai_compat_default_base_url: constants::OPENAI_COMPAT_DEFAULT_BASE_URL.to_string(),
+        releases_url: constants::RELEASES_URL.to_string(),
     }
 }
 
@@ -159,6 +195,45 @@ pub async fn validate_deepseek_key(
     let provider = DeepSeekProvider::new(&key, constants::DEEPSEEK_DEFAULT_MODEL, constants::DEEPSEEK_DEFAULT_CONTEXT_BUDGET)
         .map_err(map_llm_err)?;
     provider.balance().await.map_err(map_llm_err)
+}
+
+/// Base URL and key to use: the explicit arguments (Settings page, unsaved) or the stored ones.
+async fn effective_openai_compat(state: &State<'_, AppState>, base_url: Option<String>, api_key: Option<String>) -> Result<(String, String), CommandError> {
+    let stored = state.get_settings().await?;
+    let base_url = base_url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()).unwrap_or(stored.openai_compat_base_url);
+    if base_url.trim().is_empty() {
+        return Err(CommandError::Llm("No OpenAI-compatible base URL configured".to_string()));
+    }
+    let api_key = api_key.map(|k| k.trim().to_string()).unwrap_or(stored.openai_compat_api_key);
+    Ok((base_url, api_key))
+}
+
+/// `GET /models` of an OpenAI-compatible server; an authentication error surfaces,
+/// a server without catalogue yields an empty list (the manual list applies).
+#[tauri::command]
+pub async fn list_openai_compat_models(
+    base_url: Option<String>,
+    api_key: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<OpenAiCompatModels, CommandError> {
+    let (base_url, api_key) = effective_openai_compat(&state, base_url, api_key).await?;
+    // The model name does not matter for the catalogue call
+    let provider = OpenAiCompatProvider::new(&base_url, &api_key, "-", constants::OPENAI_COMPAT_DEFAULT_CONTEXT_TOKENS).map_err(map_llm_err)?;
+    let models = provider.list_models().await.map_err(map_llm_err)?;
+    Ok(OpenAiCompatModels { models })
+}
+
+/// Validate a server + key + model the way `start_discussion` will.
+#[tauri::command]
+pub async fn validate_openai_compat(
+    base_url: Option<String>,
+    api_key: Option<String>,
+    model: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let (base_url, api_key) = effective_openai_compat(&state, base_url, api_key).await?;
+    let provider = OpenAiCompatProvider::new(&base_url, &api_key, &model, constants::OPENAI_COMPAT_DEFAULT_CONTEXT_TOKENS).map_err(map_llm_err)?;
+    provider.validate().await.map_err(map_llm_err)
 }
 
 async fn build_period(state: &State<'_, AppState>) -> Result<LlmUsagePeriod, CommandError> {

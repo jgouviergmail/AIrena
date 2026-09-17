@@ -22,14 +22,11 @@ use state::AppState;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Determine log directory: next to the executable in production
-    let log_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("logs")))
-        .unwrap_or_else(|| std::path::PathBuf::from("logs"));
+    let log_dir = commands::diagnostics::log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
 
     // File appender: daily rotation, keeps 7 days
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "airena.log");
+    let file_appender = tracing_appender::rolling::daily(&log_dir, constants::LOG_FILE_PREFIX);
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     // Build subscriber with console + file layers
@@ -75,6 +72,9 @@ pub fn run() {
                 db::seed::seed_profiles(&conn)
                     .await
                     .expect("Failed to seed profiles");
+                db::seed::seed_templates(&conn)
+                    .await
+                    .expect("Failed to seed discussion templates");
                 conn
             });
 
@@ -99,6 +99,23 @@ pub fn run() {
             commands::discussion::submit_user_message,
             commands::discussion::skip_user_turn,
             commands::discussion::adjust_emotion,
+            commands::discussion::react_to_message,
+            commands::discussion::audience_vote,
+            commands::discussion::set_step_mode,
+            commands::discussion::next_speaker,
+            commands::discussion::get_engine_constants,
+            commands::casting::suggest_casting,
+            commands::templates::list_discussion_templates,
+            commands::templates::save_discussion_template,
+            commands::templates::delete_discussion_template,
+            commands::history::search_discussion_history,
+            commands::history::set_discussion_tags,
+            commands::history::set_discussion_favorite,
+            commands::settings::get_tuning_info,
+            commands::settings::count_persona_memories,
+            commands::settings::forget_persona_memories,
+            commands::diagnostics::read_backend_log,
+            commands::diagnostics::get_app_version,
             // Ollama commands
             commands::ollama::check_ollama_connection,
             commands::ollama::list_ollama_models,
@@ -121,6 +138,8 @@ pub fn run() {
             commands::llm::get_llm_constants,
             commands::llm::list_deepseek_models,
             commands::llm::validate_deepseek_key,
+            commands::llm::list_openai_compat_models,
+            commands::llm::validate_openai_compat,
             commands::llm::get_llm_usage_period,
             commands::llm::reset_llm_usage_period,
             // History commands

@@ -1,0 +1,48 @@
+{
+  "date": "2026-09-16",
+  "provider": "ollama-mistral-small3_1_latest",
+  "scenarios": [
+    {
+      "metrics": {
+        "avgLengthChars": 2035.3333740234375,
+        "avgSpeakerGapMs": 44268.18359375,
+        "errorEvents": 0,
+        "intentionCompliance": 0.8888888955116272,
+        "interventions": 12,
+        "markdownLeaks": 0,
+        "nameUsageRate": 0.75,
+        "refusals": 0,
+        "repetition": 0.18017485737800598
+      },
+      "name": "debat"
+    },
+    {
+      "metrics": {
+        "avgLengthChars": 1835.22216796875,
+        "avgSpeakerGapMs": 21308.625,
+        "errorEvents": 0,
+        "intentionCompliance": 0.7142857313156128,
+        "interventions": 9,
+        "markdownLeaks": 0,
+        "nameUsageRate": 0.6666666865348816,
+        "refusals": 0,
+        "repetition": 0.17522545158863068
+      },
+      "name": "ideation"
+    },
+    {
+      "metrics": {
+        "avgLengthChars": 1779.5,
+        "avgSpeakerGapMs": 14298.857421875,
+        "errorEvents": 0,
+        "intentionCompliance": 1.0,
+        "interventions": 6,
+        "markdownLeaks": 0,
+        "nameUsageRate": 0.8333333134651184,
+        "refusals": 0,
+        "repetition": 0.20802780985832214
+      },
+      "name": "socratique"
+    }
+  ]
+}

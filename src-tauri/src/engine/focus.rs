@@ -43,6 +43,8 @@ pub struct FocusInputs<'a> {
     pub targeted_this_turn: &'a HashSet<String>,
     /// Participants with an established relationship (ally / rival / tense).
     pub related: &'a HashSet<String>,
+    /// Participants the audience reacted to this turn (the room wants to hear more about them).
+    pub audience_favoured: &'a HashSet<String>,
 }
 
 /// Weighted focus candidates. Deterministic — the random draw is separate.
@@ -64,6 +66,9 @@ pub fn focus_weights(inputs: &FocusInputs<'_>) -> Vec<(Focus, u32)> {
         }
         if inputs.related.contains(name) {
             weight += constants::FOCUS_WEIGHT_RELATIONSHIP;
+        }
+        if inputs.audience_favoured.contains(name) {
+            weight += constants::FOCUS_WEIGHT_AUDIENCE;
         }
         out.push((Focus::Speaker(name.clone()), weight));
     }
@@ -95,10 +100,12 @@ mod tests {
         let now = set(&[]);
         let targeted = set(&["A"]);
         let related = set(&[]);
-        let w = focus_weights(&FocusInputs { candidates: &candidates, spoke_previous_turn: &prev, spoke_this_turn: &now, targeted_this_turn: &targeted, related: &related });
+        let audience = set(&["C"]);
+        let w = focus_weights(&FocusInputs { candidates: &candidates, spoke_previous_turn: &prev, spoke_this_turn: &now, targeted_this_turn: &targeted, related: &related, audience_favoured: &audience });
         let get = |n: &str| w.iter().find(|(f, _)| f.speaker_name() == Some(n)).map(|(_, x)| *x).unwrap();
         assert_eq!(get("A"), constants::FOCUS_WEIGHT_BASE);
         assert_eq!(get("B"), constants::FOCUS_WEIGHT_BASE + constants::FOCUS_WEIGHT_UNTARGETED);
+        assert_eq!(get("C"), get("B") + constants::FOCUS_WEIGHT_AUDIENCE, "the audience's favourite gets a bonus");
         assert!(get("B") > get("A") * 2, "already-targeted speakers must be much less likely");
         assert!(w.iter().any(|(f, x)| *f == Focus::Topic && *x == constants::FOCUS_WEIGHT_TOPIC));
     }
@@ -110,7 +117,7 @@ mod tests {
         let now = set(&[]);
         let targeted = set(&[]);
         let related = set(&["A"]);
-        let w = focus_weights(&FocusInputs { candidates: &candidates, spoke_previous_turn: &prev, spoke_this_turn: &now, targeted_this_turn: &targeted, related: &related });
+        let w = focus_weights(&FocusInputs { candidates: &candidates, spoke_previous_turn: &prev, spoke_this_turn: &now, targeted_this_turn: &targeted, related: &related, audience_favoured: &set(&[]) });
         assert!(!w.iter().any(|(f, _)| f.speaker_name() == Some("Silent")));
         let a = w.iter().find(|(f, _)| f.speaker_name() == Some("A")).unwrap().1;
         assert_eq!(a, constants::FOCUS_WEIGHT_BASE + constants::FOCUS_WEIGHT_UNTARGETED + constants::FOCUS_WEIGHT_RELATIONSHIP);
@@ -124,7 +131,7 @@ mod tests {
         let prev = set(&["A", "B"]);
         let empty = set(&[]);
         let targeted = set(&["A"]);
-        let w = focus_weights(&FocusInputs { candidates: &candidates, spoke_previous_turn: &prev, spoke_this_turn: &empty, targeted_this_turn: &targeted, related: &empty });
+        let w = focus_weights(&FocusInputs { candidates: &candidates, spoke_previous_turn: &prev, spoke_this_turn: &empty, targeted_this_turn: &targeted, related: &empty, audience_favoured: &empty });
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let (mut a, mut b, mut topic) = (0, 0, 0);
         for _ in 0..1000 {
@@ -140,7 +147,7 @@ mod tests {
 
     #[test]
     fn empty_candidates_fall_back_to_topic() {
-        let w = focus_weights(&FocusInputs { candidates: &[], spoke_previous_turn: &set(&[]), spoke_this_turn: &set(&[]), targeted_this_turn: &set(&[]), related: &set(&[]) });
+        let w = focus_weights(&FocusInputs { candidates: &[], spoke_previous_turn: &set(&[]), spoke_this_turn: &set(&[]), targeted_this_turn: &set(&[]), related: &set(&[]), audience_favoured: &set(&[]) });
         assert_eq!(w.len(), 1);
         assert_eq!(draw_focus(&w, &mut rand::thread_rng()), Focus::Topic);
         assert_eq!(draw_focus(&[], &mut rand::thread_rng()), Focus::Topic);

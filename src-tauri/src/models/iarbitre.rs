@@ -19,6 +19,9 @@ pub struct IArbitreConfig {
     /// If true, the IArbitre does 1 mandatory Wikipedia search on the topic before introduction
     #[serde(default)]
     pub wiki_search_intro: bool,
+    /// Model of the moderator (`None` = the global model of the provider, v1.20)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone)]

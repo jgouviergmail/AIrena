@@ -54,6 +54,7 @@ impl OllamaProvider {
                 chars_per_token_cjk: constants::CHARS_PER_TOKEN_CJK,
                 reports_usage: true,
                 billable: false,
+                max_parallel_calls: constants::OLLAMA_MAX_PARALLEL_CALLS,
             },
         }
     }

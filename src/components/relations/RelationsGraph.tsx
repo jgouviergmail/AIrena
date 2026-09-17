@@ -2,7 +2,9 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useArenaStore } from "@/stores/useArenaStore";
 import { useSetupStore } from "@/stores/useSetupStore";
-import { getProfileEmoji } from "@/lib/profile-emoji";
+import { getProfileEmoji, ROLE_EMOJIS } from "@/lib/profile-emoji";
+import { USER_SPEAKER_ID } from "@/lib/stage";
+import { useSettingsStore } from "@/stores/useSettingsStore";
 import type { RelationshipEdge } from "@/lib/types";
 
 const SIZE = 300;
@@ -20,27 +22,31 @@ const EDGE_CLASS: Record<string, string> = {
   tense: "stroke-amber-500",
 };
 
+/** Arrow shown next to an edge whose warmth moved since the previous update. */
+const TREND_GLYPH: Record<string, string> = { warming: "↗", cooling: "↘" };
+
 /** Participants placed on a ring; edges = cumulative reactions (colour = relationship). */
 export function RelationsGraph() {
   const { t } = useTranslation();
   const edges = useArenaStore((s) => s.relationships);
   const gladiateurs = useSetupStore((s) => s.gladiateurs);
+  const username = useSettingsStore((s) => s.settings.username);
+  // The audience member joins the ring once a reaction edge names them (v1.20.2)
+  const userInGraph = useMemo(() => edges.some((e) => e.a === USER_SPEAKER_ID || e.b === USER_SPEAKER_ID), [edges]);
 
   const nodes = useMemo(() => {
-    const n = Math.max(gladiateurs.length, 1);
-    return gladiateurs.map((g, i) => {
+    const members = [
+      ...gladiateurs.map((g) => ({ id: g.id, name: g.name, emoji: g.emoji ?? getProfileEmoji(g.name, g.systemPrompt) })),
+      ...(userInGraph ? [{ id: USER_SPEAKER_ID, name: username, emoji: ROLE_EMOJIS.user }] : []),
+    ];
+    const n = Math.max(members.length, 1);
+    return members.map((m, i) => {
       const angle = -Math.PI / 2 + (i * 2 * Math.PI) / n;
-      return {
-        id: g.id,
-        name: g.name,
-        emoji: g.emoji ?? getProfileEmoji(g.name, g.systemPrompt),
-        x: CENTER + RING * Math.cos(angle),
-        y: CENTER + RING * Math.sin(angle),
-      };
+      return { ...m, x: CENTER + RING * Math.cos(angle), y: CENTER + RING * Math.sin(angle) };
     });
-  }, [gladiateurs]);
+  }, [gladiateurs, userInGraph, username]);
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
-  // Only edges between drawn participants (reactions aimed at the moderator/user are not part of the graph)
+  // Only edges between drawn participants (reactions aimed at the moderator are not part of the graph)
   const drawnEdges = useMemo(() => edges.filter((e) => byId.has(e.a) && byId.has(e.b)), [edges, byId]);
 
   if (gladiateurs.length < 2) {
@@ -106,6 +112,9 @@ export function RelationsGraph() {
                 <span className="shrink-0 font-mono">
                   👍{e.abLikes + e.baLikes} 👎{e.abDislikes + e.baDislikes}
                   {e.kind && <span className="ml-1 text-foreground">· {t(`directive.relations.${e.kind}`)}</span>}
+                  {e.trend && TREND_GLYPH[e.trend] && (
+                    <span className="ml-1" title={t(`relations.trend_${e.trend}`)} aria-label={t(`relations.trend_${e.trend}`)}>{TREND_GLYPH[e.trend]}</span>
+                  )}
                 </span>
               </li>
             ))}

@@ -31,16 +31,35 @@ impl EmotionalProfile {
         json.and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default()
     }
+}
 
-    /// Apply a signed delta to each axis, clamping to 0-100
-    pub fn apply_delta(&mut self, delta: &EmotionDelta) {
-        use crate::engine::apply_i8_clamped;
-        self.engagement = apply_i8_clamped(self.engagement, delta.engagement);
-        self.accord = apply_i8_clamped(self.accord, delta.accord);
-        self.confiance = apply_i8_clamped(self.confiance, delta.confiance);
-        self.frustration = apply_i8_clamped(self.frustration, delta.frustration);
-        self.curiosite = apply_i8_clamped(self.curiosite, delta.curiosite);
-        self.enthousiasme = apply_i8_clamped(self.enthousiasme, delta.enthousiasme);
+/// Overall temperature of the room, from the average profile of the active gladiateurs (v1.17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RoomMood {
+    Tense,
+    Flat,
+    Lively,
+    Serene,
+}
+
+impl RoomMood {
+    /// Hint for the moderator prompt ("ambiance : tendue — calme le jeu").
+    pub fn moderator_hint(&self, lang: &str) -> &'static str {
+        match (self, lang) {
+            (Self::Tense, "en") => "Room mood: tense — calm things down, defuse before it turns personal.",
+            (Self::Tense, "zh") => "现场气氛：紧张——平息局面，在演变成人身攻击前化解。",
+            (Self::Tense, _) => "Ambiance de la salle : tendue — calme le jeu, désamorce avant que cela devienne personnel.",
+            (Self::Flat, "en") => "Room mood: flat — a sharper question or a challenge would wake the room up.",
+            (Self::Flat, "zh") => "现场气氛：沉闷——一个更尖锐的问题或挑战能唤醒全场。",
+            (Self::Flat, _) => "Ambiance de la salle : molle — une question plus tranchante ou un défi réveillerait la salle.",
+            (Self::Lively, "en") => "Room mood: lively — keep the energy, just keep it fair.",
+            (Self::Lively, "zh") => "现场气氛：活跃——保持这股劲，只需保证公平。",
+            (Self::Lively, _) => "Ambiance de la salle : vive — garde cette énergie, veille seulement à l'équité.",
+            (Self::Serene, "en") => "Room mood: serene — no intervention needed on tone.",
+            (Self::Serene, "zh") => "现场气氛：平和——语气方面无需干预。",
+            (Self::Serene, _) => "Ambiance de la salle : sereine — aucune intervention nécessaire sur le ton.",
+        }
     }
 }
 
@@ -73,32 +92,6 @@ pub struct EmotionDelta {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_apply_delta_clamp() {
-        let mut profile = EmotionalProfile {
-            engagement: 95,
-            accord: 5,
-            confiance: 50,
-            frustration: 50,
-            curiosite: 50,
-            enthousiasme: 50,
-        };
-        let delta = EmotionDelta {
-            engagement: 10,  // 95+10 = 105 → clamped to 100
-            accord: -10,     // 5-10 = -5 → clamped to 0
-            confiance: 0,
-            frustration: -5,
-            curiosite: 5,
-            enthousiasme: 0,
-        };
-        profile.apply_delta(&delta);
-        assert_eq!(profile.engagement, 100);
-        assert_eq!(profile.accord, 0);
-        assert_eq!(profile.confiance, 50);
-        assert_eq!(profile.frustration, 45);
-        assert_eq!(profile.curiosite, 55);
-    }
 
     #[test]
     fn test_from_json_opt() {

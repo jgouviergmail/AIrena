@@ -3,6 +3,8 @@ import { Clock, FileText, Globe, MessageSquare, Network, Repeat } from "lucide-r
 import { useSetupStore } from "@/stores/useSetupStore";
 import { cn } from "@/lib/utils";
 import { DISCUSSION_MODES, DOCUMENT_FORMATS, inputClass, OptionCard, SectionLabel, Toggle } from "./shared";
+import { LivelinessOptions } from "./LivelinessOptions";
+import { TemplatePicker } from "@/components/setup/TemplatePicker";
 
 export function StepTopic() {
   const { t } = useTranslation();
@@ -25,6 +27,8 @@ export function StepTopic() {
 
   return (
     <div className="space-y-6">
+      <TemplatePicker />
+
       <div className="space-y-2">
         <SectionLabel icon={Globe}>{t("setup.discussionLanguage")}</SectionLabel>
         <div className="flex flex-wrap gap-2">
@@ -96,6 +100,8 @@ export function StepTopic() {
           caption={argumentMapEnabled ? t("setup.switchYes") : t("setup.switchNo")}
         />
       </div>
+
+      <LivelinessOptions />
 
       {/* Document format selector */}
       <div className="space-y-2">
